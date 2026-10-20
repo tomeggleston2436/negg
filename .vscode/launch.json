@@ -1,0 +1,24 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug negg CLI",
+      "cargo": { "args": ["build", "--bin", "negg", "--package", "negg-cli"] },
+      "args": ["convert", "${input:rawFile}", "--out", "${workspaceFolder}/out"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug tests (current crate)",
+      "cargo": { "args": ["test", "--no-run", "--package", "${input:crate}"] },
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    { "id": "rawFile", "type": "promptString", "description": "Path to a RAW file" },
+    { "id": "crate", "type": "promptString", "description": "Crate name, e.g. negg-render" }
+  ]
+}
