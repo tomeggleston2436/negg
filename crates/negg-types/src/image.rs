@@ -173,13 +173,18 @@ impl Image {
     ///
     /// # Panics
     ///
-    /// Panics if `rows_per_band == 0`.
+    /// Panics if `rows_per_band == 0`, or if `rows_per_band` times the row
+    /// length in floats overflows `usize`.
     pub fn row_bands_mut(
         &mut self,
         rows_per_band: usize,
     ) -> impl Iterator<Item = (usize, &mut [f32])> {
         assert!(rows_per_band > 0, "rows_per_band must be at least 1");
-        let band_len = (self.row_len() * rows_per_band).max(1);
+        let band_len = self
+            .row_len()
+            .checked_mul(rows_per_band)
+            .expect("rows_per_band times row length overflows usize")
+            .max(1);
         self.data
             .chunks_mut(band_len)
             .enumerate()
@@ -378,6 +383,18 @@ mod tests {
         assert_eq!(img.pixel(4, 19), [14.0; 3]);
         assert_eq!(img.data()[7 * 5 * CHANNELS - 1], 0.0);
         assert_eq!(img.data()[7 * 5 * CHANNELS], 7.0);
+    }
+
+    #[test]
+    fn huge_rows_per_band_yields_one_band_covering_all_rows() {
+        // Large but non-overflowing: a 4x4 image has 12 floats per row, and
+        // 12 * (usize::MAX / 16) fits in usize.
+        let mut img = Image::new(4, 4);
+        let bands: Vec<(usize, usize)> = img
+            .row_bands_mut(usize::MAX / 16)
+            .map(|(first, band)| (first, band.len()))
+            .collect();
+        assert_eq!(bands, vec![(0, 4 * 4 * CHANNELS)]);
     }
 
     #[test]

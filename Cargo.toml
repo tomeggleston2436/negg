@@ -8,9 +8,8 @@ edition = "2024"
 rust-version = "1.85"
 
 # Every third-party crate the plan allows is pinned here and nowhere else.
-# No crate depends on any of these yet; crates pick them up with
-# `<name>.workspace = true` when the phase that needs them arrives.
-# Do not add a crate that is not in the plan's dependency table.
+# Crates pull one in with `<name>.workspace = true`. Do not add a crate that
+# is not in the plan's dependency table.
 [workspace.dependencies]
 # RAW decode. LGPL-2.1: used as an ordinary dependency, never vendored (see NOTICE).
 rawler = "0.8"

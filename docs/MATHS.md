@@ -201,7 +201,7 @@ Constants:
 | `d_c` floor | 0 | Clamp after subtracting the base. |
 | minimum neutral patches `N` | 2 | Exact solution at 2, least squares above. |
 
-Why: a colour negative is three dye layers with different contrasts, and the cast most people see in a naive inversion is the difference between those contrasts, not a white balance error. Dividing each channel by its own gamma removes that difference in the log domain where it is linear. The fallback of using the measured range is the one estimate that needs no stock-specific constant, which is why it is the default under ground rule 6.
+Why: a colour negative is three dye layers with different contrasts. Dividing each channel by its own gamma removes that difference in the log domain, where it is linear, which is what a single white balance cannot do. The fallback of using the measured range is the one estimate that needs no stock-specific constant, which is why it is the default under ground rule 6.
 
 ## Step 5: print stage (the tone curve)
 
@@ -242,7 +242,7 @@ TODO(spec): the plan does not say how "textured" cells are selected, what densit
 out_c <- (out_c - 10^-Dmax_p) / (1 - 10^-Dmax_p)
 ```
 
-TODO(spec): the plan does not say whether black point compensation is on or off by default.
+Default off (reading of the plan's "optional"; see `Settings` in `negg-types`).
 
 **Precomputation.** All per-channel coefficients are computed once per render so that the per-pixel kernel is one log, two softplus and one pow.
 
@@ -260,7 +260,7 @@ Constants:
 | `k` | `2.9 * range / (R/100)` | Clamped to [2, 10]. `range` is TODO(spec). |
 | exposure anchor | `P = 0.75` | `x_0` is solved so the anchor lands here. |
 | `cmy_c` | 0 | Colour timing offsets in log space, per channel. |
-| black point compensation | optional | Default state is TODO(spec). |
+| black point compensation | off | Optional; default off per the plan's "optional" and `Settings` in `negg-types`. |
 
 Why: a darkroom print is a second film-like response applied to the positive: a straight line in log space with a soft shoulder into paper white and a soft toe into paper black. Writing it as two softplus terms makes the curve smooth, monotone, and controllable by four numbers that correspond to physical paper properties rather than to an arbitrary spline. Keeping it in `negg-render` as one pure function is ground rule 3; precomputing the coefficients keeps a 24 MP frame under two seconds on a laptop CPU (gate 1).
 
@@ -290,6 +290,7 @@ Constants:
 | foliage hue exclusion | 90 to 160 degrees | Green. |
 | sky hue exclusion | 200 to 260 degrees | Blue. |
 | slope deviation clamp | plus or minus 0.2 | On the fitted slope of R and B against G. |
+| auto colour | on | Default lives in `ColourSettings` in `negg-types`. |
 
 Why: after step 4 a neutral surface should have `e_R = e_G = e_B`. Whatever residual cast remains is, to first order, an affine error in log space per channel, so fitting a line through the most nearly neutral cells and removing it is the smallest correction that fixes it. Working on three luma bands stops a cast in the shadows from being corrected at the expense of the highlights. Excluding foliage and sky hues stops a frame that is mostly grass or mostly sky from being "corrected" to grey. All of this runs on the block-median grid (ground rule 5), so dust does not pull the fit.
 
@@ -318,8 +319,9 @@ Constants:
 | working space | linear Rec.2020, D65 | Decision 2. Not ProPhoto. |
 | chromatic adaptation | Bradford | Camera white to D65. |
 | display fallback | sRGB | When no monitor profile is known. |
+| output space | sRGB | Default lives in `ColourSettings` in `negg-types`. |
 
-Why: everything before this step is in camera-native RGB, which has no defined primaries, so no colour-space conversion is possible until inversion is done. Rec.2020 is wide enough to hold any colour a C-41 negative can carry without clipping, and is a standard space with bundled v4 ICC profiles, so the export path is a plain `lcms2` transform rather than something we wrote ourselves.
+Why: everything before this step is in camera-native RGB, which has no defined primaries, so no colour-space conversion is possible until inversion is done. Rec.2020 is a standard wide space with bundled v4 ICC profiles (decision 2), so the export path is a plain `lcms2` transform rather than something we wrote ourselves.
 
 ## Step 8: export
 

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "corpus": {
+    "frames": 0,
+    "with_references": 0,
+    "with_grey_card": 0
+  },
+  "frames": [],
+  "rolls": [],
+  "summary": {
+    "de2000_mean": null,
+    "de2000_p95_mean": null,
+    "neutrality_mean": null
+  }
+}

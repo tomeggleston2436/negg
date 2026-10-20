@@ -1,0 +1,24 @@
+# Regression tolerances for `negg eval --baseline`. A metric regresses when
+# current > baseline + tolerance (all metrics are "lower is better").
+schema_version = 1
+
+# These tolerances are placeholders chosen before any corpus frame existed.
+# Reset them against the first real baseline, with an ADR noting the eval
+# delta.
+[tolerance]
+de2000_mean = 0.10        # CIEDE2000, mean over frames of the per-frame mean
+de2000_p95_mean = 0.20    # mean over frames of the per-frame 95th percentile
+neutrality_mean = 0.10    # mean over grey-card frames of (|a*| + |b*|) / 2
+dmin_variance = 0.005     # log-D squared, per roll (null until phase 2)
+gamma_variance = 0.010    # per roll (null until phase 2)
+
+# Tracked cases: frames that once rendered badly. Each is compared on its own
+# per-frame metric against the baseline with the tolerance given here, so a
+# fix is measured and a regression on that frame fails CI even when the
+# summary does not move. Add a case before fixing the frame.
+# [[case]]
+# id = "r001-03"
+# tool = "negpy"          # which reference's de2000 to compare
+# metric = "de2000_mean"  # one of: de2000_mean, de2000_p95, de2000_max, neutrality
+# tolerance = 0.5
+# note = "Strong magenta cast after the first auto colour fit"

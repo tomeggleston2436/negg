@@ -46,9 +46,8 @@ patterns live in `.gitattributes` at the repository root.
    of that file is a template; every field is documented there. If the frame
    contains a grey card, set `has_grey_card = true` and give the card patch as
    fractions of the image size in `grey_card`.
-4. Run `negg eval` and check that the new frame renders and scores. This
-   command arrives later in phase 0; until then, check that the manifest still
-   parses, for example with `python3 -c 'import tomllib; tomllib.load(open("corpus/manifest.toml","rb"))'`.
+4. Run `cargo run -p negg-cli -- eval` from the repository root and check that
+   the new frame renders and scores.
 5. Open a pull request. CI runs the eval on every PR.
 
 ## What makes a good frame
@@ -64,8 +63,10 @@ patterns live in `.gitattributes` at the repository root.
 
 Reference renders are produced outside this repository, by darktable
 negadoctor (auto pickers, default settings) and by NegPy (defaults), saved as
-16-bit TIFF and named `reference/<id>.<tool>.tif`. Record the tool version in
-the `references` entry so a later regeneration can be told apart.
+16-bit TIFF and named `reference/<id>.<tool>.tif`. Reference TIFFs must be
+sRGB-encoded (8 or 16 bit), because the phase 0 metrics assume sRGB encoding
+when they convert a render to Lab. Record the tool version in the `references`
+entry so a later regeneration can be told apart.
 
 ## Licensing
 

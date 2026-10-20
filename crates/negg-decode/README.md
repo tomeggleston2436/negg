@@ -4,9 +4,13 @@ RAW and TIFF decoding into linear camera RGB f32 buffers.
 
 ## Owns
 
-- Reading RAW files (via rawler) and TIFF input
-- Producing linear camera RGB `f32` buffers
-- Reporting camera metadata needed downstream
+- `read_tiff`: 8-bit and 16-bit chunky RGB and RGBA TIFF input
+  (alpha dropped), normalised to encoded `f32` in `[0, 1]`, with the
+  embedded ICC profile bytes when present (`TiffImage`)
+- `DecodeError`: I/O, TIFF, unsupported layout and dimension errors
+- Reading RAW files via rawler (phase 1)
+- Producing linear camera RGB `f32` buffers (phase 1)
+- Reporting camera metadata needed downstream (phase 1)
 
 ## Must not
 

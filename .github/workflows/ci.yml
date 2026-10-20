@@ -1,7 +1,8 @@
 # Continuous integration for negg.
 #
-# Jobs are kept separate on purpose: a later phase 0 task adds an `eval` job
-# (uploads eval-results.json and fails on metric regressions) alongside these.
+# Jobs are kept separate on purpose. The `eval` job runs `negg eval` against
+# eval-baseline.json with the tolerances in eval.toml, uploads
+# eval-results.json and fails on any metric regression.
 
 name: CI
 
@@ -104,22 +105,58 @@ jobs:
           echo "All .rs files under crates/ carry a valid SPDX header"
 
       # No em dash (U+2014) or en dash (U+2013) in tracked source, config or
-      # prose files. `git ls-files` keeps untracked and ignored files out of
-      # scope. IMPLEMENTATION_PLAN.md and LICENSE* files are exempt.
+      # prose files. `git grep` sees only tracked files, so untracked and
+      # ignored files are out of scope. IMPLEMENTATION_PLAN.md and LICENSE*
+      # files are exempt. git grep exits 0 on a match, 1 on no match and 2 or
+      # more on an error; no `-e` so the exit code can be inspected.
       - name: No em dashes
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           export LC_ALL=C.UTF-8
-          matches=$(
-            git ls-files -z -- '*.rs' '*.toml' '*.md' '*.yml' '*.yaml' '*.json' '*.ts' '*.tsx' \
-              | grep -z -v -E '(^|/)(IMPLEMENTATION_PLAN\.md|LICENSE[^/]*)$' \
-              | xargs -0 -r grep -nP '[\x{2014}\x{2013}]' \
-              || true
-          )
-          if [ -n "$matches" ]; then
-            printf '%s\n' "$matches"
-            echo "::error::em dash (U+2014) or en dash (U+2013) found in the files listed above"
-            exit 1
-          fi
-          echo "No em or en dashes found"
+          status=0
+          git grep -nP '[\x{2014}\x{2013}]' -- '*.rs' '*.toml' '*.md' '*.yml' '*.yaml' '*.json' '*.ts' '*.tsx' \
+            ':!IMPLEMENTATION_PLAN.md' ':!LICENSE*' ':!**/LICENSE*' || status=$?
+          case "$status" in
+            0)
+              echo "::error::em dash (U+2014) or en dash (U+2013) found in the files listed above"
+              exit 1
+              ;;
+            1)
+              echo "No em or en dashes found"
+              ;;
+            *)
+              echo "::error::grep failed with exit code $status"
+              exit 1
+              ;;
+          esac
+
+  # Score the corpus and fail on any metric that regresses against
+  # eval-baseline.json by more than its tolerance in eval.toml. The results
+  # are uploaded whether or not the gate passes. Corpus frames and reference
+  # renders are stored in Git LFS.
+  eval:
+    name: eval
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Evaluate against the baseline
+        run: cargo run --release -p negg-cli -- eval --corpus corpus --out eval-results.json --baseline eval-baseline.json --tolerances eval.toml
+
+      - name: Upload eval-results.json
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-results
+          path: eval-results.json
+          if-no-files-found: error

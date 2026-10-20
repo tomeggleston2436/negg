@@ -49,3 +49,18 @@ cargo deny check
 ```
 
 All five must pass before a change is considered done.
+
+## Evaluation
+
+`negg eval` renders every frame in `corpus/` with default settings and scores
+it: CIEDE2000 against each reference render (mean, p95, max), grey-card
+neutrality (`(|a*| + |b*|) / 2` on the card patch) and, once the estimator
+exists, per-roll variance of Dmin and gamma. It prints a table and writes
+`eval-results.json`. CI runs it on every pull request with
+`--baseline eval-baseline.json --tolerances eval.toml`, uploads the results
+and fails (exit status 3) when any metric exceeds its baseline by more than
+the tolerance in `eval.toml`. To accept a new baseline, copy a fresh
+`eval-results.json` over `eval-baseline.json` in a reviewed commit that
+explains the delta. When a frame renders badly, add it as a `[[case]]` in
+`eval.toml` before fixing it, so the fix is measured and that frame cannot
+regress unnoticed.

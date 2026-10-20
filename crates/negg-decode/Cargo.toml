@@ -7,5 +7,9 @@ license = "MPL-2.0"
 description = "RAW and TIFF decoding into linear camera RGB f32 buffers"
 publish = false
 
+[dependencies]
+negg-types = { path = "../negg-types", version = "0.0.0" }
+tiff = { workspace = true }
+
 [lints]
 workspace = true
