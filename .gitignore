@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+eval-results.json
+.DS_Store
+# Tauri app (phase 3)
+/app/node_modules
+/app/dist
+/app/src-tauri/target
