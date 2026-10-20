@@ -1,0 +1,56 @@
+# negg corpus manifest
+#
+# One [[frame]] entry per RAW scan in this corpus. The eval tool (`negg eval`)
+# reads this file, renders every frame with default settings, and compares the
+# result against the reference renders and grey-card patch listed here.
+# See corpus/README.md for how to add a frame.
+#
+# Fields of each [[frame]] entry:
+#
+#   id            string, required, unique. "<roll>-<frame>", e.g. "r001-03".
+#   file          string, required. Path relative to corpus/,
+#                 e.g. "frames/r001/r001-03.dng".
+#   roll          string, required, e.g. "r001". Frames of one roll share film
+#                 stock, camera and light source; used for per-roll variance of
+#                 the estimated Dmin and gammas.
+#   stock         string, required. Film stock, e.g. "Kodak Portra 400".
+#   camera        string, required. The scanning camera, e.g. "Fujifilm X-T4".
+#   light_source  string, required. The backlight, e.g. "Cinestill CS-Lite".
+#   has_grey_card bool, required. True when a grey card is in the frame.
+#   grey_card     table, optional. Required when has_grey_card = true.
+#                 { x, y, width, height } as fractions of image width and
+#                 height in [0, 1], describing the card patch used for the
+#                 neutrality metric (mean |a*|, |b*| of the patch).
+#   references    array of tables, required, may be empty. Each entry is
+#                 { tool, file, version } where tool is "negpy" or
+#                 "negadoctor", file is a path relative to corpus/ such as
+#                 "reference/r001-03.negpy.tif", and version is the tool
+#                 version string the render was made with.
+#   notes         string, required, may be empty. Free text about the frame.
+#   contributor   string, required. Who contributed the frame.
+#   licence       string, required. "Apache-2.0" or "CC0-1.0". By setting this
+#                 the contributor affirms they own the frame and license it
+#                 under that licence.
+#
+schema_version = 1
+
+# Example entry (uncomment to use as a template):
+#
+# [[frame]]
+# id = "r001-03"
+# file = "frames/r001/r001-03.dng"
+# roll = "r001"
+# stock = "Kodak Portra 400"
+# camera = "Fujifilm X-T4"
+# light_source = "Cinestill CS-Lite"
+# has_grey_card = true
+# grey_card = { x = 0.42, y = 0.70, width = 0.08, height = 0.06 }
+# references = [
+#   { tool = "negpy", file = "reference/r001-03.negpy.tif", version = "0.3.1" },
+#   { tool = "negadoctor", file = "reference/r001-03.negadoctor.tif", version = "darktable 4.8.1" },
+# ]
+# notes = "Overcast daylight, grey card bottom centre, full border visible."
+# contributor = "Jane Example"
+# licence = "CC0-1.0"
+
+# No frames yet. Add [[frame]] entries below.
