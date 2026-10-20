@@ -1,0 +1,30 @@
+negg
+====
+
+negg is licensed per crate under two licences.
+
+Mozilla Public License 2.0 (MPL-2.0), text in LICENSE-MPL-2.0, covers the
+engine crates:
+
+    negg-types, negg-decode, negg-calib, negg-film, negg-render, negg-cms,
+    negg-io
+
+Apache License 2.0 (Apache-2.0), text in LICENSE-APACHE-2.0, covers:
+
+    negg-cli, negg-ffi, the desktop app, the documentation, and the profile
+    and corpus data
+
+Each crate directory carries its own LICENSE file, and every Rust source file
+begins with an SPDX-License-Identifier header naming the licence that applies
+to it.
+
+Third-party notice
+------------------
+
+rawler (https://crates.io/crates/rawler) is licensed under the GNU Lesser
+General Public License, version 2.1 (LGPL-2.1). negg uses rawler as an
+ordinary crate dependency resolved from crates.io. Its source is never
+vendored or copied into this repository.
+
+The full licence policy for dependencies is enforced by cargo-deny; see
+deny.toml.

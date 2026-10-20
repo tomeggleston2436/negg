@@ -1,0 +1,11 @@
+[package]
+name = "negg-calib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MPL-2.0"
+description = "Rig profiles: flat field, crosstalk and the camera-to-density fit"
+publish = false
+
+[lints]
+workspace = true

@@ -1,0 +1,37 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+
+# Every third-party crate the plan allows is pinned here and nowhere else.
+# No crate depends on any of these yet; crates pick them up with
+# `<name>.workspace = true` when the phase that needs them arrives.
+# Do not add a crate that is not in the plan's dependency table.
+[workspace.dependencies]
+# RAW decode. LGPL-2.1: used as an ordinary dependency, never vendored (see NOTICE).
+rawler = "0.8"
+# TIFF read and write. MIT.
+tiff = "0.11"
+# JPEG and general image codecs. MIT OR Apache-2.0.
+image = "0.25"
+# Colour management (Little CMS). MIT.
+lcms2 = "6"
+# Linear algebra for calibration fits. Apache-2.0.
+nalgebra = "0.35"
+# Parallelism. MIT OR Apache-2.0.
+rayon = "1"
+# Serialisation. MIT OR Apache-2.0.
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+serde_json = "1"
+# CLI argument parsing. MIT OR Apache-2.0.
+clap = { version = "4", features = ["derive"] }
+# Property tests. MIT OR Apache-2.0.
+proptest = "1"
+
+[workspace.lints.rust]
+missing_docs = "warn"

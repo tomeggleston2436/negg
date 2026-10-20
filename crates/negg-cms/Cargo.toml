@@ -1,0 +1,11 @@
+[package]
+name = "negg-cms"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MPL-2.0"
+description = "Colour management: working space, ICC profiles and soft proof"
+publish = false
+
+[lints]
+workspace = true

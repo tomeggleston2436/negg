@@ -1,0 +1,15 @@
+[package]
+name = "negg-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Apache-2.0"
+description = "The negg command-line tool: convert, batch, eval and profile"
+publish = false
+
+[[bin]]
+name = "negg"
+path = "src/main.rs"
+
+[lints]
+workspace = true

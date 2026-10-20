@@ -1,0 +1,11 @@
+[package]
+name = "negg-film"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MPL-2.0"
+description = "Film profiles, Dmin/Dmax/gamma estimators and roll pooling"
+publish = false
+
+[lints]
+workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "negg-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MPL-2.0"
+description = "Inversion, print curve, adjustments and scopes as pure per-pixel functions"
+publish = false
+
+[lints]
+workspace = true
