@@ -7,5 +7,13 @@ license = "MPL-2.0"
 description = "Inversion, print curve, adjustments and scopes as pure per-pixel functions"
 publish = false
 
+[dependencies]
+negg-film = { path = "../negg-film", version = "0.0.0" }
+negg-types = { path = "../negg-types", version = "0.0.0" }
+rayon = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
 [lints]
 workspace = true

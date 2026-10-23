@@ -66,6 +66,7 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+          rust-version: "1.89"
 
   # Repository conventions that no compiler enforces.
   conventions:
@@ -133,16 +134,14 @@ jobs:
 
   # Score the corpus and fail on any metric that regresses against
   # eval-baseline.json by more than its tolerance in eval.toml. The results
-  # are uploaded whether or not the gate passes. Corpus frames and reference
-  # renders are stored in Git LFS.
+  # are uploaded whether or not the gate passes. The corpus is local-only
+  # (docs/ADR/0005), so CI evaluates whatever is present, normally nothing.
   eval:
     name: eval
     runs-on: ubuntu-latest
     steps:
       - name: Check out
         uses: actions/checkout@v7
-        with:
-          lfs: true
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable

@@ -19,7 +19,7 @@ use crate::error::{Error, Result};
 use crate::hash::{ContentHash, hash_value};
 
 /// Version of the settings schema written into sidecars.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 /// A per-channel value that is either estimated from the frame (or roll) or
 /// fixed by the user.
@@ -47,6 +47,46 @@ impl ChannelEstimate {
             ChannelEstimate::Fixed { value } => Some(*value),
         }
     }
+}
+
+/// The step 6 cast correction: fitted automatically or fixed by the user.
+///
+/// Serialises as `{"mode": "auto"}` or
+/// `{"mode": "fixed", "slope_r": .., "offset_r": .., "slope_b": .., "offset_b": ..}`.
+/// A fixed cast always takes effect, with `auto_colour` on or off: the
+/// precedence is Fixed, then the identity when `auto_colour` is off or a
+/// film correction is in use, then the roll's pooled cast, then the fit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum CastEstimate {
+    /// Fit the cast on the analysis grid (or pool it across the roll).
+    #[default]
+    Auto,
+    /// Use this log-affine correction, locked or overridden by the user.
+    Fixed {
+        /// Slope of `e_R` against `e_G`; valid range 0.5 to 2.
+        slope_r: f32,
+        /// Offset of `e_R` against `e_G`.
+        offset_r: f32,
+        /// Slope of `e_B` against `e_G`; valid range 0.5 to 2.
+        slope_b: f32,
+        /// Offset of `e_B` against `e_G`.
+        offset_b: f32,
+    },
+}
+
+/// Names of the rig and film profile files a frame or roll is converted
+/// with (phase 2, ADR 0018).
+///
+/// Paths resolve relative to the directory of the file that holds them;
+/// command line paths are made absolute before they are stored here.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProfileRefs {
+    /// Path of the rig profile (`*.negg.toml`), if any.
+    pub rig: Option<String>,
+    /// Path of the film profile (`*.negg.toml`), if any.
+    pub film: Option<String>,
 }
 
 /// Film model parameters: steps 3 and 4 of `docs/MATHS.md`.
@@ -125,6 +165,9 @@ impl Default for PrintSettings {
 pub struct ColourSettings {
     /// Step 6 of `docs/MATHS.md`: automatic colour cast removal. Default on.
     pub auto_colour: bool,
+    /// Step 6 of `docs/MATHS.md`: the cast correction, fitted (`Auto`, the
+    /// default) or fixed by the user.
+    pub cast: CastEstimate,
     /// Step 7 of `docs/MATHS.md`: the output colour space. Default sRGB.
     pub output_space: OutputSpace,
 }
@@ -133,6 +176,7 @@ impl Default for ColourSettings {
     fn default() -> Self {
         ColourSettings {
             auto_colour: true,
+            cast: CastEstimate::Auto,
             output_space: OutputSpace::Srgb,
         }
     }
@@ -172,6 +216,8 @@ pub struct Settings {
     pub print: PrintSettings,
     /// Colour handling (steps 6 and 7).
     pub colour: ColourSettings,
+    /// Rig and film profiles to apply (phase 2). Default none.
+    pub profiles: ProfileRefs,
 }
 
 impl Default for Settings {
@@ -181,6 +227,7 @@ impl Default for Settings {
             film: FilmSettings::default(),
             print: PrintSettings::default(),
             colour: ColourSettings::default(),
+            profiles: ProfileRefs::default(),
         }
     }
 }
@@ -232,7 +279,8 @@ impl Settings {
     /// Returns [`Error::Invalid`] when any `f32` field of [`PrintSettings`]
     /// is non-finite (the error names the field), the grade is outside 50 to
     /// 180, `paper_dmax` is not greater than `paper_dmin`, the shoulder or
-    /// toe is not positive, or any fixed channel value is non-finite.
+    /// toe is not positive, any fixed channel value is non-finite, or a fixed
+    /// cast has a slope outside 0.5 to 2 or a non-finite offset.
     pub fn validate(&self) -> Result<()> {
         let p = &self.print;
         for (name, value) in print_floats(p) {
@@ -258,6 +306,24 @@ impl Settings {
         require_finite_channels("film_base", self.film.film_base)?;
         require_finite_channels("dmax", self.film.dmax)?;
         require_finite_channels("gamma", self.film.gamma)?;
+        if let CastEstimate::Fixed {
+            slope_r,
+            offset_r,
+            slope_b,
+            offset_b,
+        } = self.colour.cast
+        {
+            for (name, slope) in [("slope_r", slope_r), ("slope_b", slope_b)] {
+                require((0.5..=2.0).contains(&slope), || {
+                    format!("fixed cast {name} {slope} must be between 0.5 and 2")
+                })?;
+            }
+            for (name, offset) in [("offset_r", offset_r), ("offset_b", offset_b)] {
+                require(offset.is_finite(), || {
+                    format!("fixed cast {name} {offset} must be finite")
+                })?;
+            }
+        }
         Ok(())
     }
 }
@@ -413,7 +479,7 @@ mod tests {
         // value here, and bump SETTINGS_SCHEMA_VERSION if sidecars change.
         assert_eq!(
             Settings::default().content_hash().to_hex(),
-            "08ccdb441edc6cb36759df4583ae94c536cf75481a29703b1b40af8c6cc853b3"
+            "0aef82b17d60343045c4b0b09c3a61a527e7fdb902b1f9b57c966def5efb5202"
         );
     }
 
@@ -478,5 +544,105 @@ mod tests {
             Err(Error::Invalid(reason)) => assert!(reason.contains("grade"), "{reason}"),
             other => panic!("expected Error::Invalid, got {other:?}"),
         }
+    }
+
+    fn fixed_cast() -> CastEstimate {
+        CastEstimate::Fixed {
+            slope_r: 1.1,
+            offset_r: 0.02,
+            slope_b: 0.9,
+            offset_b: -0.01,
+        }
+    }
+
+    #[test]
+    fn phase2_defaults_are_identity() {
+        let s = Settings::default();
+        assert_eq!(s.schema_version, 2);
+        assert_eq!(s.colour.cast, CastEstimate::Auto);
+        assert_eq!(s.profiles, ProfileRefs::default());
+        assert!(s.profiles.rig.is_none() && s.profiles.film.is_none());
+        assert_eq!(CastEstimate::default(), CastEstimate::Auto);
+    }
+
+    #[test]
+    fn new_settings_types_round_trip() {
+        let mut s = Settings::default();
+        s.colour.cast = fixed_cast();
+        s.profiles = ProfileRefs {
+            rig: Some("rigs/a.negg.toml".into()),
+            film: Some("/abs/film.negg.toml".into()),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+        assert_eq!(
+            serde_json::to_value(CastEstimate::Auto).unwrap(),
+            serde_json::json!({"mode": "auto"})
+        );
+        assert_eq!(
+            serde_json::to_value(fixed_cast()).unwrap()["mode"],
+            serde_json::json!("fixed")
+        );
+        let refs: ProfileRefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(refs, ProfileRefs::default());
+    }
+
+    #[test]
+    fn v1_settings_json_still_loads() {
+        let v1 = r#"{
+            "schema_version": 1,
+            "film": {"film_base": {"mode": "auto"}, "dmax": {"mode": "auto"},
+                     "gamma": {"mode": "auto"}},
+            "print": {"grade": 115.0, "exposure": 0.0, "cmy": [0.0, 0.0, 0.0],
+                      "paper_dmin": 0.06, "paper_dmax": 2.3, "shoulder": 3.0,
+                      "toe": 6.0, "black_point_compensation": false},
+            "colour": {"auto_colour": true, "output_space": "srgb"}
+        }"#;
+        let s: Settings = serde_json::from_str(v1).unwrap();
+        assert_eq!(s.schema_version, 1, "the file's own version is preserved");
+        assert_eq!(s.colour.cast, CastEstimate::Auto);
+        assert_eq!(s.profiles, ProfileRefs::default());
+        let current = Settings {
+            schema_version: 1,
+            ..Settings::default()
+        };
+        assert_eq!(s, current);
+        s.validate().unwrap();
+        let r: RollSettings =
+            serde_json::from_str(r#"{"schema_version": 1, "shared": {"schema_version": 1}}"#)
+                .unwrap();
+        assert_eq!(r.shared.colour.cast, CastEstimate::Auto);
+    }
+
+    #[test]
+    fn validate_checks_fixed_cast() {
+        let mut s = Settings::default();
+        s.colour.cast = fixed_cast();
+        s.validate().unwrap();
+        for (slope_r, offset_r, slope_b, offset_b) in [
+            (0.49, 0.0, 1.0, 0.0),
+            (2.01, 0.0, 1.0, 0.0),
+            (1.0, 0.0, 0.4, 0.0),
+            (1.0, 0.0, 2.5, 0.0),
+            (f32::NAN, 0.0, 1.0, 0.0),
+            (1.0, f32::NAN, 1.0, 0.0),
+            (1.0, 0.0, 1.0, f32::INFINITY),
+        ] {
+            s.colour.cast = CastEstimate::Fixed {
+                slope_r,
+                offset_r,
+                slope_b,
+                offset_b,
+            };
+            assert!(matches!(s.validate(), Err(Error::Invalid(_))), "{s:?}");
+        }
+        s.colour.cast = CastEstimate::Fixed {
+            slope_r: 0.5,
+            offset_r: 0.0,
+            slope_b: 2.0,
+            offset_b: 0.0,
+        };
+        s.validate().unwrap();
     }
 }

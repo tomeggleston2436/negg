@@ -11,8 +11,10 @@
 #   file          string, required. Path relative to corpus/,
 #                 e.g. "frames/r001/r001-03.dng".
 #   roll          string, required, e.g. "r001". Frames of one roll share film
-#                 stock, camera and light source; used for per-roll variance of
-#                 the estimated Dmin and gammas.
+#                 stock, camera and light source. `negg eval` renders each roll
+#                 in roll mode (pooled Dmin, gamma and cast, docs/ADR/0017) and
+#                 reports the spread of the per-frame Dmin and gammas over the
+#                 roll's Dmin inliers (Gate 2, docs/ADR/0019).
 #   stock         string, required. Film stock, e.g. "Kodak Portra 400".
 #   camera        string, required. The scanning camera, e.g. "Fujifilm X-T4".
 #   light_source  string, required. The backlight, e.g. "Cinestill CS-Lite".
@@ -31,6 +33,22 @@
 #   licence       string, required. "Apache-2.0" or "CC0-1.0". By setting this
 #                 the contributor affirms they own the frame and license it
 #                 under that licence.
+#                 "LicenseRef-Private" marks a frame that is not licensed to
+#                 anyone; it is accepted only in a private corpus outside this
+#                 repository (see corpus/README.md) and never in this file.
+#   film_roll     string, optional, e.g. "f001". The physical film roll, when
+#                 one roll of film is scanned more than once (each scan its own
+#                 `roll`, for example one per light source). Frames of one
+#                 film_roll must share `stock`. Used for the Gate 2
+#                 three-lights test: a film roll whose grey-card frames span at
+#                 least 3 light sources, all with a `rig`, qualifies.
+#   rig           string, optional. Rig profile (*.rig.negg.toml) the roll is
+#                 rendered with, relative to corpus/ (may start with "../", for
+#                 example "../profiles/rig/bench.rig.negg.toml"). Every frame of
+#                 a roll must give the same value, or none.
+#   film_profile  string, optional. Film profile (*.film.negg.toml) the roll is
+#                 rendered with, relative to corpus/ as for `rig`. Every frame
+#                 of a roll must give the same value, or none.
 #
 schema_version = 1
 
@@ -52,5 +70,8 @@ schema_version = 1
 # notes = "Overcast daylight, grey card bottom centre, full border visible."
 # contributor = "Jane Example"
 # licence = "CC0-1.0"
+# film_roll = "f001"                                   # optional
+# rig = "../profiles/rig/bench.rig.negg.toml"          # optional
+# film_profile = "../profiles/film/portra400.film.negg.toml"  # optional
 
 # No frames yet. Add [[frame]] entries below.

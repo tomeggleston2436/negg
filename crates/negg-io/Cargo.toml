@@ -7,5 +7,14 @@ license = "MPL-2.0"
 description = "TIFF, DNG and JPEG writers plus sidecar files"
 publish = false
 
+[dependencies]
+negg-types = { path = "../negg-types", version = "0.0.0" }
+rayon = { workspace = true }
+tiff = { workspace = true }
+image = { workspace = true, default-features = false, features = ["jpeg"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
 [lints]
 workspace = true

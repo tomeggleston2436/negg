@@ -1,15 +1,36 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "corpus": {
     "frames": 0,
+    "evaluated": 0,
     "with_references": 0,
-    "with_grey_card": 0
+    "with_grey_card": 0,
+    "skipped_frames": 0,
+    "skipped_references": 0
   },
   "frames": [],
   "rolls": [],
+  "roll_to_roll": [],
+  "three_lights": [],
   "summary": {
     "de2000_mean": null,
     "de2000_p95_mean": null,
-    "neutrality_mean": null
-  }
+    "neutrality_mean": null,
+    "de2000_mean_by_tool": {
+      "negpy": null,
+      "negadoctor": null
+    },
+    "gate1": {
+      "engine_vs_negpy": null,
+      "negadoctor_vs_negpy": null,
+      "neutrality_de_mean": null,
+      "pass": null
+    },
+    "gate2": {
+      "dmin_std_max": null,
+      "three_lights_max_de": null,
+      "pass": null
+    }
+  },
+  "skipped": []
 }

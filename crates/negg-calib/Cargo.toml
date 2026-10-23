@@ -7,5 +7,10 @@ license = "MPL-2.0"
 description = "Rig profiles: flat field, crosstalk and the camera-to-density fit"
 publish = false
 
+[dependencies]
+negg-types = { path = "../negg-types", version = "0.0.0" }
+negg-film = { path = "../negg-film", version = "0.0.0" }
+nalgebra.workspace = true
+
 [lints]
 workspace = true

@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 
 # Every third-party crate the plan allows is pinned here and nowhere else.
 # Crates pull one in with `<name>.workspace = true`. Do not add a crate that

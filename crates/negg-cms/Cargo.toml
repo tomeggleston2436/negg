@@ -9,3 +9,8 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+lcms2 = { workspace = true, features = ["static"] }
+negg-types = { path = "../negg-types", version = "0.0.0" }
+rayon = { workspace = true }

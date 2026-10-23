@@ -44,6 +44,40 @@ pub struct ToleranceTable {
     pub dmin_variance: f32,
     /// Each roll's `gamma_variance`.
     pub gamma_variance: f32,
+    /// Each roll's `dmin_std` (largest channel, log-D). Defaults to
+    /// [`DEFAULT_DMIN_STD`] so files written before it existed still load.
+    #[serde(default = "default_dmin_std")]
+    pub dmin_std: f32,
+    /// Each stock's roll-to-roll `dmin_std` (largest channel, log-D).
+    /// Defaults to [`DEFAULT_ROLL_TO_ROLL_DMIN_STD`].
+    #[serde(default = "default_roll_to_roll_dmin_std")]
+    pub roll_to_roll_dmin_std: f32,
+    /// Each film roll's three-lights `max_de`. Defaults to
+    /// [`DEFAULT_THREE_LIGHTS_DE`].
+    #[serde(default = "default_three_lights_de")]
+    pub three_lights_de: f32,
+}
+
+/// Default for [`ToleranceTable::dmin_std`]: a placeholder chosen before
+/// any corpus frame existed (Controller choice, TODO(measure)).
+pub const DEFAULT_DMIN_STD: f32 = 0.005;
+/// Default for [`ToleranceTable::roll_to_roll_dmin_std`]: a placeholder
+/// (Controller choice, TODO(measure)).
+pub const DEFAULT_ROLL_TO_ROLL_DMIN_STD: f32 = 0.01;
+/// Default for [`ToleranceTable::three_lights_de`]: a placeholder
+/// (Controller choice, TODO(measure)).
+pub const DEFAULT_THREE_LIGHTS_DE: f32 = 0.10;
+
+fn default_dmin_std() -> f32 {
+    DEFAULT_DMIN_STD
+}
+
+fn default_roll_to_roll_dmin_std() -> f32 {
+    DEFAULT_ROLL_TO_ROLL_DMIN_STD
+}
+
+fn default_three_lights_de() -> f32 {
+    DEFAULT_THREE_LIGHTS_DE
 }
 
 /// A frame that once rendered badly and is compared on its own metric.
@@ -218,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn repo_eval_toml_parses_with_the_five_tolerances() {
+    fn repo_eval_toml_parses_with_the_eight_tolerances() {
         let t = parse_str(REPO_EVAL_TOML).unwrap();
         assert_eq!(t.schema_version, 1);
         assert_eq!(
@@ -229,9 +263,26 @@ mod tests {
                 neutrality_mean: 0.10,
                 dmin_variance: 0.005,
                 gamma_variance: 0.010,
+                dmin_std: 0.005,
+                roll_to_roll_dmin_std: 0.01,
+                three_lights_de: 0.10,
             }
         );
         assert!(t.case.is_empty());
+    }
+
+    #[test]
+    fn gate2_tolerances_default_when_absent() {
+        // An eval.toml written before the Gate 2 tolerances existed.
+        let old = "schema_version = 1\n[tolerance]\nde2000_mean = 0.1\nde2000_p95_mean = 0.2\n\
+                   neutrality_mean = 0.1\ndmin_variance = 0.005\ngamma_variance = 0.01\n";
+        let t = parse_str(old).unwrap();
+        assert_eq!(t.tolerance.dmin_std, DEFAULT_DMIN_STD);
+        assert_eq!(
+            t.tolerance.roll_to_roll_dmin_std,
+            DEFAULT_ROLL_TO_ROLL_DMIN_STD
+        );
+        assert_eq!(t.tolerance.three_lights_de, DEFAULT_THREE_LIGHTS_DE);
     }
 
     #[test]

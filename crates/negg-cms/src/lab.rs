@@ -85,6 +85,17 @@ pub fn srgb_to_lab(encoded_rgb: [f32; 3]) -> [f32; 3] {
     xyz_to_lab(linear_srgb_to_xyz(linear), D65)
 }
 
+/// Linear Rec.2020 (D65) to CIE 1976 L*a*b* under D65: the composition
+/// of [`crate::matrix::REC2020_TO_XYZ`] and [`xyz_to_lab`] with [`D65`].
+/// This is how `negg eval` scores the engine's own output, which leaves
+/// step 7 of `docs/MATHS.md` in the linear Rec.2020 working space.
+pub fn rec2020_linear_to_lab(rgb: [f32; 3]) -> [f32; 3] {
+    xyz_to_lab(
+        crate::matrix::mul_vec(*crate::matrix::REC2020_TO_XYZ, rgb),
+        D65,
+    )
+}
+
 /// The CIEDE2000 colour difference between two L*a*b* colours, with
 /// `kL = kC = kH = 1`, following Sharma, Wu and Dalal (2005), "The CIEDE2000
 /// color-difference formula: implementation notes, supplementary test data,
@@ -197,6 +208,20 @@ mod tests {
     #[test]
     fn pure_red() {
         assert_close(srgb_to_lab([1.0, 0.0, 0.0]), [53.24, 80.09, 67.20], 0.05);
+    }
+
+    #[test]
+    fn rec2020_white_and_grey_are_neutral() {
+        assert_close(rec2020_linear_to_lab([1.0; 3]), [100.0, 0.0, 0.0], 0.01);
+        assert_close(rec2020_linear_to_lab([0.0; 3]), [0.0, 0.0, 0.0], 1e-6);
+        // Linear 18% grey is L* 49.5 in both spaces, since both share D65.
+        let rec = rec2020_linear_to_lab([0.18; 3]);
+        let srgb = srgb_to_lab([srgb_oetf(0.18); 3]);
+        assert_close(rec, srgb, 0.01);
+        assert!((rec[0] - 49.5).abs() < 0.05, "{rec:?}");
+        // A pure Rec.2020 red is further out than sRGB red.
+        let red = rec2020_linear_to_lab([1.0, 0.0, 0.0]);
+        assert!(red[1] > srgb_to_lab([1.0, 0.0, 0.0])[1], "{red:?}");
     }
 
     #[test]

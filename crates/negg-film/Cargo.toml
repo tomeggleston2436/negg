@@ -7,5 +7,11 @@ license = "MPL-2.0"
 description = "Film profiles, Dmin/Dmax/gamma estimators and roll pooling"
 publish = false
 
+[dependencies]
+negg-types = { path = "../negg-types", version = "0.0.0" }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
 [lints]
 workspace = true

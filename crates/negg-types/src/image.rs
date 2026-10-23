@@ -234,8 +234,10 @@ impl Image {
         (t.y..t.y + t.height).flat_map(move |y| {
             let start = (y * width + t.x) * CHANNELS;
             self.data[start..start + t.width * CHANNELS]
-                .chunks_exact(CHANNELS)
-                .map(|p| [p[0], p[1], p[2]])
+                .as_chunks::<CHANNELS>()
+                .0
+                .iter()
+                .copied()
         })
     }
 }

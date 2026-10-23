@@ -10,6 +10,8 @@ publish = false
 [dependencies]
 negg-types = { path = "../negg-types", version = "0.0.0" }
 tiff = { workspace = true }
+# RAW decode. LGPL-2.1, used as an ordinary dependency (see NOTICE).
+rawler = { workspace = true }
 
 [lints]
 workspace = true

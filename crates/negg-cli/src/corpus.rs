@@ -7,7 +7,7 @@
 //! ours and a typo must fail loudly rather than silently drop a frame's
 //! grey card or reference.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
@@ -17,7 +17,12 @@ use serde::{Deserialize, Serialize};
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Licences a contributor may put on a frame.
-const ALLOWED_LICENCES: [&str; 2] = ["Apache-2.0", "CC0-1.0"];
+const ALLOWED_LICENCES: [&str; 3] = ["Apache-2.0", "CC0-1.0", PRIVATE_LICENCE];
+
+/// The licence of a frame that is not licensed to anyone: a private corpus
+/// kept outside this repository and used only for local evals. The committed
+/// `corpus/manifest.toml` must never carry it (checked by a test).
+pub const PRIVATE_LICENCE: &str = "LicenseRef-Private";
 
 /// The whole manifest.
 #[derive(Debug, Clone, Deserialize)]
@@ -40,7 +45,7 @@ pub struct Frame {
     pub file: String,
     /// Roll the frame belongs to.
     pub roll: String,
-    /// Film stock.
+    /// Film stock. Frames of one roll share it.
     pub stock: String,
     /// Scanning camera.
     pub camera: String,
@@ -53,19 +58,25 @@ pub struct Frame {
     /// Reference renders, possibly none.
     pub references: Vec<Reference>,
     /// Free text about the frame; may be empty.
-    #[expect(
-        dead_code,
-        reason = "part of the manifest schema; eval does not report it yet"
-    )]
     pub notes: String,
     /// Who contributed the frame.
-    #[expect(
-        dead_code,
-        reason = "part of the manifest schema; eval does not report it yet"
-    )]
     pub contributor: String,
     /// `"Apache-2.0"` or `"CC0-1.0"`.
     pub licence: String,
+    /// The physical film roll the frame was cut from, when it is scanned
+    /// more than once (for example under several light sources, each scan
+    /// its own `roll`). Groups frames for the Gate 2 three-lights metric
+    /// (Ruling 53). Frames of one film roll share `stock`.
+    #[serde(default)]
+    pub film_roll: Option<String>,
+    /// The rig profile (`*.rig.negg.toml`) the roll is rendered with,
+    /// relative to the corpus directory. Frames of one roll share it.
+    #[serde(default)]
+    pub rig: Option<String>,
+    /// The film profile (`*.film.negg.toml`) the roll is rendered with,
+    /// relative to the corpus directory. Frames of one roll share it.
+    #[serde(default)]
+    pub film_profile: Option<String>,
 }
 
 /// A rectangle given as fractions of the image width and height.
@@ -91,10 +102,6 @@ pub struct Reference {
     /// The render, relative to the corpus directory.
     pub file: String,
     /// The tool's version string.
-    #[expect(
-        dead_code,
-        reason = "part of the manifest schema; eval does not report it yet"
-    )]
     pub version: String,
 }
 
@@ -141,9 +148,11 @@ pub enum CorpusError {
     SchemaVersion(u32),
     /// Two frames share an id.
     DuplicateId(String),
-    /// A frame or reference path is not a plain relative path or does
-    /// not exist under the corpus directory.
-    MissingFile {
+    /// A frame or reference path is not a plain relative path (it is
+    /// absolute, or has a `.` or `..` component). Whether the file exists
+    /// is not checked here: the corpus is local-only and `negg eval` skips
+    /// entries whose files are absent.
+    BadPath {
         /// Frame id.
         id: String,
         /// The path as written in the manifest.
@@ -163,6 +172,26 @@ pub enum CorpusError {
         /// The licence as written.
         licence: String,
     },
+    /// A `rig` or `film_profile` path is empty or absolute.
+    BadProfilePath {
+        /// Frame id.
+        id: String,
+        /// The path as written in the manifest.
+        file: String,
+    },
+    /// Two frames that must agree on a field do not: frames of one `roll`
+    /// on `stock`, `rig` or `film_profile`, or frames of one `film_roll` on
+    /// `stock`.
+    Inconsistent {
+        /// The frame that disagrees with an earlier one.
+        id: String,
+        /// `roll` or `film_roll`.
+        group: &'static str,
+        /// The roll or film roll name.
+        name: String,
+        /// The field that differs.
+        field: &'static str,
+    },
 }
 
 impl fmt::Display for CorpusError {
@@ -177,10 +206,10 @@ impl fmt::Display for CorpusError {
                 "manifest.toml: schema_version {v} is not supported (expected {SCHEMA_VERSION})"
             ),
             CorpusError::DuplicateId(id) => write!(f, "manifest.toml: duplicate frame id {id:?}"),
-            CorpusError::MissingFile { id, file } => {
+            CorpusError::BadPath { id, file } => {
                 write!(
                     f,
-                    "frame {id:?}: file {file:?} is not a relative path to an existing file in the corpus"
+                    "frame {id:?}: file {file:?} must be a relative path inside the corpus with no `.` or `..` components"
                 )
             }
             CorpusError::GreyCard { id, reason } => write!(f, "frame {id:?}: {reason}"),
@@ -188,6 +217,19 @@ impl fmt::Display for CorpusError {
                 f,
                 "frame {id:?}: licence {licence:?} is not one of {}",
                 ALLOWED_LICENCES.join(", ")
+            ),
+            CorpusError::BadProfilePath { id, file } => write!(
+                f,
+                "frame {id:?}: profile path {file:?} must be a non-empty path relative to the corpus directory"
+            ),
+            CorpusError::Inconsistent {
+                id,
+                group,
+                name,
+                field,
+            } => write!(
+                f,
+                "frame {id:?}: {field} differs from an earlier frame of {group} {name:?}; frames of one {group} must share it"
             ),
         }
     }
@@ -205,10 +247,16 @@ impl std::error::Error for CorpusError {
 /// Reads and validates `dir/manifest.toml`.
 ///
 /// Validation: the schema version matches, ids are unique, every frame
-/// file and reference file is a plain relative path that exists under
-/// `dir`, `grey_card` is present exactly when `has_grey_card`, the rect
-/// lies within `[0, 1]` with positive size, and the licence is one of the
-/// allowed identifiers.
+/// file and reference file is a plain relative path (no absolute, `.` or
+/// `..` components), `grey_card` is present exactly when `has_grey_card`,
+/// the rect lies within `[0, 1]` with positive size, and the licence is
+/// one of the allowed identifiers, `rig` and `film_profile` are
+/// non-empty relative paths shared by every frame of a roll, every frame
+/// of a roll has the same stock, and frames of one `film_roll` share their
+/// stock. Whether the files exist is not
+/// checked: the corpus is local-only (docs/ADR/0005), so a manifest entry
+/// whose file is absent on this machine is accepted here and skipped by
+/// `negg eval`.
 pub fn load(dir: &Path) -> Result<Manifest, CorpusError> {
     let path = dir.join("manifest.toml");
     let text = std::fs::read_to_string(&path).map_err(|source| CorpusError::Io {
@@ -216,7 +264,7 @@ pub fn load(dir: &Path) -> Result<Manifest, CorpusError> {
         source,
     })?;
     let manifest = parse(&text)?;
-    validate(dir, &manifest)?;
+    validate(&manifest)?;
     Ok(manifest)
 }
 
@@ -226,18 +274,21 @@ fn parse(text: &str) -> Result<Manifest, CorpusError> {
 }
 
 /// Checks everything `load` promises beyond the TOML schema itself.
-fn validate(dir: &Path, manifest: &Manifest) -> Result<(), CorpusError> {
+fn validate(manifest: &Manifest) -> Result<(), CorpusError> {
     if manifest.schema_version != SCHEMA_VERSION {
         return Err(CorpusError::SchemaVersion(manifest.schema_version));
     }
     let mut seen = HashSet::new();
+    // First frame seen of each roll and of each film roll.
+    let mut rolls: HashMap<&str, &Frame> = HashMap::new();
+    let mut film_rolls: HashMap<&str, &Frame> = HashMap::new();
     for frame in &manifest.frame {
         if !seen.insert(frame.id.as_str()) {
             return Err(CorpusError::DuplicateId(frame.id.clone()));
         }
-        check_file(dir, &frame.id, &frame.file)?;
+        check_path(&frame.id, &frame.file)?;
         for reference in &frame.references {
-            check_file(dir, &frame.id, &reference.file)?;
+            check_path(&frame.id, &reference.file)?;
         }
         match (frame.has_grey_card, frame.grey_card) {
             (true, None) => {
@@ -261,17 +312,60 @@ fn validate(dir: &Path, manifest: &Manifest) -> Result<(), CorpusError> {
                 licence: frame.licence.clone(),
             });
         }
+        for path in [&frame.rig, &frame.film_profile].into_iter().flatten() {
+            check_profile_path(&frame.id, path)?;
+        }
+        let inconsistent = |group, name: &str, field| CorpusError::Inconsistent {
+            id: frame.id.clone(),
+            group,
+            name: name.to_owned(),
+            field,
+        };
+        let first = *rolls.entry(frame.roll.as_str()).or_insert(frame);
+        // The eval takes a roll's stock from its first frame.
+        if first.stock != frame.stock {
+            return Err(inconsistent("roll", &frame.roll, "stock"));
+        }
+        if first.rig != frame.rig {
+            return Err(inconsistent("roll", &frame.roll, "rig"));
+        }
+        if first.film_profile != frame.film_profile {
+            return Err(inconsistent("roll", &frame.roll, "film_profile"));
+        }
+        if let Some(film_roll) = &frame.film_roll {
+            let first = *film_rolls.entry(film_roll.as_str()).or_insert(frame);
+            if first.stock != frame.stock {
+                return Err(inconsistent("film_roll", film_roll, "stock"));
+            }
+        }
     }
     Ok(())
 }
 
-/// A manifest path must be relative, free of `..`, and name an existing
-/// file under the corpus directory.
-fn check_file(dir: &Path, id: &str, file: &str) -> Result<(), CorpusError> {
-    let rel = Path::new(file);
-    let plain = rel.components().all(|c| matches!(c, Component::Normal(_)));
-    if !plain || !dir.join(rel).is_file() {
-        return Err(CorpusError::MissingFile {
+/// A `rig` or `film_profile` path must be non-empty and relative (it is
+/// resolved against the corpus directory). Unlike frame paths it may
+/// climb out of the corpus with `..`, so a roll can use a profile
+/// committed under the repository's `profiles/`.
+fn check_profile_path(id: &str, file: &str) -> Result<(), CorpusError> {
+    let path = Path::new(file);
+    if file.is_empty() || path.is_absolute() || path.has_root() {
+        return Err(CorpusError::BadProfilePath {
+            id: id.to_owned(),
+            file: file.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// A manifest path must be relative and made only of plain components,
+/// so that joining it to the corpus directory cannot escape it. The file
+/// need not exist.
+fn check_path(id: &str, file: &str) -> Result<(), CorpusError> {
+    let mut components = Path::new(file).components().peekable();
+    let plain =
+        components.peek().is_some() && components.all(|c| matches!(c, Component::Normal(_)));
+    if !plain {
+        return Err(CorpusError::BadPath {
             id: id.to_owned(),
             file: file.to_owned(),
         });
@@ -438,38 +532,52 @@ licence = "CC0-1.0"
     }
 
     #[test]
-    fn missing_frame_file_is_rejected() {
+    fn missing_frame_file_is_accepted_by_load() {
+        // The corpus is local-only: a frame whose RAW is not on this
+        // machine still loads, and `negg eval` skips it.
         let dir = full_corpus("missingframe");
         std::fs::remove_file(dir.0.join("frames/r001/r001-03.dng")).unwrap();
-        match load(&dir.0) {
-            Err(CorpusError::MissingFile { id, file }) => {
-                assert_eq!(id, "r001-03");
-                assert_eq!(file, "frames/r001/r001-03.dng");
-            }
-            other => panic!("expected MissingFile, got {other:?}"),
-        }
+        let m = load(&dir.0).unwrap();
+        assert_eq!(m.frame[0].file, "frames/r001/r001-03.dng");
     }
 
     #[test]
-    fn missing_reference_file_is_rejected() {
+    fn missing_reference_file_is_accepted_by_load() {
         let dir = full_corpus("missingref");
         std::fs::remove_file(dir.0.join("reference/r001-03.negadoctor.tif")).unwrap();
-        match load(&dir.0) {
-            Err(CorpusError::MissingFile { file, .. }) => {
-                assert_eq!(file, "reference/r001-03.negadoctor.tif");
-            }
-            other => panic!("expected MissingFile, got {other:?}"),
-        }
+        let m = load(&dir.0).unwrap();
+        assert_eq!(m.frame[0].references.len(), 2);
     }
 
     #[test]
-    fn parent_traversal_is_rejected() {
+    fn manifest_with_no_files_at_all_loads() {
+        let dir = TempDir::new("nofiles");
+        dir.manifest(&format!("schema_version = 1\n{FRAME}"));
+        assert_eq!(load(&dir.0).unwrap().frame.len(), 1);
+    }
+
+    #[test]
+    fn unsafe_paths_are_rejected() {
         let dir = full_corpus("traversal");
+        for bad in ["../manifest.toml", "/etc/passwd", "./frames/x.dng", ""] {
+            dir.manifest(&format!(
+                "schema_version = 1\n{}",
+                FRAME.replace("frames/r001/r001-03.dng", bad)
+            ));
+            match load(&dir.0) {
+                Err(CorpusError::BadPath { id, file }) => {
+                    assert_eq!(id, "r001-03");
+                    assert_eq!(file, bad);
+                }
+                other => panic!("expected BadPath for {bad:?}, got {other:?}"),
+            }
+        }
+        // The same rule applies to reference paths.
         dir.manifest(&format!(
             "schema_version = 1\n{}",
-            FRAME.replace("frames/r001/r001-03.dng", "../manifest.toml")
+            FRAME.replace("reference/r001-03.negpy.tif", "../r001-03.negpy.tif")
         ));
-        assert!(matches!(load(&dir.0), Err(CorpusError::MissingFile { .. })));
+        assert!(matches!(load(&dir.0), Err(CorpusError::BadPath { .. })));
     }
 
     #[test]
@@ -535,6 +643,27 @@ licence = "CC0-1.0"
             FRAME.replace("licence = \"CC0-1.0\"", "licence = \"Apache-2.0\"")
         ));
         assert!(load(&dir.0).is_ok());
+        dir.manifest(&format!(
+            "schema_version = 1\n{}",
+            FRAME.replace("licence = \"CC0-1.0\"", "licence = \"LicenseRef-Private\"")
+        ));
+        assert!(load(&dir.0).is_ok());
+    }
+
+    #[test]
+    fn the_committed_manifest_has_no_private_frames() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus");
+        let manifest = load(&dir).expect("the committed manifest loads");
+        let private: Vec<&str> = manifest
+            .frame
+            .iter()
+            .filter(|f| f.licence == PRIVATE_LICENCE)
+            .map(|f| f.id.as_str())
+            .collect();
+        assert!(
+            private.is_empty(),
+            "private frames belong in a corpus outside the repository: {private:?}"
+        );
     }
 
     #[test]
@@ -555,5 +684,130 @@ licence = "CC0-1.0"
             serde_json::to_string(&Tool::Negadoctor).unwrap(),
             "\"negadoctor\""
         );
+    }
+
+    /// `FRAME` as frame `id` of `roll` with extra fields appended.
+    fn frame_with(id: &str, roll: &str, extra: &str) -> String {
+        FRAME
+            .replace("r001-03", id)
+            .replace("roll = \"r001\"", &format!("roll = \"{roll}\""))
+            .replace(
+                "licence = \"CC0-1.0\"\n",
+                &format!("licence = \"CC0-1.0\"\n{extra}\n"),
+            )
+    }
+
+    #[test]
+    fn gate2_fields_are_optional_and_load() {
+        let dir = full_corpus("gate2fields");
+        dir.manifest(&format!(
+            "schema_version = 1\n{}",
+            frame_with(
+                "r001-03",
+                "r001",
+                "film_roll = \"f001\"\nrig = \"../profiles/rig/a.rig.negg.toml\"\nfilm_profile = \"profiles/p.film.negg.toml\""
+            )
+        ));
+        let m = load(&dir.0).unwrap();
+        let f = &m.frame[0];
+        assert_eq!(f.film_roll.as_deref(), Some("f001"));
+        assert_eq!(f.rig.as_deref(), Some("../profiles/rig/a.rig.negg.toml"));
+        assert_eq!(f.film_profile.as_deref(), Some("profiles/p.film.negg.toml"));
+        // And they default to absent.
+        dir.manifest(&format!("schema_version = 1\n{FRAME}"));
+        let m = load(&dir.0).unwrap();
+        assert!(m.frame[0].film_roll.is_none() && m.frame[0].rig.is_none());
+        assert!(m.frame[0].film_profile.is_none());
+    }
+
+    #[test]
+    fn frames_of_a_roll_share_stock_rig_and_film_profile() {
+        let dir = full_corpus("rollshare");
+        let a = frame_with("r001-01", "r001", "rig = \"a.rig.negg.toml\"");
+        let b = frame_with("r001-02", "r001", "rig = \"b.rig.negg.toml\"");
+        dir.manifest(&format!("schema_version = 1\n{a}\n{b}"));
+        match load(&dir.0) {
+            Err(e @ CorpusError::Inconsistent { .. }) => {
+                let msg = e.to_string();
+                assert!(msg.contains("r001-02") && msg.contains("rig"), "{msg}");
+            }
+            other => panic!("expected Inconsistent, got {other:?}"),
+        }
+        // One with a film profile and one without also disagree.
+        let b = frame_with(
+            "r001-02",
+            "r001",
+            "rig = \"a.rig.negg.toml\"\nfilm_profile = \"p\"",
+        );
+        dir.manifest(&format!("schema_version = 1\n{a}\n{b}"));
+        assert!(matches!(
+            load(&dir.0),
+            Err(CorpusError::Inconsistent {
+                field: "film_profile",
+                ..
+            })
+        ));
+        // So do two stocks on one roll.
+        let b = frame_with("r001-02", "r001", "rig = \"a.rig.negg.toml\"")
+            .replace("Kodak Portra 400", "Kodak Gold 200");
+        dir.manifest(&format!("schema_version = 1\n{a}\n{b}"));
+        match load(&dir.0) {
+            Err(
+                e @ CorpusError::Inconsistent {
+                    group: "roll",
+                    field: "stock",
+                    ..
+                },
+            ) => {
+                let msg = e.to_string();
+                assert!(msg.contains("r001-02") && msg.contains("stock"), "{msg}");
+            }
+            other => panic!("expected Inconsistent stock, got {other:?}"),
+        }
+        // Different rolls may differ.
+        let b = frame_with("r002-01", "r002", "rig = \"b.rig.negg.toml\"");
+        dir.manifest(&format!("schema_version = 1\n{a}\n{b}"));
+        assert!(load(&dir.0).is_ok());
+    }
+
+    #[test]
+    fn frames_of_a_film_roll_share_stock() {
+        let dir = full_corpus("filmroll");
+        let a = frame_with("r001-01", "r001", "film_roll = \"f001\"");
+        let b = frame_with("r002-01", "r002", "film_roll = \"f001\"")
+            .replace("Kodak Portra 400", "Kodak Gold 200");
+        dir.manifest(&format!("schema_version = 1\n{a}\n{b}"));
+        assert!(matches!(
+            load(&dir.0),
+            Err(CorpusError::Inconsistent {
+                group: "film_roll",
+                field: "stock",
+                ..
+            })
+        ));
+        // Same stock across two scan rolls (two lights) is fine.
+        let b = frame_with("r002-01", "r002", "film_roll = \"f001\"")
+            .replace("Cinestill CS-Lite", "Kaiser Slimlite");
+        dir.manifest(&format!("schema_version = 1\n{a}\n{b}"));
+        assert!(load(&dir.0).is_ok());
+    }
+
+    #[test]
+    fn profile_paths_must_be_relative() {
+        let dir = full_corpus("profilepath");
+        for bad in [
+            "rig = \"\"",
+            "rig = \"/etc/x.rig.negg.toml\"",
+            "film_profile = \"/x\"",
+        ] {
+            dir.manifest(&format!(
+                "schema_version = 1\n{}",
+                frame_with("r001-03", "r001", bad)
+            ));
+            assert!(
+                matches!(load(&dir.0), Err(CorpusError::BadProfilePath { .. })),
+                "{bad}"
+            );
+        }
     }
 }

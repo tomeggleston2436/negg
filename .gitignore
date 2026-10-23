@@ -6,3 +6,9 @@ eval-results.json
 /app/node_modules
 /app/dist
 /app/src-tauri/target
+# Corpus frames and reference renders are local-only (docs/ADR/0005)
+corpus/**
+!corpus/manifest.toml
+!corpus/README.md
+# Claude Code SDD workspace (ledger, briefs, reports)
+.superpowers/

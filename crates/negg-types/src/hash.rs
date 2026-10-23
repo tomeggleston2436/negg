@@ -82,7 +82,7 @@ impl ContentHash {
             )));
         }
         let mut out = [0u8; 32];
-        for (i, pair) in bytes.chunks_exact(2).enumerate() {
+        for (i, pair) in bytes.as_chunks::<2>().0.iter().enumerate() {
             let hi = hex_digit(pair[0])?;
             let lo = hex_digit(pair[1])?;
             out[i] = (hi << 4) | lo;
@@ -732,12 +732,10 @@ impl Sha256 {
                 return;
             }
         }
-        let mut blocks = bytes.chunks_exact(64);
-        for block in &mut blocks {
-            let block: &[u8; 64] = block.try_into().expect("chunks_exact yields 64 bytes");
+        let (blocks, rest) = bytes.as_chunks::<64>();
+        for block in blocks {
             compress(&mut self.state, block);
         }
-        let rest = blocks.remainder();
         self.buffer[..rest.len()].copy_from_slice(rest);
         self.buffered = rest.len();
     }
@@ -751,8 +749,8 @@ impl Sha256 {
         self.update(&bit_length.to_be_bytes());
         debug_assert_eq!(self.buffered, 0);
         let mut out = [0u8; 32];
-        for (chunk, word) in out.chunks_exact_mut(4).zip(self.state) {
-            chunk.copy_from_slice(&word.to_be_bytes());
+        for (chunk, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(self.state) {
+            *chunk = word.to_be_bytes();
         }
         out
     }
@@ -761,8 +759,8 @@ impl Sha256 {
 /// One SHA-256 compression round over a 64-byte block.
 fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut w = [0u32; 64];
-    for (word, chunk) in w.iter_mut().zip(block.chunks_exact(4)) {
-        *word = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for (word, chunk) in w.iter_mut().zip(block.as_chunks::<4>().0) {
+        *word = u32::from_be_bytes(*chunk);
     }
     for i in 16..64 {
         let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);

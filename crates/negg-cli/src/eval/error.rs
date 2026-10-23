@@ -5,8 +5,10 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use negg_cms::CmsError;
 use negg_decode::DecodeError;
 
+use crate::convert::ConvertError;
 use crate::corpus::CorpusError;
 use crate::eval::report::REPORT_SCHEMA_VERSION;
 use crate::eval::tolerances::TolerancesError;
@@ -16,8 +18,13 @@ use crate::eval::tolerances::TolerancesError;
 pub enum EvalError {
     /// The manifest could not be loaded or failed validation.
     Corpus(CorpusError),
-    /// A reference render could not be decoded.
+    /// A reference render could not be decoded. (A frame whose own
+    /// decode fails is skipped, not an error.)
     Decode(DecodeError),
+    /// Linearising a frame or building its camera matrix failed.
+    Cms(CmsError),
+    /// The engine refused to render a frame.
+    Render(negg_types::Error),
     /// The results file could not be written.
     Io(std::io::Error),
     /// The results could not be serialised.
@@ -41,6 +48,17 @@ pub enum EvalError {
         /// What went wrong.
         source: BaselineError,
     },
+    /// A roll could not be rendered in roll mode because its rig or film
+    /// profile (or the rig's flat frame) could not be loaded; an input
+    /// error when the profile itself is unreadable or invalid. A pooling
+    /// failure is not this variant: it is a render error and surfaces as
+    /// [`EvalError::Render`].
+    Roll {
+        /// The roll id.
+        roll: String,
+        /// What went wrong.
+        source: ConvertError,
+    },
 }
 
 /// Why a baseline `eval-results.json` could not be loaded.
@@ -50,7 +68,10 @@ pub enum BaselineError {
     Io(std::io::Error),
     /// The file is not valid JSON or does not match the report schema.
     Json(serde_json::Error),
-    /// The file's `schema_version` is not the one this build writes.
+    /// The file's `schema_version` is not the one this build writes. A
+    /// version 1 report (before Gate 2, docs/ADR/0019) is rejected rather
+    /// than compared, because its roll variances were taken over every
+    /// frame rather than the inliers.
     SchemaVersion {
         /// The version the file declares.
         found: u32,
@@ -64,7 +85,8 @@ impl fmt::Display for BaselineError {
             BaselineError::Json(e) => write!(f, "{e}"),
             BaselineError::SchemaVersion { found } => write!(
                 f,
-                "schema_version {found} is not supported (expected {REPORT_SCHEMA_VERSION})"
+                "schema_version {found} is not supported (expected {REPORT_SCHEMA_VERSION}); \
+                 regenerate the baseline with this build (`negg eval --out <file>`)"
             ),
         }
     }
@@ -102,10 +124,11 @@ impl EvalError {
     /// baseline) rather than in the run itself; the binary maps these to
     /// the usage exit status.
     pub fn is_input_error(&self) -> bool {
-        matches!(
-            self,
-            EvalError::Corpus(_) | EvalError::Tolerances(_) | EvalError::Baseline { .. }
-        )
+        match self {
+            EvalError::Corpus(_) | EvalError::Tolerances(_) | EvalError::Baseline { .. } => true,
+            EvalError::Roll { source, .. } => source.is_usage_error(),
+            _ => false,
+        }
     }
 }
 
@@ -114,6 +137,8 @@ impl fmt::Display for EvalError {
         match self {
             EvalError::Corpus(e) => write!(f, "corpus: {e}"),
             EvalError::Decode(e) => write!(f, "decode: {e}"),
+            EvalError::Cms(e) => write!(f, "colour management: {e}"),
+            EvalError::Render(e) => write!(f, "render: {e}"),
             EvalError::Io(e) => write!(f, "cannot write results: {e}"),
             EvalError::Json(e) => write!(f, "cannot serialise results: {e}"),
             EvalError::Mismatch {
@@ -129,6 +154,7 @@ impl fmt::Display for EvalError {
             EvalError::Baseline { path, source } => {
                 write!(f, "baseline {}: {source}", path.display())
             }
+            EvalError::Roll { roll, source } => write!(f, "roll {roll:?}: {source}"),
         }
     }
 }
@@ -138,11 +164,14 @@ impl std::error::Error for EvalError {
         match self {
             EvalError::Corpus(e) => Some(e),
             EvalError::Decode(e) => Some(e),
+            EvalError::Cms(e) => Some(e),
+            EvalError::Render(e) => Some(e),
             EvalError::Io(e) => Some(e),
             EvalError::Json(e) => Some(e),
             EvalError::Mismatch { .. } => None,
             EvalError::Tolerances(e) => Some(e),
             EvalError::Baseline { source, .. } => Some(source),
+            EvalError::Roll { source, .. } => Some(source),
         }
     }
 }
@@ -156,6 +185,18 @@ impl From<CorpusError> for EvalError {
 impl From<DecodeError> for EvalError {
     fn from(e: DecodeError) -> Self {
         EvalError::Decode(e)
+    }
+}
+
+impl From<CmsError> for EvalError {
+    fn from(e: CmsError) -> Self {
+        EvalError::Cms(e)
+    }
+}
+
+impl From<negg_types::Error> for EvalError {
+    fn from(e: negg_types::Error) -> Self {
+        EvalError::Render(e)
     }
 }
 
@@ -211,9 +252,25 @@ mod tests {
         assert!(baseline.is_input_error());
         assert_eq!(
             baseline.to_string(),
-            "baseline eval-baseline.json: schema_version 9 is not supported (expected 1)"
+            "baseline eval-baseline.json: schema_version 9 is not supported (expected 2); \
+             regenerate the baseline with this build (`negg eval --out <file>`)"
         );
+        let profile = EvalError::Roll {
+            roll: "r001".into(),
+            source: ConvertError::Usage("bad".into()),
+        };
+        assert!(profile.is_input_error());
+        let pool = EvalError::Roll {
+            roll: "r001".into(),
+            source: ConvertError::Invalid("bad".into()),
+        };
+        assert!(!pool.is_input_error());
         let io = EvalError::Io(std::io::Error::other("disk"));
         assert!(!io.is_input_error());
+        let render = EvalError::from(negg_types::Error::Invalid("x0".into()));
+        assert!(!render.is_input_error());
+        assert_eq!(render.to_string(), "render: invalid settings: x0");
+        let cms = EvalError::from(CmsError::Singular);
+        assert_eq!(cms.to_string(), "colour management: matrix is singular");
     }
 }

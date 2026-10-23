@@ -5,18 +5,29 @@
 //!
 //! Every metric is "lower is better". A metric regresses when
 //! `current > baseline + tolerance`; when either side is null the row is
-//! reported as `n/a` and does not count. Tracked cases are compared on
+//! reported as `n/a` and does not count. The per-roll variances and
+//! standard deviations and the roll-to-roll Dmin spread are per channel;
+//! the rule compares their largest channel. Rolls, stocks (roll to roll)
+//! and film rolls (three lights) are matched to the baseline by name. Tracked cases are compared on
 //! their own per-frame metric, and a case whose frame or reference has
 //! disappeared from the current report fails the gate outright, because a
 //! silently dropped frame is exactly what the case exists to catch.
+//!
+//! The one exception is a frame or reference the current run skipped
+//! because its file is not present locally (the corpus is local-only, see
+//! docs/ADR/0005). That is listed in the report's `skipped` entries, so
+//! the case is reported as `SKIPPED` and does not fail the gate: CI holds
+//! no frames at all and must still pass, and the case will bite on the
+//! machine that has the file.
 //!
 //! [`compare`] is pure so it can be tested without files; the command in
 //! `mod.rs` loads the inputs and prints [`render_table`].
 
 use std::fmt::Write as _;
 
+use crate::corpus::Tool;
 use crate::eval::metrics::DeStats;
-use crate::eval::report::{self, EvalReport, FrameResult};
+use crate::eval::report::{self, EvalReport, FrameResult, max_channel};
 use crate::eval::tolerances::{CaseMetric, Tolerances, TrackedCase};
 
 /// The verdict for one row of the comparison.
@@ -29,8 +40,12 @@ pub enum Status {
     /// One side is null; nothing to compare.
     NotAvailable,
     /// A tracked case whose frame or reference is absent from the current
-    /// report. Counts as a failure.
+    /// report without being listed as skipped. Counts as a failure.
     Missing,
+    /// A tracked case whose frame, or whose reference for the case's
+    /// tool, the current run skipped because the file is not present
+    /// locally. Nothing to compare; does not count as a failure.
+    Skipped,
 }
 
 impl Status {
@@ -41,6 +56,7 @@ impl Status {
             Status::Regression => "REGRESSION",
             Status::NotAvailable => "n/a",
             Status::Missing => "MISSING",
+            Status::Skipped => "SKIPPED",
         }
     }
 }
@@ -74,10 +90,12 @@ impl Row {
 /// The whole comparison.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Comparison {
-    /// Summary metrics, then per-roll metrics, then tracked cases.
+    /// Summary metrics, then per-roll metrics, then per-stock roll-to-roll
+    /// and per-film-roll three-lights metrics, then tracked cases.
     pub rows: Vec<Row>,
     /// `true` when any row is a [`Status::Regression`] or a
-    /// [`Status::Missing`]; the command then exits with status 3.
+    /// [`Status::Missing`]; the command then exits with status 3. A
+    /// [`Status::Skipped`] row never sets it.
     pub regressed: bool,
 }
 
@@ -108,15 +126,45 @@ pub fn compare(current: &EvalReport, baseline: &EvalReport, tol: &Tolerances) ->
         let base = baseline.rolls.iter().find(|r| r.roll == roll.roll);
         rows.push(metric_row(
             format!("roll {} dmin_variance", roll.roll),
-            base.and_then(|b| b.dmin_variance),
-            roll.dmin_variance,
+            base.and_then(|b| max_channel(b.dmin_variance)),
+            max_channel(roll.dmin_variance),
             t.dmin_variance,
         ));
         rows.push(metric_row(
             format!("roll {} gamma_variance", roll.roll),
-            base.and_then(|b| b.gamma_variance),
-            roll.gamma_variance,
+            base.and_then(|b| max_channel(b.gamma_variance)),
+            max_channel(roll.gamma_variance),
             t.gamma_variance,
+        ));
+        rows.push(metric_row(
+            format!("roll {} dmin_std", roll.roll),
+            base.and_then(|b| max_channel(b.dmin_std)),
+            max_channel(roll.dmin_std),
+            t.dmin_std,
+        ));
+    }
+    for stock in &current.roll_to_roll {
+        let base = baseline
+            .roll_to_roll
+            .iter()
+            .find(|r| r.stock == stock.stock);
+        rows.push(metric_row(
+            format!("roll_to_roll {} dmin_std", stock.stock),
+            base.and_then(|b| max_channel(Some(b.dmin_std))),
+            max_channel(Some(stock.dmin_std)),
+            t.roll_to_roll_dmin_std,
+        ));
+    }
+    for film_roll in &current.three_lights {
+        let base = baseline
+            .three_lights
+            .iter()
+            .find(|r| r.film_roll == film_roll.film_roll);
+        rows.push(metric_row(
+            format!("three_lights {} max_de", film_roll.film_roll),
+            base.and_then(|b| b.max_de),
+            film_roll.max_de,
+            t.three_lights_de,
         ));
     }
     for case in &tol.case {
@@ -154,8 +202,11 @@ fn metric_row(
 /// What a report holds for a tracked case.
 enum Lookup {
     /// The frame, or the reference for the case's tool, is not in the
-    /// report.
+    /// report and not listed as skipped.
     Missing,
+    /// The frame, or the reference for the case's tool, is listed in the
+    /// report's `skipped` entries: its file was absent on this machine.
+    Skipped,
     /// The frame and reference are present; the value is `None` only
     /// when the metric itself is null (a frame without a grey card).
     Value(Option<f32>),
@@ -163,9 +214,39 @@ enum Lookup {
 
 fn lookup(report: &EvalReport, case: &TrackedCase) -> Lookup {
     let Some(frame) = report.frames.iter().find(|f| f.id == case.id) else {
-        return Lookup::Missing;
+        return if report
+            .skipped
+            .iter()
+            .any(|s| s.id == case.id && s.is_frame())
+        {
+            Lookup::Skipped
+        } else {
+            Lookup::Missing
+        };
     };
-    case_value(frame, case)
+    match case_value(frame, case) {
+        Lookup::Missing
+            if case
+                .tool
+                .is_some_and(|tool| reference_skipped(report, case, tool)) =>
+        {
+            Lookup::Skipped
+        }
+        other => other,
+    }
+}
+
+/// Whether the report lists a skipped reference render for the case's
+/// frame that belongs to `tool`. The skipped reason carries the file path
+/// rather than the tool, and references are named `<id>.<tool>.tif` by
+/// convention (see `corpus/README.md`), so the tool is matched as a
+/// substring of the path; a render named outside that convention is
+/// reported MISSING, which is the conservative verdict.
+fn reference_skipped(report: &EvalReport, case: &TrackedCase, tool: Tool) -> bool {
+    report
+        .skipped
+        .iter()
+        .any(|s| s.id == case.id && s.is_reference() && s.reason.contains(tool.name()))
 }
 
 fn case_value(frame: &FrameResult, case: &TrackedCase) -> Lookup {
@@ -189,18 +270,20 @@ fn case_row(current: &EvalReport, baseline: &EvalReport, case: &TrackedCase) -> 
         None => format!("case {} {}", case.id, case.metric.name()),
     };
     let base = match lookup(baseline, case) {
-        Lookup::Missing => None,
+        Lookup::Missing | Lookup::Skipped => None,
         Lookup::Value(v) => v,
     };
+    let absent = |status| Row {
+        metric: metric.clone(),
+        case: None,
+        baseline: base,
+        current: None,
+        tolerance: case.tolerance,
+        status,
+    };
     let mut row = match lookup(current, case) {
-        Lookup::Missing => Row {
-            metric,
-            case: None,
-            baseline: base,
-            current: None,
-            tolerance: case.tolerance,
-            status: Status::Missing,
-        },
+        Lookup::Missing => absent(Status::Missing),
+        Lookup::Skipped => absent(Status::Skipped),
         Lookup::Value(cur) => metric_row(metric, base, cur, case.tolerance),
     };
     row.case = Some(case.id.clone());
@@ -208,8 +291,9 @@ fn case_row(current: &EvalReport, baseline: &EvalReport, case: &TrackedCase) -> 
 }
 
 /// Renders the comparison table (metric, baseline, current, delta,
-/// tolerance, status), one line per missing tracked case, and the verdict
-/// line `regression gate: OK` or `regression gate: FAILED (...)`.
+/// tolerance, status), one line per missing or skipped tracked case, and
+/// the verdict line `regression gate: OK` or
+/// `regression gate: FAILED (...)`.
 pub fn render_table(comparison: &Comparison) -> String {
     let mut out = String::new();
     let mut rows = vec![
@@ -240,13 +324,21 @@ pub fn render_table(comparison: &Comparison) -> String {
 
     let mut regressions = 0usize;
     let mut missing = 0usize;
+    let mut skipped = 0usize;
     for row in &comparison.rows {
+        let id = row.case.as_deref().unwrap_or(row.metric.as_str());
         match row.status {
             Status::Regression => regressions += 1,
             Status::Missing => {
                 missing += 1;
-                let id = row.case.as_deref().unwrap_or(row.metric.as_str());
                 let _ = writeln!(out, "tracked case {id} missing from the current report");
+            }
+            Status::Skipped => {
+                skipped += 1;
+                let _ = writeln!(
+                    out,
+                    "tracked case {id} skipped: its file is not in the local corpus"
+                );
             }
             Status::Ok | Status::NotAvailable => {}
         }
@@ -256,6 +348,12 @@ pub fn render_table(comparison: &Comparison) -> String {
             out,
             "regression gate: FAILED ({regressions} regressed, {missing} missing tracked case{})",
             if missing == 1 { "" } else { "s" }
+        );
+    } else if skipped > 0 {
+        let _ = writeln!(
+            out,
+            "regression gate: OK ({skipped} tracked case{} skipped)",
+            if skipped == 1 { "" } else { "s" }
         );
     } else {
         out.push_str("regression gate: OK\n");
@@ -269,7 +367,8 @@ mod tests {
     use crate::corpus::Tool;
     use crate::eval::metrics::Neutrality;
     use crate::eval::report::{
-        CorpusSummary, REPORT_SCHEMA_VERSION, ReferenceResult, RollResult, Summary,
+        CorpusSummary, REPORT_SCHEMA_VERSION, ReferenceResult, RollResult, RollToRoll, Skipped,
+        Summary, ThreeLights,
     };
     use crate::eval::tolerances::ToleranceTable;
 
@@ -282,6 +381,9 @@ mod tests {
                 neutrality_mean: 0.1,
                 dmin_variance: 0.005,
                 gamma_variance: 0.01,
+                dmin_std: 0.005,
+                roll_to_roll_dmin_std: 0.01,
+                three_lights_de: 0.1,
             },
             case: vec![],
         }
@@ -315,8 +417,13 @@ mod tests {
             neutrality: neutral.map(|v| Neutrality {
                 a_mean_abs: v,
                 b_mean_abs: v,
+                de: 0.0,
             }),
             estimates: None,
+            reference_distance: None,
+            film_roll: None,
+            rig: None,
+            pool: None,
         }
     }
 
@@ -325,12 +432,18 @@ mod tests {
             schema_version: REPORT_SCHEMA_VERSION,
             corpus: CorpusSummary {
                 frames: frames.len(),
+                evaluated: frames.len(),
                 with_references: frames.len(),
                 with_grey_card: 0,
+                skipped_frames: 0,
+                skipped_references: 0,
             },
             frames,
             rolls,
+            roll_to_roll: vec![],
+            three_lights: vec![],
             summary,
+            skipped: vec![],
         }
     }
 
@@ -340,18 +453,28 @@ mod tests {
                 de2000_mean: de,
                 de2000_p95_mean: None,
                 neutrality_mean: None,
+                ..Summary::default()
             },
             vec![],
             vec![],
         )
     }
 
+    /// A roll whose per-channel variances put the given value in one
+    /// channel and smaller values in the others, so the max is `dmin` or
+    /// `gamma`.
     fn roll(name: &str, dmin: Option<f32>, gamma: Option<f32>) -> RollResult {
         RollResult {
             roll: name.into(),
-            frames: 1,
-            dmin_variance: dmin,
-            gamma_variance: gamma,
+            frames: 2,
+            dmin_variance: dmin.map(|v| [v * 0.5, v, v * 0.25]),
+            gamma_variance: gamma.map(|v| [v * 0.1, v * 0.2, v]),
+            inliers: 2,
+            rejected: vec![],
+            dmin_std: None,
+            gamma_std: None,
+            pooled_dmin: None,
+            pooled_gamma_ratio: None,
         }
     }
 
@@ -416,6 +539,7 @@ mod tests {
                 de2000_mean: None,
                 de2000_p95_mean: None,
                 neutrality_mean: None,
+                ..Summary::default()
             },
             vec![
                 roll("r001", Some(0.010), Some(0.02)),
@@ -428,6 +552,7 @@ mod tests {
                 de2000_mean: None,
                 de2000_p95_mean: None,
                 neutrality_mean: None,
+                ..Summary::default()
             },
             // Different order from the current report, and r002 absent.
             vec![roll("r001", Some(0.001), Some(0.02))],
@@ -447,6 +572,55 @@ mod tests {
             row(&c, "roll r002 gamma_variance").status,
             Status::NotAvailable
         );
+        assert_eq!(row(&c, "roll r001 dmin_std").status, Status::NotAvailable);
+        assert!(c.regressed);
+    }
+
+    #[test]
+    fn gate2_metrics_are_gated_by_name() {
+        let tol = tolerances();
+        let empty = Summary::default();
+        let mut current = report(empty, vec![roll("r001", None, None)], vec![]);
+        let mut baseline = current.clone();
+        current.rolls[0].dmin_std = Some([0.004, 0.012, 0.001]);
+        baseline.rolls[0].dmin_std = Some([0.004, 0.006, 0.001]);
+        let stock = |name: &str, d: f32| RollToRoll {
+            stock: name.into(),
+            rolls: 2,
+            dmin_std: [d, d * 0.5, 0.0],
+            gamma_ratio_std: [0.0, 0.0],
+        };
+        current.roll_to_roll = vec![stock("Portra", 0.02), stock("Gold", 0.05)];
+        baseline.roll_to_roll = vec![stock("Portra", 0.015)];
+        let lights = |name: &str, de: Option<f32>| ThreeLights {
+            film_roll: name.into(),
+            lights: vec![],
+            qualifies: true,
+            max_de: de,
+        };
+        current.three_lights = vec![lights("f001", Some(1.5)), lights("f002", None)];
+        baseline.three_lights = vec![lights("f001", Some(1.2)), lights("f002", Some(1.0))];
+        let c = compare(&current, &baseline, &tol);
+        // 0.012 > 0.006 + 0.005.
+        let r = row(&c, "roll r001 dmin_std");
+        assert_eq!(r.status, Status::Regression);
+        assert_eq!((r.baseline, r.current), (Some(0.006), Some(0.012)));
+        // 0.02 <= 0.015 + 0.01.
+        assert_eq!(row(&c, "roll_to_roll Portra dmin_std").status, Status::Ok);
+        // Not in the baseline.
+        assert_eq!(
+            row(&c, "roll_to_roll Gold dmin_std").status,
+            Status::NotAvailable
+        );
+        // 1.5 > 1.2 + 0.1.
+        assert_eq!(
+            row(&c, "three_lights f001 max_de").status,
+            Status::Regression
+        );
+        assert_eq!(
+            row(&c, "three_lights f002 max_de").status,
+            Status::NotAvailable
+        );
         assert!(c.regressed);
     }
 
@@ -456,6 +630,7 @@ mod tests {
                 de2000_mean: Some(de_mean),
                 de2000_p95_mean: Some(de_mean * 2.0),
                 neutrality_mean: neutral,
+                ..Summary::default()
             },
             vec![roll("r001", None, None)],
             vec![frame("r001-03", "r001", de_mean, neutral)],
@@ -538,6 +713,116 @@ mod tests {
             row(&c, "case r001-03 negpy de2000_mean").status,
             Status::NotAvailable
         );
+        assert!(!c.regressed);
+    }
+
+    #[test]
+    fn tracked_case_on_a_skipped_frame_is_skipped_not_a_failure() {
+        let mut tol = tolerances();
+        tol.case = vec![
+            case("r001-03", Some(Tool::Negpy), CaseMetric::De2000Mean, 0.5),
+            case("r001-03", None, CaseMetric::Neutrality, 0.2),
+        ];
+        let baseline = one_frame(1.0, Some(0.1));
+        // The current run had no file for the frame: it is in `skipped`,
+        // not in `frames`.
+        let mut current = summary_only(None);
+        current.corpus.frames = 1;
+        current.corpus.skipped_frames = 1;
+        current.skipped = vec![Skipped::frame("r001-03", "frames/r001/r001-03.dng")];
+        let c = compare(&current, &baseline, &tol);
+        let r = row(&c, "case r001-03 negpy de2000_mean");
+        assert_eq!(r.status, Status::Skipped);
+        assert_eq!((r.baseline, r.current), (Some(1.0), None));
+        assert_eq!(r.case.as_deref(), Some("r001-03"));
+        assert_eq!(row(&c, "case r001-03 neutrality").status, Status::Skipped);
+        assert!(!c.regressed);
+        let t = render_table(&c);
+        assert!(t.contains("SKIPPED"), "{t}");
+        assert!(!t.contains("MISSING"), "{t}");
+        assert!(
+            t.contains("tracked case r001-03 skipped: its file is not in the local corpus"),
+            "{t}"
+        );
+        assert!(
+            t.trim_end()
+                .ends_with("regression gate: OK (2 tracked cases skipped)"),
+            "{t}"
+        );
+        // A skipped entry for a different frame does not rescue this case.
+        current.skipped = vec![Skipped::frame("r001-04", "frames/r001/r001-04.dng")];
+        let c = compare(&current, &baseline, &tol);
+        assert_eq!(
+            row(&c, "case r001-03 negpy de2000_mean").status,
+            Status::Missing
+        );
+        assert!(c.regressed);
+    }
+
+    #[test]
+    fn tracked_case_on_a_skipped_reference_is_skipped_not_a_failure() {
+        let mut tol = tolerances();
+        tol.case = vec![
+            case(
+                "r001-03",
+                Some(Tool::Negadoctor),
+                CaseMetric::De2000Max,
+                0.5,
+            ),
+            case("r001-03", Some(Tool::Negpy), CaseMetric::De2000Max, 0.5),
+        ];
+        let mut baseline = one_frame(1.0, None);
+        baseline.frames[0].references.push(ReferenceResult {
+            tool: Tool::Negadoctor,
+            de2000: DeStats {
+                mean: 2.0,
+                p95: 2.0,
+                max: 2.0,
+            },
+        });
+        // The frame was evaluated but its negadoctor render was absent.
+        let mut current = one_frame(1.0, None);
+        current.corpus.skipped_references = 1;
+        current.skipped = vec![Skipped::reference(
+            "r001-03",
+            "reference/r001-03.negadoctor.tif",
+        )];
+        let c = compare(&current, &baseline, &tol);
+        let r = row(&c, "case r001-03 negadoctor de2000_max");
+        assert_eq!(r.status, Status::Skipped);
+        assert_eq!(r.baseline, Some(2.0));
+        assert_eq!(row(&c, "case r001-03 negpy de2000_max").status, Status::Ok);
+        assert!(!c.regressed);
+        // A skipped reference for another tool leaves the case MISSING.
+        current.skipped = vec![Skipped::reference("r001-03", "reference/r001-03.negpy.tif")];
+        current.frames[0].references.clear();
+        let c = compare(&current, &baseline, &tol);
+        assert_eq!(
+            row(&c, "case r001-03 negadoctor de2000_max").status,
+            Status::Missing
+        );
+        assert_eq!(
+            row(&c, "case r001-03 negpy de2000_max").status,
+            Status::Skipped
+        );
+        assert!(c.regressed);
+    }
+
+    #[test]
+    fn skipped_in_the_baseline_only_is_not_available() {
+        let mut tol = tolerances();
+        tol.case = vec![case(
+            "r001-03",
+            Some(Tool::Negpy),
+            CaseMetric::De2000Mean,
+            0.5,
+        )];
+        let mut baseline = summary_only(None);
+        baseline.skipped = vec![Skipped::frame("r001-03", "frames/r001/r001-03.dng")];
+        let c = compare(&one_frame(1.0, None), &baseline, &tol);
+        let r = row(&c, "case r001-03 negpy de2000_mean");
+        assert_eq!(r.status, Status::NotAvailable);
+        assert_eq!((r.baseline, r.current), (None, Some(1.0)));
         assert!(!c.regressed);
     }
 

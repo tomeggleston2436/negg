@@ -9,8 +9,13 @@ schema_version = 1
 de2000_mean = 0.10        # CIEDE2000, mean over frames of the per-frame mean
 de2000_p95_mean = 0.20    # mean over frames of the per-frame 95th percentile
 neutrality_mean = 0.10    # mean over grey-card frames of (|a*| + |b*|) / 2
-dmin_variance = 0.005     # log-D squared, per roll (null until phase 2)
-gamma_variance = 0.010    # per roll (null until phase 2)
+dmin_variance = 0.005     # log-D squared, per roll, over its Dmin inliers
+gamma_variance = 0.010    # per roll, over its Dmin inliers
+# Gate 2 metrics (docs/ADR/0019). Placeholders too, TODO(measure): no corpus
+# frame existed when they were chosen. Absent keys take these same values.
+dmin_std = 0.005              # log-D, per roll: std of per-frame Dmin over inliers
+roll_to_roll_dmin_std = 0.01  # log-D, per stock: std of pooled Dmin across rolls
+three_lights_de = 0.10        # per film roll: largest per-light mean card dE
 
 # Tracked cases: frames that once rendered badly. Each is compared on its own
 # per-frame metric against the baseline with the tolerance given here, so a

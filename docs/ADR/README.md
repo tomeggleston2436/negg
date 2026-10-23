@@ -7,7 +7,7 @@ An ADR records one decision that shapes `negg`: why it was made, what it rules o
 - The code is about to deviate from `docs/MATHS.md`.
 - A default in a `docs/MATHS.md` constants table is about to change.
 - A `TODO(spec)` in `docs/MATHS.md` or `docs/PROFILES.md` is being resolved.
-- One of the four accepted decisions (0001 to 0004) is being reopened.
+- One of the accepted decisions (0001 onwards) is being reopened.
 - A dependency with an unusual licence is being added (for example, LibRaw; see 0003).
 
 Do not write an ADR for routine implementation choices that do not touch the model, a default, a licence or a decision.

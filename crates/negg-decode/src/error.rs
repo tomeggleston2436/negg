@@ -11,8 +11,10 @@ pub enum DecodeError {
     Io(std::io::Error),
     /// The `tiff` crate rejected the file; the string is its message.
     Tiff(String),
+    /// rawler failed to decode the file; the string is its message.
+    Raw(String),
     /// The file decoded but uses a layout this crate does not handle
-    /// (greyscale, planar, floating point and so on). The string says which.
+    /// (greyscale, planar, X-Trans and so on). The string says which.
     Unsupported(String),
     /// The decoded buffer did not match the dimensions the file declared.
     Dimensions(negg_types::Error),
@@ -23,6 +25,7 @@ impl fmt::Display for DecodeError {
         match self {
             DecodeError::Io(e) => write!(f, "I/O error: {e}"),
             DecodeError::Tiff(msg) => write!(f, "TIFF error: {msg}"),
+            DecodeError::Raw(msg) => write!(f, "RAW error: {msg}"),
             DecodeError::Unsupported(what) => write!(f, "unsupported input: {what}"),
             DecodeError::Dimensions(e) => write!(f, "decoded buffer mismatch: {e}"),
         }
@@ -34,7 +37,7 @@ impl std::error::Error for DecodeError {
         match self {
             DecodeError::Io(e) => Some(e),
             DecodeError::Dimensions(e) => Some(e),
-            DecodeError::Tiff(_) | DecodeError::Unsupported(_) => None,
+            DecodeError::Tiff(_) | DecodeError::Raw(_) | DecodeError::Unsupported(_) => None,
         }
     }
 }
@@ -60,6 +63,22 @@ impl From<::tiff::TiffError> for DecodeError {
     }
 }
 
+impl From<rawler::RawlerError> for DecodeError {
+    fn from(e: rawler::RawlerError) -> Self {
+        match e {
+            rawler::RawlerError::Unsupported {
+                what,
+                model,
+                make,
+                mode,
+            } => DecodeError::Unsupported(format!(
+                "rawler: {what} (make '{make}', model '{model}', mode '{mode}')"
+            )),
+            rawler::RawlerError::DecoderFailed(msg) => DecodeError::Raw(msg),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +92,10 @@ mod tests {
             "TIFF error: bad"
         );
         assert_eq!(
+            DecodeError::Raw("corrupt".into()).to_string(),
+            "RAW error: corrupt"
+        );
+        assert_eq!(
             DecodeError::Unsupported("grey".into()).to_string(),
             "unsupported input: grey"
         );
@@ -82,5 +105,24 @@ mod tests {
             len: 2,
         });
         assert!(dims.to_string().starts_with("decoded buffer mismatch:"));
+    }
+
+    #[test]
+    fn rawler_errors_map_by_kind() {
+        let unsupported = DecodeError::from(rawler::RawlerError::Unsupported {
+            what: "X-Trans".into(),
+            model: "X-T1".into(),
+            make: "Fujifilm".into(),
+            mode: "".into(),
+        });
+        match unsupported {
+            DecodeError::Unsupported(msg) => assert!(msg.contains("X-Trans"), "{msg}"),
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+        let failed = DecodeError::from(rawler::RawlerError::DecoderFailed("bad".into()));
+        match failed {
+            DecodeError::Raw(msg) => assert_eq!(msg, "bad"),
+            other => panic!("expected Raw, got {other:?}"),
+        }
     }
 }
