@@ -28,7 +28,18 @@
 //! [`negg_film::analysis_grid`] with the long side set to the smaller of
 //! the two long sides, and the statistics are taken over the block
 //! medians; if the grids still differ by more than one cell in either
-//! dimension the reference is skipped as a size mismatch. Neutrality is
+//! dimension the reference is registered onto the render instead
+//! ([`align`], docs/ADR/0028) and scored over the overlap, and skipped as
+//! a size mismatch when it does not register. A Negative Lab Pro
+//! reference (tool `nlp`, a hand-cropped 8-bit JPEG or TIFF that may be
+//! mirrored or turned) is always registered: it is scored over the
+//! overlap with its placement and tone descriptors recorded, or listed as
+//! `unaligned` and left out of every mean when its correlation is below
+//! [`align::MIN_CORRELATION`]. A frame with a manifest `geometry` is
+//! rendered with it as a frame override (the roll still pools), and the
+//! geometry is applied to the render (step 8) before the references are
+//! scored; the grey card is measured before that, on the uncropped render,
+//! since its rect is given on the source frame. Neutrality is
 //! measured on the full-resolution render. When a frame has both a
 //! negadoctor and a NegPy reference, the two references are also compared
 //! with each other ([`metrics::reference_distance`], matched in size the
@@ -61,6 +72,7 @@
 //! [`compare`] and [`tolerances`]); the comparison is printed after the
 //! table and returned from [`run`], never written into the results file.
 
+pub mod align;
 pub mod compare;
 pub mod error;
 pub mod metrics;
@@ -72,18 +84,20 @@ use std::path::{Path, PathBuf};
 
 use negg_render::FrameRender;
 use negg_types::{
-    Image, PoolFrame, PoolRole, PooledEstimates, ProfileRefs, RollSettings, Settings,
+    FrameOverrides, Image, PoolFrame, PoolRole, PooledEstimates, ProfileRefs, RollSettings,
+    Settings,
 };
 
 use crate::cli::EvalArgs;
 use crate::convert::ConvertError;
-use crate::corpus::{self, Frame, Tool};
+use crate::corpus::{self, Frame, Reference, Tool};
 use crate::roll::{self, RollAnalysis};
 pub use compare::Comparison;
 pub use error::{BaselineError, EvalError};
 use report::{
-    ByTool, CorpusSummary, EvalReport, FramePool, FrameResult, Gate1, Gate2, LightResult,
-    ReferenceResult, RollResult, RollToRoll, Skipped, Summary, ThreeLights,
+    Alignment, ByTool, CorpusSummary, EvalReport, FramePool, FrameResult, Gate1, Gate2,
+    LightResult, ReferenceResult, RollResult, RollToRoll, Skipped, Summary, ThreeLights, ToneMeans,
+    ToneSummary, UnalignedReference,
 };
 
 /// Loads the manifest, renders and scores every frame whose file is
@@ -243,7 +257,8 @@ fn roll_error(roll: &str, err: ConvertError) -> EvalError {
 /// does a directory (ADR 0017), and scores each. The roll settings are the
 /// defaults with the roll's `rig` and `film_profile` (the same for every
 /// frame of the roll, checked by the manifest loader) resolved against
-/// `corpus` (R-paths); no frame has overrides. A frame that does not
+/// `corpus` (R-paths); a frame's only override is its manifest
+/// `geometry`, as a whole (Ruling 71). A frame that does not
 /// decode, in either pass, is appended to `skipped_frames` and left out of
 /// the pool and the results.
 fn render_roll(
@@ -263,7 +278,19 @@ fn render_roll(
     let settings: Settings = ctx.roll.shared.clone();
     let inputs: Vec<(PathBuf, Settings)> = frames
         .iter()
-        .map(|f| (corpus.join(&f.file), settings.clone()))
+        .map(|f| {
+            let frame_settings = match &f.geometry {
+                Some(g) => negg_types::roll::resolve(
+                    &ctx.roll,
+                    &FrameOverrides {
+                        geometry: Some(g.to_geometry()),
+                        ..FrameOverrides::default()
+                    },
+                ),
+                None => settings.clone(),
+            };
+            (corpus.join(&f.file), frame_settings)
+        })
         .collect();
 
     // Pass 1: analyse and pool. The pool records the analysed frames in
@@ -306,8 +333,9 @@ fn render_roll(
         for note in &prepared.notes {
             eprintln!("negg eval: {}: {note}", frame.id);
         }
+        let frame_settings = &inputs[k].1;
         let render =
-            roll::render_in_roll(&prepared, &settings, &ctx, Some(&pool)).map_err(to_eval)?;
+            roll::render_in_roll(&prepared, frame_settings, &ctx, Some(&pool)).map_err(to_eval)?;
         drop(prepared);
         let pool_record = FramePool {
             dmin: record.dmin,
@@ -318,7 +346,14 @@ fn render_roll(
         };
         results.push((
             k,
-            score_render(corpus, frame, render, Some(pool_record), skipped_references)?,
+            score_render(
+                corpus,
+                frame,
+                render,
+                &frame_settings.geometry,
+                Some(pool_record),
+                skipped_references,
+            )?,
         ));
     }
     Ok(RollOutcome {
@@ -327,19 +362,30 @@ fn render_roll(
     })
 }
 
-/// Scores one rendered frame. A reference whose file is absent, or whose
-/// size cannot be matched to the render, is appended to `skipped` and the
-/// frame's other references are still scored; with every reference
-/// skipped the frame still gets a result, with no references. Neutrality
-/// is measured on the render whenever the frame has a grey card.
+/// Scores one rendered frame. Neutrality is measured on the render as it
+/// comes from the engine, whenever the frame has a grey card (its rect is
+/// on the source frame); then `geometry` is applied (step 8, Ruling 70)
+/// and the references are scored against the result. A reference whose
+/// file is absent, whose size cannot be matched to the render, or which
+/// does not register onto it, is appended to `skipped` and the frame's
+/// other references are still scored; with every reference skipped the
+/// frame still gets a result, with no references.
 fn score_render(
     corpus: &Path,
     frame: &Frame,
-    render: FrameRender,
+    mut render: FrameRender,
+    geometry: &negg_types::Geometry,
     pool: Option<FramePool>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<FrameResult, EvalError> {
+    let neutrality = frame
+        .grey_card
+        .map(|card| metrics::neutrality(&render.image, card));
+    if !geometry.is_identity() {
+        render.image = geometry.apply(&render.image)?;
+    }
     let mut references = Vec::with_capacity(frame.references.len());
+    let mut unaligned = Vec::new();
     // The first scored NegPy and negadoctor references, kept for the
     // reference-to-reference distance.
     let mut negpy: Option<Image> = None;
@@ -350,29 +396,62 @@ fn score_render(
             skipped.push(Skipped::reference(&frame.id, &reference.file));
             continue;
         }
-        let decoded = negg_decode::read_tiff(&path)?;
-        let de2000 = match matched_pair(&render.image, &decoded.image) {
-            Some((r, s)) => metrics::de2000_stats(&r, &s).map_err(|e| e.for_frame(&frame.id))?,
-            None => {
+        let image = read_reference(&path)?;
+        let scored = match score_reference(&render.image, &image, reference) {
+            Scored::Pair(r, s) => ReferenceResult {
+                tool: reference.tool,
+                de2000: metrics::de2000_stats(&r, &s).map_err(|e| e.for_frame(&frame.id))?,
+                alignment: None,
+                tone: None,
+            },
+            Scored::Registered(registration) => {
+                let (de2000, tone) = metrics::aligned_stats(&render.image, &image, &registration)
+                    .map_err(|e| e.for_frame(&frame.id))?;
+                ReferenceResult {
+                    tool: reference.tool,
+                    de2000,
+                    alignment: Some(Alignment::new(
+                        &registration,
+                        render.image.width(),
+                        render.image.height(),
+                    )),
+                    tone: Some(tone),
+                }
+            }
+            Scored::Unaligned(registration) => {
+                let alignment = registration
+                    .map(|r| Alignment::new(&r, render.image.width(), render.image.height()));
+                skipped.push(Skipped::unaligned(
+                    &frame.id,
+                    &reference.file,
+                    alignment.map(|a| a.correlation),
+                    align::MIN_CORRELATION,
+                ));
+                unaligned.push(UnalignedReference {
+                    tool: reference.tool,
+                    file: reference.file.clone(),
+                    alignment,
+                });
+                continue;
+            }
+            Scored::SizeMismatch => {
                 skipped.push(Skipped::size_mismatch(
                     &frame.id,
                     &reference.file,
                     (render.image.width(), render.image.height()),
-                    (decoded.image.width(), decoded.image.height()),
+                    (image.width(), image.height()),
                 ));
                 continue;
             }
         };
-        references.push(ReferenceResult {
-            tool: reference.tool,
-            de2000,
-        });
+        references.push(scored);
         let slot = match reference.tool {
             Tool::Negpy => &mut negpy,
             Tool::Negadoctor => &mut negadoctor,
+            Tool::Nlp => continue,
         };
         if slot.is_none() {
-            *slot = Some(decoded.image);
+            *slot = Some(image);
         }
     }
     let reference_distance = match (&negadoctor, &negpy) {
@@ -384,9 +463,6 @@ fn score_render(
         },
         _ => None,
     };
-    let neutrality = frame
-        .grey_card
-        .map(|card| metrics::neutrality(&render.image, card));
     Ok(FrameResult {
         id: frame.id.clone(),
         roll: frame.roll.clone(),
@@ -400,7 +476,85 @@ fn score_render(
         film_roll: frame.film_roll.clone(),
         rig: frame.rig.clone(),
         pool,
+        unaligned,
     })
+}
+
+/// How one reference is to be scored against the render.
+enum Scored {
+    /// Pixel by pixel on these two images of one size: the originals when
+    /// the sizes match, else the shared analysis grid.
+    Pair(Image, Image),
+    /// Over the overlap of this registration.
+    Registered(align::Registration),
+    /// A Negative Lab Pro reference that did not register, with the best
+    /// placement found when there was one.
+    Unaligned(Option<align::Registration>),
+    /// A NegPy or negadoctor reference that neither matches in size nor
+    /// registers.
+    SizeMismatch,
+}
+
+/// Chooses the comparison for one reference (docs/ADR/0028). A NegPy or
+/// negadoctor reference keeps the comparison it always had (pixel by
+/// pixel at the render's size, else on the shared analysis grid) and is
+/// registered only when neither applies; it is then a size mismatch,
+/// exactly as before, when it does not register. A Negative Lab Pro
+/// reference is always registered, at any size, and is unaligned when it
+/// does not register.
+fn score_reference(render: &Image, image: &Image, reference: &Reference) -> Scored {
+    if reference.tool != Tool::Nlp
+        && let Some((r, s)) = matched_pair(render, image)
+    {
+        return Scored::Pair(r, s);
+    }
+    let registration = align::register(render, image);
+    match registration {
+        Some(r) if r.is_aligned() => Scored::Registered(r),
+        _ if reference.tool == Tool::Nlp => Scored::Unaligned(registration),
+        _ => Scored::SizeMismatch,
+    }
+}
+
+/// Reads a reference render: a JPEG (`.jpg` or `.jpeg`, any case), as a
+/// Negative Lab Pro export usually is, or else a TIFF through
+/// [`negg_decode::read_tiff`]. Either way the values are the file's
+/// encoded ones scaled to `[0, 1]` and taken to be sRGB (see [`metrics`]);
+/// a greyscale JPEG is read as grey RGB. Orientation tags are ignored,
+/// since registration finds the orientation.
+fn read_reference(path: &Path) -> Result<Image, EvalError> {
+    let jpeg = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"));
+    if !jpeg {
+        return Ok(negg_decode::read_tiff(path)?.image);
+    }
+    let wrap = |message: String| EvalError::Reference {
+        path: path.to_owned(),
+        message,
+    };
+    let file = std::fs::File::open(path).map_err(|e| wrap(e.to_string()))?;
+    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::BufReader::new(file))
+        .map_err(|e| wrap(e.to_string()))?;
+    let img = image::DynamicImage::from_decoder(decoder).map_err(|e| wrap(e.to_string()))?;
+    let rgb = match img {
+        image::DynamicImage::ImageRgb8(rgb) => rgb,
+        image::DynamicImage::ImageLuma8(_) => img.to_rgb8(),
+        other => {
+            return Err(wrap(format!(
+                "colour type {:?}; only 8-bit RGB and greyscale JPEGs are read",
+                other.color()
+            )));
+        }
+    };
+    let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+    let data: Vec<f32> = rgb
+        .into_raw()
+        .iter()
+        .map(|&v| f32::from(v) / 255.0)
+        .collect();
+    Image::from_vec(w, h, data).map_err(EvalError::Render)
 }
 
 /// The render and reference as two images of one size: the originals
@@ -546,6 +700,7 @@ fn assemble(
         de2000_mean_by_tool: ByTool {
             negpy: tool_mean(Tool::Negpy),
             negadoctor: tool_mean(Tool::Negadoctor),
+            nlp: tool_mean(Tool::Nlp),
         },
         gate1: Gate1::new(
             mean(&engine_vs_negpy),
@@ -553,6 +708,7 @@ fn assemble(
             mean(&neutrality_des),
         ),
         gate2: Gate2::new(dmin_std_max, three_lights_max_de),
+        tone: tone_summary(&frames),
     };
 
     EvalReport {
@@ -565,6 +721,25 @@ fn assemble(
         summary,
         skipped,
     }
+}
+
+/// The tone means over every registered reference and per tool
+/// (docs/ADR/0028); `None` when no reference was registered.
+fn tone_summary(frames: &[FrameResult]) -> Option<ToneSummary> {
+    let tones = |tool: Option<Tool>| -> Vec<metrics::ToneStats> {
+        frames
+            .iter()
+            .flat_map(|f| f.references.iter())
+            .filter(|r| tool.is_none_or(|t| r.tool == t))
+            .filter_map(|r| r.tone)
+            .collect()
+    };
+    Some(ToneSummary {
+        all: ToneMeans::over(&tones(None))?,
+        negpy: ToneMeans::over(&tones(Some(Tool::Negpy))),
+        negadoctor: ToneMeans::over(&tones(Some(Tool::Negadoctor))),
+        nlp: ToneMeans::over(&tones(Some(Tool::Nlp))),
+    })
 }
 
 /// One roll's entry: the statistics over its Dmin inliers' own values
@@ -738,6 +913,8 @@ mod tests {
                         p95: 2.0 * i as f32,
                         max: 3.0 * i as f32,
                     },
+                    alignment: None,
+                    tone: None,
                 })
                 .collect(),
             neutrality: neutral,
@@ -746,6 +923,7 @@ mod tests {
             film_roll: None,
             rig: None,
             pool: None,
+            unaligned: vec![],
         }
     }
 
@@ -819,6 +997,7 @@ mod tests {
             film_roll: None,
             rig: None,
             film_profile: None,
+            geometry: None,
         }
     }
 
@@ -1174,5 +1353,127 @@ mod tests {
         assert_eq!((c.width(), c.height()), (3, 2));
         assert_eq!(c.pixel(2, 1), a.pixel(2, 1));
         assert_eq!(crop(&a, 5, 4), a);
+    }
+
+    /// A grey scene with edges as a linear render (`encode` false) or
+    /// sRGB-encoded (`encode` true), sampled at `offset + (x, y)`.
+    fn scene(w: usize, h: usize, offset: [usize; 2], encode: bool) -> Image {
+        let mut img = Image::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let (sx, sy) = ((x + offset[0]) as f32, (y + offset[1]) as f32);
+                let blob = (-((sx - 50.0).powi(2) + (sy - 30.0).powi(2)) / 300.0).exp();
+                let bars = if (sx / 9.0).floor() as i32 % 3 == 0 {
+                    0.1
+                } else {
+                    0.0
+                };
+                let v = 0.1 + 0.002 * sx + 0.003 * sy + 0.5 * blob + bars;
+                let v = if encode {
+                    negg_cms::lab::srgb_oetf(v)
+                } else {
+                    v
+                };
+                img.set_pixel(x, y, [v; 3]);
+            }
+        }
+        img
+    }
+
+    fn reference(tool: Tool) -> Reference {
+        Reference {
+            tool,
+            file: "reference/x".into(),
+            version: "1".into(),
+        }
+    }
+
+    #[test]
+    fn score_reference_picks_the_comparison_by_tool_and_size() {
+        let render = scene(120, 80, [0, 0], false);
+        let same = scene(120, 80, [0, 0], true);
+        let crop = scene(96, 64, [11, 7], true);
+        // NegPy at the render's size: pixel by pixel, as before.
+        assert!(matches!(
+            score_reference(&render, &same, &reference(Tool::Negpy)),
+            Scored::Pair(..)
+        ));
+        // A NegPy crop the grid cannot match: registered.
+        match score_reference(&render, &crop, &reference(Tool::Negpy)) {
+            Scored::Registered(r) => {
+                assert!((r.offset[0] - 11.0).abs() < 1.0, "{r:?}");
+                assert!((r.offset[1] - 7.0).abs() < 1.0, "{r:?}");
+            }
+            _ => panic!("expected a registration"),
+        }
+        // Negative Lab Pro is always registered, even at the same size.
+        assert!(matches!(
+            score_reference(&render, &same, &reference(Tool::Nlp)),
+            Scored::Registered(_)
+        ));
+        // A flat reference registers nowhere: a size mismatch for NegPy,
+        // unaligned for Negative Lab Pro.
+        let mut flat = Image::new(50, 40);
+        for y in 0..40 {
+            for x in 0..50 {
+                flat.set_pixel(x, y, [0.5; 3]);
+            }
+        }
+        assert!(matches!(
+            score_reference(&render, &flat, &reference(Tool::Negpy)),
+            Scored::SizeMismatch
+        ));
+        assert!(matches!(
+            score_reference(&render, &flat, &reference(Tool::Nlp)),
+            Scored::Unaligned(None)
+        ));
+    }
+
+    #[test]
+    fn assemble_counts_nlp_references_and_their_tone() {
+        let tone = metrics::ToneStats {
+            render: metrics::ToneDescriptors {
+                l_p1: 4.0,
+                l_p50: 50.0,
+                l_p99: 96.0,
+                chroma_mean: 20.0,
+                a_mean: 1.0,
+                b_mean: 1.0,
+            },
+            reference: metrics::ToneDescriptors {
+                l_p1: 2.0,
+                l_p50: 50.0,
+                l_p99: 99.0,
+                chroma_mean: 25.0,
+                a_mean: 0.0,
+                b_mean: 0.0,
+            },
+            a_diff: 1.0,
+            b_diff: 1.0,
+        };
+        let mut f = frame("r-01", "r", 1, None);
+        f.references.push(ReferenceResult {
+            tool: Tool::Nlp,
+            de2000: DeStats {
+                mean: 3.0,
+                p95: 6.0,
+                max: 9.0,
+            },
+            alignment: None,
+            tone: Some(tone),
+        });
+        let manifest = vec![manifest_frame("r-01", "r", false)];
+        let r = assemble(vec![f], &manifest, &HashMap::new(), vec![], vec![]);
+        // The negpy reference (mean 0) and the nlp one (mean 3).
+        assert_eq!(r.summary.de2000_mean, Some(1.5));
+        assert_eq!(r.summary.de2000_mean_by_tool.nlp, Some(3.0));
+        assert_eq!(r.summary.de2000_mean_by_tool.negpy, Some(0.0));
+        let t = r.summary.tone.unwrap();
+        assert_eq!(t.all.references, 1);
+        assert_eq!(t.nlp, Some(t.all));
+        assert_eq!(t.negpy, None);
+        assert_eq!((t.all.l_p1_diff, t.all.chroma_diff), (2.0, -5.0));
+        // Gate 1 is about NegPy alone and does not move.
+        assert_eq!(r.summary.gate1.engine_vs_negpy, None);
     }
 }

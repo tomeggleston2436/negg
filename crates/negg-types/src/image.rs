@@ -218,6 +218,33 @@ impl Image {
         })
     }
 
+    /// A copy of the `width` by `height` rectangle whose top-left pixel is
+    /// `(x, y)`. Only moves pixels.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] when the rectangle is empty or extends beyond the
+    /// image.
+    pub fn crop(&self, x: usize, y: usize, width: usize, height: usize) -> Result<Image> {
+        let fits = x
+            .checked_add(width)
+            .is_some_and(|right| right <= self.width)
+            && y.checked_add(height)
+                .is_some_and(|bottom| bottom <= self.height);
+        if width == 0 || height == 0 || !fits {
+            return Err(Error::Invalid(format!(
+                "crop of {width}x{height} at ({x}, {y}) is empty or outside a {}x{} image",
+                self.width, self.height
+            )));
+        }
+        let mut data = Vec::with_capacity(width * height * CHANNELS);
+        for row in y..y + height {
+            let start = (row * self.width + x) * CHANNELS;
+            data.extend_from_slice(&self.data[start..start + width * CHANNELS]);
+        }
+        Image::from_vec(width, height, data)
+    }
+
     /// Iterates over the pixels of `t` in row-major order.
     ///
     /// # Panics
@@ -406,6 +433,31 @@ mod tests {
         assert_eq!(&img.data()[15..18], &[1.0, 2.0, 3.0]);
         img.data_mut()[0] = 9.0;
         assert_eq!(img.pixel(0, 0), [9.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn crop_copies_the_rectangle_and_rejects_bad_ones() {
+        let img = ramp(5, 4);
+        let c = img.crop(1, 2, 3, 2).unwrap();
+        assert_eq!((c.width(), c.height()), (3, 2));
+        for y in 0..2 {
+            for x in 0..3 {
+                assert_eq!(c.pixel(x, y), img.pixel(x + 1, y + 2));
+            }
+        }
+        assert_eq!(img.crop(0, 0, 5, 4).unwrap(), img);
+        for (x, y, w, h) in [
+            (0, 0, 0, 1),
+            (0, 0, 1, 0),
+            (3, 0, 3, 1),
+            (0, 3, 1, 2),
+            (usize::MAX, 0, 2, 1),
+        ] {
+            assert!(
+                matches!(img.crop(x, y, w, h), Err(Error::Invalid(_))),
+                "{x} {y} {w} {h}"
+            );
+        }
     }
 
     #[test]

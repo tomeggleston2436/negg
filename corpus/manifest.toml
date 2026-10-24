@@ -24,10 +24,14 @@
 #                 height in [0, 1], describing the card patch used for the
 #                 neutrality metric (mean |a*|, |b*| of the patch).
 #   references    array of tables, required, may be empty. Each entry is
-#                 { tool, file, version } where tool is "negpy" or
-#                 "negadoctor", file is a path relative to corpus/ such as
-#                 "reference/r001-03.negpy.tif", and version is the tool
-#                 version string the render was made with.
+#                 { tool, file, version } where tool is "negpy",
+#                 "negadoctor" or "nlp", file is a path relative to corpus/
+#                 such as "reference/r001-03.negpy.tif", and version is the
+#                 tool version string the render was made with. "nlp" is a
+#                 Negative Lab Pro export (8-bit sRGB JPEG or TIFF, e.g.
+#                 "reference/r001-03.nlp.jpg"), cropped by hand and possibly
+#                 mirrored or turned: `negg eval` registers it onto the
+#                 render and scores only the overlap (docs/ADR/0028).
 #   notes         string, required, may be empty. Free text about the frame.
 #   contributor   string, required. Who contributed the frame.
 #   licence       string, required. "Apache-2.0" or "CC0-1.0". By setting this
@@ -49,6 +53,15 @@
 #   film_profile  string, optional. Film profile (*.film.negg.toml) the roll is
 #                 rendered with, relative to corpus/ as for `rig`. Every frame
 #                 of a roll must give the same value, or none.
+#   geometry      table, optional. The frame's geometry, as Settings.geometry:
+#                 { crop = { x, y, width, height }, analysis_buffer,
+#                 rotate_degrees, flip_horizontal }, every field optional
+#                 (no crop, buffer 0.05, 0 degrees, no flip). The crop is in
+#                 fractions of the scan in its decoded orientation, for
+#                 example to remove the film holder. `negg eval` renders the
+#                 frame with it as a frame override (the roll still pools)
+#                 and scores the references against the cropped, turned
+#                 render; the grey_card rect stays on the whole scan.
 #
 schema_version = 1
 
@@ -73,5 +86,6 @@ schema_version = 1
 # film_roll = "f001"                                   # optional
 # rig = "../profiles/rig/bench.rig.negg.toml"          # optional
 # film_profile = "../profiles/film/portra400.film.negg.toml"  # optional
+# geometry = { crop = { x = 0.04, y = 0.06, width = 0.92, height = 0.88 } }  # optional
 
 # No frames yet. Add [[frame]] entries below.

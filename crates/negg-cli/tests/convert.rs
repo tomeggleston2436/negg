@@ -59,7 +59,7 @@ fn convert_writes_image_and_sidecar_and_dumps_stats() {
     assert!(sidecar.is_file(), "{so}");
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
-    assert_eq!(v["schema_version"], 2);
+    assert_eq!(v["schema_version"], 3);
     assert_eq!(v["source"], "frame.tif");
     assert_eq!(v["settings"]["colour"]["output_space"], "srgb");
     assert!(v["settings_hash"].as_str().unwrap().len() == 64);

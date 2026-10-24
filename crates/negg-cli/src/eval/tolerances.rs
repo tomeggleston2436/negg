@@ -56,6 +56,18 @@ pub struct ToleranceTable {
     /// [`DEFAULT_THREE_LIGHTS_DE`].
     #[serde(default = "default_three_lights_de")]
     pub three_lights_de: f32,
+    /// Summary `tone.all.l_abs_diff` (L*, docs/ADR/0028). Defaults to
+    /// [`DEFAULT_TONE_L_ABS_DIFF`].
+    #[serde(default = "default_tone_l_abs_diff")]
+    pub tone_l_abs_diff: f32,
+    /// Summary `tone.all.chroma_abs_diff` (C*ab). Defaults to
+    /// [`DEFAULT_TONE_CHROMA_ABS_DIFF`].
+    #[serde(default = "default_tone_chroma_abs_diff")]
+    pub tone_chroma_abs_diff: f32,
+    /// Summary `tone.all.cast_ab` (a*b* distance). Defaults to
+    /// [`DEFAULT_TONE_CAST_AB`].
+    #[serde(default = "default_tone_cast_ab")]
+    pub tone_cast_ab: f32,
 }
 
 /// Default for [`ToleranceTable::dmin_std`]: a placeholder chosen before
@@ -67,6 +79,29 @@ pub const DEFAULT_ROLL_TO_ROLL_DMIN_STD: f32 = 0.01;
 /// Default for [`ToleranceTable::three_lights_de`]: a placeholder
 /// (Controller choice, TODO(measure)).
 pub const DEFAULT_THREE_LIGHTS_DE: f32 = 0.10;
+
+/// Default for [`ToleranceTable::tone_l_abs_diff`]: a placeholder chosen
+/// before any registered reference existed (Controller choice,
+/// TODO(measure)).
+pub const DEFAULT_TONE_L_ABS_DIFF: f32 = 0.5;
+/// Default for [`ToleranceTable::tone_chroma_abs_diff`]: a placeholder
+/// (Controller choice, TODO(measure)).
+pub const DEFAULT_TONE_CHROMA_ABS_DIFF: f32 = 0.5;
+/// Default for [`ToleranceTable::tone_cast_ab`]: a placeholder (Controller
+/// choice, TODO(measure)).
+pub const DEFAULT_TONE_CAST_AB: f32 = 0.5;
+
+fn default_tone_l_abs_diff() -> f32 {
+    DEFAULT_TONE_L_ABS_DIFF
+}
+
+fn default_tone_chroma_abs_diff() -> f32 {
+    DEFAULT_TONE_CHROMA_ABS_DIFF
+}
+
+fn default_tone_cast_ab() -> f32 {
+    DEFAULT_TONE_CAST_AB
+}
 
 fn default_dmin_std() -> f32 {
     DEFAULT_DMIN_STD
@@ -252,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn repo_eval_toml_parses_with_the_eight_tolerances() {
+    fn repo_eval_toml_parses_with_the_eleven_tolerances() {
         let t = parse_str(REPO_EVAL_TOML).unwrap();
         assert_eq!(t.schema_version, 1);
         assert_eq!(
@@ -266,6 +301,9 @@ mod tests {
                 dmin_std: 0.005,
                 roll_to_roll_dmin_std: 0.01,
                 three_lights_de: 0.10,
+                tone_l_abs_diff: 0.5,
+                tone_chroma_abs_diff: 0.5,
+                tone_cast_ab: 0.5,
             }
         );
         assert!(t.case.is_empty());
@@ -283,6 +321,12 @@ mod tests {
             DEFAULT_ROLL_TO_ROLL_DMIN_STD
         );
         assert_eq!(t.tolerance.three_lights_de, DEFAULT_THREE_LIGHTS_DE);
+        assert_eq!(t.tolerance.tone_l_abs_diff, DEFAULT_TONE_L_ABS_DIFF);
+        assert_eq!(
+            t.tolerance.tone_chroma_abs_diff,
+            DEFAULT_TONE_CHROMA_ABS_DIFF
+        );
+        assert_eq!(t.tolerance.tone_cast_ab, DEFAULT_TONE_CAST_AB);
     }
 
     #[test]

@@ -16,10 +16,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::geometry::Geometry;
 use crate::hash::{ContentHash, hash_value};
 
 /// Version of the settings schema written into sidecars.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 /// A per-channel value that is either estimated from the frame (or roll) or
 /// fixed by the user.
@@ -218,6 +219,10 @@ pub struct Settings {
     pub colour: ColourSettings,
     /// Rig and film profiles to apply (phase 2). Default none.
     pub profiles: ProfileRefs,
+    /// Crop, analysis buffer, rotation and flip (phase 3, Rulings 70 and
+    /// 90). The crop restricts the step 3 to 6 estimators and frames the
+    /// export (step 8). Default: no crop, buffer 0.05, no rotation or flip.
+    pub geometry: Geometry,
 }
 
 impl Default for Settings {
@@ -228,6 +233,7 @@ impl Default for Settings {
             print: PrintSettings::default(),
             colour: ColourSettings::default(),
             profiles: ProfileRefs::default(),
+            geometry: Geometry::default(),
         }
     }
 }
@@ -280,7 +286,8 @@ impl Settings {
     /// is non-finite (the error names the field), the grade is outside 50 to
     /// 180, `paper_dmax` is not greater than `paper_dmin`, the shoulder or
     /// toe is not positive, any fixed channel value is non-finite, or a fixed
-    /// cast has a slope outside 0.5 to 2 or a non-finite offset.
+    /// cast has a slope outside 0.5 to 2 or a non-finite offset, or the
+    /// geometry fails [`Geometry::validate`].
     pub fn validate(&self) -> Result<()> {
         let p = &self.print;
         for (name, value) in print_floats(p) {
@@ -324,7 +331,7 @@ impl Settings {
                 })?;
             }
         }
-        Ok(())
+        self.geometry.validate()
     }
 }
 
@@ -479,7 +486,7 @@ mod tests {
         // value here, and bump SETTINGS_SCHEMA_VERSION if sidecars change.
         assert_eq!(
             Settings::default().content_hash().to_hex(),
-            "0aef82b17d60343045c4b0b09c3a61a527e7fdb902b1f9b57c966def5efb5202"
+            "fc953800a6c0a6896d5a9767ea22b0be64f6598346cacd0aa52a43e69de1d35e"
         );
     }
 
@@ -558,7 +565,7 @@ mod tests {
     #[test]
     fn phase2_defaults_are_identity() {
         let s = Settings::default();
-        assert_eq!(s.schema_version, 2);
+        assert_eq!(s.schema_version, 3);
         assert_eq!(s.colour.cast, CastEstimate::Auto);
         assert_eq!(s.profiles, ProfileRefs::default());
         assert!(s.profiles.rig.is_none() && s.profiles.film.is_none());
@@ -613,6 +620,46 @@ mod tests {
             serde_json::from_str(r#"{"schema_version": 1, "shared": {"schema_version": 1}}"#)
                 .unwrap();
         assert_eq!(r.shared.colour.cast, CastEstimate::Auto);
+    }
+
+    #[test]
+    fn v2_settings_json_loads_with_identity_geometry() {
+        let v2 = r#"{"schema_version": 2, "print": {"grade": 90.0},
+                     "colour": {"cast": {"mode": "auto"}}, "profiles": {}}"#;
+        let s: Settings = serde_json::from_str(v2).unwrap();
+        assert_eq!(s.geometry, Geometry::default());
+        assert!(s.geometry.is_identity());
+        assert_eq!(s.print.grade, 90.0);
+        s.validate().unwrap();
+    }
+
+    #[test]
+    fn validate_checks_the_geometry() {
+        let mut s = Settings::default();
+        s.geometry.rotate_degrees = 45;
+        assert!(matches!(s.validate(), Err(Error::Invalid(_))));
+        let mut s = Settings::default();
+        s.geometry.crop = Some(crate::geometry::CropRect {
+            x: 0.5,
+            y: 0.5,
+            width: 0.6,
+            height: 0.1,
+        });
+        assert!(matches!(s.validate(), Err(Error::Invalid(_))));
+        let mut s = Settings::default();
+        s.geometry.analysis_buffer = 0.3;
+        assert!(matches!(s.validate(), Err(Error::Invalid(_))));
+        let mut r = RollSettings::default();
+        r.shared.geometry.rotate_degrees = 1;
+        assert!(r.validate().is_err());
+    }
+
+    #[test]
+    fn geometry_changes_the_hash() {
+        let a = Settings::default();
+        let mut b = Settings::default();
+        b.geometry.flip_horizontal = true;
+        assert_ne!(a.content_hash(), b.content_hash());
     }
 
     #[test]

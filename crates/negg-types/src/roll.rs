@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::estimates::{CastCorrection, DminSource};
+use crate::geometry::Geometry;
 use crate::settings::{CastEstimate, ChannelEstimate, OutputSpace, RollSettings, Settings};
 
 /// Per-frame overrides of [`crate::settings::FilmSettings`]. `None` inherits.
@@ -61,7 +62,9 @@ pub struct ColourOverrides {
 
 /// Everything a single frame overrides relative to its roll (R-lock). Every
 /// field is optional: `None` means inherit from [`RollSettings::shared`].
-/// Profiles are never overridden per frame.
+/// Profiles are never overridden per frame. The geometry is overridden as a
+/// whole (Ruling 71): a frame with its own crop gives its whole
+/// [`Geometry`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FrameOverrides {
@@ -71,6 +74,10 @@ pub struct FrameOverrides {
     pub print: PrintOverrides,
     /// Colour overrides (steps 6 and 7).
     pub colour: ColourOverrides,
+    /// Replaces the roll's whole `geometry` when `Some` (Rulings 70 and
+    /// 71). Omitted from the file when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<Geometry>,
 }
 
 impl FrameOverrides {
@@ -81,8 +88,9 @@ impl FrameOverrides {
 }
 
 /// The settings a frame is rendered with: the roll's shared settings with
-/// each `Some` override of the frame replacing its field (R-lock). The
-/// `profiles` always come from `roll.shared`.
+/// each `Some` override of the frame replacing its field (R-lock), the
+/// geometry as a whole (Ruling 71). The `profiles` always come from
+/// `roll.shared`.
 pub fn resolve(roll: &RollSettings, overrides: &FrameOverrides) -> Settings {
     let mut s = roll.shared.clone();
     let f = &overrides.film;
@@ -129,6 +137,9 @@ pub fn resolve(roll: &RollSettings, overrides: &FrameOverrides) -> Settings {
     }
     if let Some(v) = c.output_space {
         s.colour.output_space = v;
+    }
+    if let Some(g) = overrides.geometry {
+        s.geometry = g;
     }
     s
 }
@@ -216,6 +227,50 @@ mod tests {
 
     fn fixed(v: f32) -> ChannelEstimate {
         ChannelEstimate::Fixed { value: [v; 3] }
+    }
+
+    fn crop_geometry() -> Geometry {
+        Geometry {
+            crop: Some(crate::geometry::CropRect {
+                x: 0.1,
+                y: 0.1,
+                width: 0.8,
+                height: 0.7,
+            }),
+            analysis_buffer: 0.0,
+            rotate_degrees: 90,
+            flip_horizontal: true,
+        }
+    }
+
+    #[test]
+    fn a_geometry_override_replaces_the_whole_geometry() {
+        let mut r = roll();
+        r.shared.geometry.crop = Some(crate::geometry::CropRect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.5,
+            height: 0.5,
+        });
+        r.shared.geometry.rotate_degrees = 180;
+        // Without an override the frame takes the roll's geometry.
+        assert_eq!(
+            resolve(&r, &FrameOverrides::default()).geometry,
+            r.shared.geometry
+        );
+        let o = FrameOverrides {
+            geometry: Some(crop_geometry()),
+            ..Default::default()
+        };
+        let s = resolve(&r, &o);
+        assert_eq!(s.geometry, crop_geometry());
+        assert_eq!(s.print, r.shared.print);
+        // The override round-trips and an empty one is omitted.
+        let back: FrameOverrides =
+            serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
+        assert_eq!(back, o);
+        let empty = serde_json::to_value(FrameOverrides::default()).unwrap();
+        assert!(empty.get("geometry").is_none(), "{empty}");
     }
 
     fn roll() -> RollSettings {
@@ -406,6 +461,13 @@ mod tests {
                     ..Default::default()
                 },
                 Box::new(|s| s.colour.output_space = OutputSpace::ProPhoto),
+            ),
+            (
+                FrameOverrides {
+                    geometry: Some(crop_geometry()),
+                    ..Default::default()
+                },
+                Box::new(|s| s.geometry = crop_geometry()),
             ),
         ];
         for (overrides, edit) in cases {

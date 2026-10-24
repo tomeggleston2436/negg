@@ -11,9 +11,17 @@
 //! than failing the run. The report counts those in [`CorpusSummary`] and
 //! lists each one in [`EvalReport::skipped`] with a relative path, so the
 //! file stays diffable across machines that hold different subsets of the
-//! corpus. A frame whose file is present but does not decode, and a
-//! reference render whose size cannot be matched to the render, are
-//! skipped and listed the same way with their own reasons.
+//! corpus. A frame whose file is present but does not decode, a
+//! reference render whose size cannot be matched to the render, and a
+//! reference that cannot be registered onto the render (`unaligned`,
+//! docs/ADR/0028) are skipped and listed the same way with their own
+//! reasons.
+//!
+//! The fields added for registered references (docs/ADR/0028) are all
+//! optional and left out of the JSON when empty, so a report of a corpus
+//! without such references is byte-identical to one written before they
+//! existed, and older reports still load as baselines: the schema version
+//! stays 2.
 
 use std::fmt::Write as _;
 
@@ -21,7 +29,8 @@ use negg_types::{Estimates, PoolRole};
 use serde::{Deserialize, Serialize};
 
 use crate::corpus::Tool;
-use crate::eval::metrics::{DeStats, Neutrality};
+use crate::eval::align::Registration;
+use crate::eval::metrics::{DeStats, Neutrality, ToneStats};
 
 /// Schema version written to `eval-results.json`.
 ///
@@ -97,9 +106,10 @@ pub struct Skipped {
     /// `file not found: <path>` for a skipped frame,
     /// `reference not found: <path>` for a skipped reference render (paths
     /// relative to the corpus directory as written in the manifest),
-    /// `decode failed: <message>` for a frame that does not decode, or
+    /// `decode failed: <message>` for a frame that does not decode,
     /// `size mismatch: <path> ...` for a reference whose size cannot be
-    /// matched to the render.
+    /// matched to the render, or `unaligned: <path> (...)` for a reference
+    /// that could not be registered onto the render.
     pub reason: String,
 }
 
@@ -135,6 +145,23 @@ impl Skipped {
         Skipped {
             id: id.to_owned(),
             reason: format!("{}{message}", Skipped::DECODE_PREFIX),
+        }
+    }
+
+    /// The reason prefix for a reference render that could not be
+    /// registered onto the render.
+    pub const UNALIGNED_PREFIX: &'static str = "unaligned: ";
+
+    /// A reference render that could not be registered onto the render:
+    /// its best correlation, when it has one, is below `threshold`.
+    pub fn unaligned(id: &str, file: &str, correlation: Option<f32>, threshold: f32) -> Skipped {
+        let detail = match correlation {
+            Some(c) => format!("best correlation {c:.3} is below {threshold:.2}"),
+            None => "no placement covers enough of the render".to_owned(),
+        };
+        Skipped {
+            id: id.to_owned(),
+            reason: format!("{}{file} ({detail})", Skipped::UNALIGNED_PREFIX),
         }
     }
 
@@ -211,6 +238,71 @@ pub struct FrameResult {
     /// pools, from pass 1 of roll mode (ADR 0017).
     #[serde(default)]
     pub pool: Option<FramePool>,
+    /// The references that could not be registered onto the render
+    /// (docs/ADR/0028), with the best placement found. They are listed in
+    /// [`EvalReport::skipped`] too and count towards no mean. Left out of
+    /// the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unaligned: Vec<UnalignedReference>,
+}
+
+/// A reference that could not be registered onto the render.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnalignedReference {
+    /// The tool that made the reference.
+    pub tool: Tool,
+    /// The reference file, relative to the corpus directory.
+    pub file: String,
+    /// The best placement found, when any candidate covered enough of the
+    /// render.
+    pub alignment: Option<Alignment>,
+}
+
+/// Where a reference was placed on the render (docs/ADR/0028).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Alignment {
+    /// Clockwise quarter turn applied to the reference, 0, 90, 180 or 270,
+    /// before `flip_horizontal`, as in `Settings.geometry`.
+    pub rotate_degrees: u16,
+    /// Whether the turned reference is mirrored left to right.
+    pub flip_horizontal: bool,
+    /// Render pixels per reference pixel.
+    pub scale: f32,
+    /// Small extra clockwise rotation of the oriented reference about its
+    /// centre, in degrees (hand straightening; at most
+    /// [`crate::eval::align::MAX_ROTATION_DEGREES`]). Absent in older
+    /// reports, read as 0.
+    #[serde(default)]
+    pub angle_degrees: f32,
+    /// Render pixel position `[x, y]` of the centre of the oriented
+    /// reference's top-left pixel.
+    pub offset: [f32; 2],
+    /// Fraction of the render's pixels inside the overlap, the pixels
+    /// scored.
+    pub overlap: f32,
+    /// Normalised cross-correlation of the gradient magnitude of L* over
+    /// the overlap: the verdict, aligned at
+    /// [`crate::eval::align::MIN_CORRELATION`] or above.
+    pub correlation: f32,
+    /// Normalised cross-correlation of L* over the overlap: what the
+    /// search maximised.
+    pub luminance_correlation: f32,
+}
+
+impl Alignment {
+    /// The record of `registration` on a `w` by `h` render.
+    pub fn new(registration: &Registration, w: usize, h: usize) -> Alignment {
+        Alignment {
+            rotate_degrees: registration.orientation.rotate_degrees,
+            flip_horizontal: registration.orientation.flip_horizontal,
+            scale: registration.scale as f32,
+            angle_degrees: registration.angle_degrees as f32,
+            offset: registration.offset.map(|v| v as f32),
+            overlap: registration.overlap_fraction(w, h) as f32,
+            correlation: registration.correlation as f32,
+            luminance_correlation: registration.luminance_correlation as f32,
+        }
+    }
 }
 
 /// One frame's record in its roll's pools (R-pool, R-cast-pool): what it
@@ -238,6 +330,16 @@ pub struct ReferenceResult {
     pub tool: Tool,
     /// The colour-difference statistics.
     pub de2000: DeStats,
+    /// Where the reference was placed on the render, when it was
+    /// registered (docs/ADR/0028); the statistics are then over the
+    /// overlap only. Left out of the JSON for a reference compared pixel
+    /// by pixel or on the shared analysis grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<Alignment>,
+    /// Tone and colour descriptors of the render and the registered
+    /// reference over the overlap. Present exactly when `alignment` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<ToneStats>,
 }
 
 /// Per-roll consistency of the estimates. The statistics are taken over
@@ -352,6 +454,85 @@ pub struct Summary {
     /// The plan's Gate 2 criteria (Ruling 53).
     #[serde(default)]
     pub gate2: Gate2,
+    /// Means of the tone and colour descriptors over the registered
+    /// references (docs/ADR/0028); left out of the JSON when there are
+    /// none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<ToneSummary>,
+}
+
+/// Means over registered references of how the render's tone and colour
+/// differ from the reference's (render minus reference), signed to show
+/// the direction and absolute to gate on.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ToneMeans {
+    /// Number of registered references averaged.
+    pub references: usize,
+    /// Mean difference of L* at the 1st percentile.
+    pub l_p1_diff: f32,
+    /// Mean difference of L* at the 50th percentile.
+    pub l_p50_diff: f32,
+    /// Mean difference of L* at the 99th percentile.
+    pub l_p99_diff: f32,
+    /// Mean difference of the mean chroma C*ab.
+    pub chroma_diff: f32,
+    /// Mean of [`ToneStats::a_diff`].
+    pub a_diff: f32,
+    /// Mean of [`ToneStats::b_diff`].
+    pub b_diff: f32,
+    /// Mean over references of the mean absolute difference of the three
+    /// L* percentiles: how far the tone curve is off. Gated.
+    pub l_abs_diff: f32,
+    /// Mean absolute difference of the mean chroma. Gated.
+    pub chroma_abs_diff: f32,
+    /// Mean of `hypot(a_diff, b_diff)`: the size of the cast. Gated.
+    pub cast_ab: f32,
+}
+
+impl ToneMeans {
+    /// The means over `tones`, or `None` when there are none.
+    pub fn over(tones: &[ToneStats]) -> Option<ToneMeans> {
+        if tones.is_empty() {
+            return None;
+        }
+        let n = tones.len() as f64;
+        let mean = |f: &dyn Fn(&ToneStats) -> f32| {
+            (tones.iter().map(|t| f64::from(f(t))).sum::<f64>() / n) as f32
+        };
+        Some(ToneMeans {
+            references: tones.len(),
+            l_p1_diff: mean(&|t| t.render.l_p1 - t.reference.l_p1),
+            l_p50_diff: mean(&|t| t.render.l_p50 - t.reference.l_p50),
+            l_p99_diff: mean(&|t| t.render.l_p99 - t.reference.l_p99),
+            chroma_diff: mean(&|t| t.render.chroma_mean - t.reference.chroma_mean),
+            a_diff: mean(&|t| t.a_diff),
+            b_diff: mean(&|t| t.b_diff),
+            l_abs_diff: mean(&|t| {
+                ((t.render.l_p1 - t.reference.l_p1).abs()
+                    + (t.render.l_p50 - t.reference.l_p50).abs()
+                    + (t.render.l_p99 - t.reference.l_p99).abs())
+                    / 3.0
+            }),
+            chroma_abs_diff: mean(&|t| (t.render.chroma_mean - t.reference.chroma_mean).abs()),
+            cast_ab: mean(&|t| t.a_diff.hypot(t.b_diff)),
+        })
+    }
+}
+
+/// [`ToneMeans`] over every registered reference and per tool.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ToneSummary {
+    /// Over every registered reference.
+    pub all: ToneMeans,
+    /// Over the registered NegPy references.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub negpy: Option<ToneMeans>,
+    /// Over the registered negadoctor references.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub negadoctor: Option<ToneMeans>,
+    /// Over the Negative Lab Pro references.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nlp: Option<ToneMeans>,
 }
 
 /// A mean per reference tool; `None` for a tool with no scored reference.
@@ -361,6 +542,10 @@ pub struct ByTool {
     pub negpy: Option<f32>,
     /// Over the negadoctor references.
     pub negadoctor: Option<f32>,
+    /// Over the Negative Lab Pro references (docs/ADR/0028). Left out of
+    /// the JSON when there are none, so older reports are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nlp: Option<f32>,
 }
 
 /// The neutrality bound of Gate 1: "grey-card neutrality error is under
@@ -468,9 +653,11 @@ pub(super) fn opt(v: Option<f32>) -> String {
 /// Renders the stdout table: one row per frame-reference pair, then one
 /// row per roll (standard deviations and variances as the largest
 /// channel), then, when present, one row per stock for the roll-to-roll
-/// metric and one row per film roll and light for the three-lights test,
-/// then the summary line, the Gate 1 line (with the per-tool means), the
-/// Gate 2 line, then the skipped line (see [`skipped_line`]) followed by one
+/// metric, one row per film roll and light for the three-lights test and
+/// one row per registered reference (placement and tone, render /
+/// reference), then the summary line, the Gate 1 line (with the per-tool
+/// means), the Gate 2 line, the tone line when any reference was
+/// registered, then the skipped line (see [`skipped_line`]) followed by one
 /// indented `<id>: <reason>` line per skipped entry. When the manifest lists no frames at all the tables are
 /// replaced by the single line `No frames in corpus`; when it lists frames
 /// but every one was skipped the table headers are printed with no rows.
@@ -492,6 +679,14 @@ pub fn render_table(report: &EvalReport) -> String {
             write_three_lights_table(&mut out, report);
             out.push('\n');
         }
+        if report
+            .frames
+            .iter()
+            .any(|f| f.references.iter().any(|r| r.alignment.is_some()))
+        {
+            write_alignment_table(&mut out, report);
+            out.push('\n');
+        }
     }
     let s = &report.summary;
     let c = &report.corpus;
@@ -507,10 +702,14 @@ pub fn render_table(report: &EvalReport) -> String {
         c.with_grey_card
     );
     let g = &s.gate1;
+    let nlp = s
+        .de2000_mean_by_tool
+        .nlp
+        .map_or_else(String::new, |v| format!(", nlp {v:.4}"));
     let _ = writeln!(
         out,
         "gate 1: engine vs negpy {}  negadoctor vs negpy {}  neutrality dE mean {}  pass {}  \
-         (dE mean by tool: negpy {}, negadoctor {})",
+         (dE mean by tool: negpy {}, negadoctor {}{nlp})",
         opt(g.engine_vs_negpy),
         opt(g.negadoctor_vs_negpy),
         opt(g.neutrality_de_mean),
@@ -526,6 +725,24 @@ pub fn render_table(report: &EvalReport) -> String {
         opt(g.three_lights_max_de),
         g.pass.map_or("-", |p| if p { "yes" } else { "no" })
     );
+    if let Some(t) = &s.tone {
+        let m = &t.all;
+        let _ = writeln!(
+            out,
+            "tone (render minus reference, {} registered): L* p1 {:+.2}  p50 {:+.2}  p99 {:+.2}  \
+             C* {:+.2}  a* {:+.2}  b* {:+.2}  (|L*| {:.2}, |C*| {:.2}, cast {:.2})",
+            m.references,
+            m.l_p1_diff,
+            m.l_p50_diff,
+            m.l_p99_diff,
+            m.chroma_diff,
+            m.a_diff,
+            m.b_diff,
+            m.l_abs_diff,
+            m.chroma_abs_diff,
+            m.cast_ab
+        );
+    }
     out.push_str(&skipped_line(report));
     out.push('\n');
     for skipped in &report.skipped {
@@ -620,6 +837,48 @@ fn write_frame_table(out: &mut String, report: &EvalReport) {
         out,
         &rows,
         &[false, false, false, false, true, true, true, true, true],
+    );
+}
+
+/// One row per registered reference: where it was placed and how the
+/// render's tone and colour differ from it (render / reference).
+fn write_alignment_table(out: &mut String, report: &EvalReport) {
+    let mut rows = vec![header(&[
+        "id", "tool", "turn", "flip", "scale", "angle", "offset", "overlap", "corr", "L* p1",
+        "L* p50", "L* p99", "C*", "da*", "db*",
+    ])];
+    let pair = |a: f32, b: f32| format!("{a:.1}/{b:.1}");
+    for frame in &report.frames {
+        for reference in &frame.references {
+            let (Some(a), Some(t)) = (reference.alignment, reference.tone) else {
+                continue;
+            };
+            rows.push(vec![
+                frame.id.clone(),
+                reference.tool.name().to_owned(),
+                a.rotate_degrees.to_string(),
+                if a.flip_horizontal { "yes" } else { "no" }.to_owned(),
+                format!("{:.4}", a.scale),
+                format!("{:+.2}", a.angle_degrees),
+                format!("{:.1},{:.1}", a.offset[0], a.offset[1]),
+                format!("{:.3}", a.overlap),
+                format!("{:.3}", a.correlation),
+                pair(t.render.l_p1, t.reference.l_p1),
+                pair(t.render.l_p50, t.reference.l_p50),
+                pair(t.render.l_p99, t.reference.l_p99),
+                pair(t.render.chroma_mean, t.reference.chroma_mean),
+                format!("{:+.2}", t.a_diff),
+                format!("{:+.2}", t.b_diff),
+            ]);
+        }
+    }
+    write_aligned(
+        out,
+        &rows,
+        &[
+            false, false, true, false, true, true, true, true, true, true, true, true, true, true,
+            true,
+        ],
     );
 }
 
@@ -734,6 +993,7 @@ mod tests {
                 de2000_mean_by_tool: ByTool::default(),
                 gate1: Gate1::default(),
                 gate2: Gate2::default(),
+                tone: None,
             },
             skipped: vec![],
         }
@@ -775,6 +1035,8 @@ mod tests {
                         p95: 0.0,
                         max: 0.0,
                     },
+                    alignment: None,
+                    tone: None,
                 }],
                 neutrality: Some(Neutrality {
                     a_mean_abs: 0.5,
@@ -797,6 +1059,7 @@ mod tests {
                 film_roll: None,
                 rig: None,
                 pool: None,
+                unaligned: vec![],
             }],
             rolls: vec![RollResult {
                 roll: "r001".into(),
@@ -819,9 +1082,11 @@ mod tests {
                 de2000_mean_by_tool: ByTool {
                     negpy: Some(0.0),
                     negadoctor: None,
+                    nlp: None,
                 },
                 gate1: Gate1::new(None, None, Some(0.3)),
                 gate2: Gate2::default(),
+                tone: None,
             },
             skipped: vec![],
         }
@@ -1137,5 +1402,183 @@ mod tests {
         assert_eq!(back.three_lights, r.three_lights);
         assert_eq!(back.summary.gate2, r.summary.gate2);
         assert_eq!(back.rolls[0].rejected, vec!["r001-04".to_owned()]);
+    }
+
+    fn tone(l: [f32; 3], chroma: f32, a: f32, b: f32) -> crate::eval::metrics::ToneDescriptors {
+        crate::eval::metrics::ToneDescriptors {
+            l_p1: l[0],
+            l_p50: l[1],
+            l_p99: l[2],
+            chroma_mean: chroma,
+            a_mean: a,
+            b_mean: b,
+        }
+    }
+
+    fn registered_report() -> EvalReport {
+        let mut r = one_frame_report();
+        let stats = ToneStats {
+            render: tone([5.0, 50.0, 95.0], 20.0, 1.0, 2.0),
+            reference: tone([3.0, 48.0, 98.0], 24.0, 0.0, 6.0),
+            a_diff: 1.0,
+            b_diff: -4.0,
+        };
+        r.frames[0].references.push(ReferenceResult {
+            tool: Tool::Nlp,
+            de2000: DeStats {
+                mean: 2.0,
+                p95: 4.0,
+                max: 9.0,
+            },
+            alignment: Some(Alignment {
+                rotate_degrees: 270,
+                flip_horizontal: true,
+                scale: 1.25,
+                angle_degrees: -0.75,
+                offset: [10.0, 12.5],
+                overlap: 0.64,
+                correlation: 0.93,
+                luminance_correlation: 0.99,
+            }),
+            tone: Some(stats),
+        });
+        r.frames[0].unaligned.push(UnalignedReference {
+            tool: Tool::Nlp,
+            file: "reference/r001-03.nlp.jpg".into(),
+            alignment: None,
+        });
+        r.summary.de2000_mean_by_tool.nlp = Some(2.0);
+        let means = ToneMeans::over(&[stats]).unwrap();
+        r.summary.tone = Some(ToneSummary {
+            all: means,
+            negpy: None,
+            negadoctor: None,
+            nlp: Some(means),
+        });
+        r
+    }
+
+    #[test]
+    fn the_angle_is_recorded_and_older_reports_read_it_as_zero() {
+        let reg = Registration {
+            orientation: crate::eval::align::ORIENTATIONS[0],
+            scale: 1.0,
+            offset: [1.0, 2.0],
+            angle_degrees: 1.25,
+            correlation: 0.9,
+            luminance_correlation: 0.95,
+            reference_size: (10, 10),
+        };
+        let a = Alignment::new(&reg, 20, 20);
+        assert_eq!(a.angle_degrees, 1.25);
+        let mut json = serde_json::to_value(a).unwrap();
+        assert_eq!(json["angle_degrees"], 1.25);
+        json.as_object_mut().unwrap().remove("angle_degrees");
+        let old: Alignment = serde_json::from_value(json).unwrap();
+        assert_eq!(old.angle_degrees, 0.0);
+    }
+
+    #[test]
+    fn tone_means_are_signed_and_absolute() {
+        let a = ToneStats {
+            render: tone([5.0, 50.0, 95.0], 20.0, 1.0, 2.0),
+            reference: tone([3.0, 48.0, 98.0], 24.0, 0.0, 6.0),
+            a_diff: 3.0,
+            b_diff: -4.0,
+        };
+        let b = ToneStats {
+            render: tone([3.0, 48.0, 98.0], 26.0, 0.0, 0.0),
+            reference: tone([5.0, 50.0, 95.0], 24.0, 0.0, 0.0),
+            a_diff: 0.0,
+            b_diff: 0.0,
+        };
+        assert_eq!(ToneMeans::over(&[]), None);
+        let m = ToneMeans::over(&[a, b]).unwrap();
+        assert_eq!(m.references, 2);
+        // Opposite signed differences cancel; the absolute ones do not.
+        assert_eq!((m.l_p1_diff, m.l_p50_diff, m.l_p99_diff), (0.0, 0.0, 0.0));
+        assert!((m.l_abs_diff - 7.0 / 3.0).abs() < 1e-6, "{m:?}");
+        assert_eq!((m.chroma_diff, m.chroma_abs_diff), (-1.0, 3.0));
+        assert_eq!((m.a_diff, m.b_diff), (1.5, -2.0));
+        // hypot(3, -4) = 5 and 0.
+        assert!((m.cast_ab - 2.5).abs() < 1e-6, "{m:?}");
+    }
+
+    #[test]
+    fn registered_references_round_trip_and_print() {
+        let r = registered_report();
+        let text = to_json(&r).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let reference = &v["frames"][0]["references"][1];
+        assert_eq!(reference["tool"], "nlp");
+        assert_eq!(reference["alignment"]["rotate_degrees"], 270);
+        assert_eq!(reference["tone"]["b_diff"], -4.0);
+        // The first reference was compared pixel by pixel: no new keys.
+        let first = v["frames"][0]["references"][0].as_object().unwrap();
+        assert!(!first.contains_key("alignment") && !first.contains_key("tone"));
+        assert_eq!(
+            v["frames"][0]["unaligned"][0]["file"],
+            "reference/r001-03.nlp.jpg"
+        );
+        assert_eq!(v["summary"]["tone"]["nlp"]["references"], 1);
+        assert!(v["summary"]["tone"].get("negpy").is_none());
+        let back: EvalReport = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            back.frames[0].references[1].alignment,
+            r.frames[0].references[1].alignment
+        );
+        assert_eq!(back.summary, r.summary);
+
+        let t = render_table(&r);
+        assert!(
+            t.contains("(dE mean by tool: negpy 0.0000, negadoctor -, nlp 2.0000)"),
+            "{t}"
+        );
+        assert!(
+            t.lines().any(|l| l.starts_with("r001-03")
+                && l.contains("nlp")
+                && l.contains("270")
+                && l.contains("5.0/3.0")
+                && l.ends_with("-4.00")),
+            "{t}"
+        );
+        assert!(
+            t.contains(
+                "tone (render minus reference, 1 registered): L* p1 +2.00  p50 +2.00  p99 -3.00  \
+                 C* -4.00  a* +1.00  b* -4.00  (|L*| 2.33, |C*| 4.00, cast 4.12)"
+            ),
+            "{t}"
+        );
+        assert!(!t.contains('\u{2014}') && !t.contains('\u{2013}'));
+    }
+
+    #[test]
+    fn reports_without_the_registration_fields_load_and_write_none() {
+        // one_frame_report has none of them: its JSON names none, and a
+        // report written before they existed loads with them empty.
+        let text = to_json(&one_frame_report()).unwrap();
+        for key in ["alignment", "tone", "unaligned", "\"nlp\""] {
+            assert!(!text.contains(key), "{key}");
+        }
+        let back: EvalReport = serde_json::from_str(&text).unwrap();
+        assert!(back.frames[0].unaligned.is_empty());
+        assert!(back.frames[0].references[0].tone.is_none());
+        assert_eq!(back.summary.tone, None);
+        assert_eq!(back.summary.de2000_mean_by_tool.nlp, None);
+    }
+
+    #[test]
+    fn unaligned_reason_names_the_file_and_correlation() {
+        let u = Skipped::unaligned("r001-01", "reference/x.nlp.jpg", Some(0.1234), 0.5);
+        assert_eq!(
+            u.reason,
+            "unaligned: reference/x.nlp.jpg (best correlation 0.123 is below 0.50)"
+        );
+        assert!(!u.is_reference() && !u.is_frame());
+        let none = Skipped::unaligned("r001-01", "reference/x.nlp.jpg", None, 0.5);
+        assert!(
+            none.reason
+                .ends_with("(no placement covers enough of the render)")
+        );
     }
 }

@@ -27,7 +27,7 @@ use std::fmt::Write as _;
 
 use crate::corpus::Tool;
 use crate::eval::metrics::DeStats;
-use crate::eval::report::{self, EvalReport, FrameResult, max_channel};
+use crate::eval::report::{self, EvalReport, FrameResult, ToneMeans, max_channel};
 use crate::eval::tolerances::{CaseMetric, Tolerances, TrackedCase};
 
 /// The verdict for one row of the comparison.
@@ -90,7 +90,8 @@ impl Row {
 /// The whole comparison.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Comparison {
-    /// Summary metrics, then per-roll metrics, then per-stock roll-to-roll
+    /// Summary metrics (with the tone means when either report has them),
+    /// then per-roll metrics, then per-stock roll-to-roll
     /// and per-film-roll three-lights metrics, then tracked cases.
     pub rows: Vec<Row>,
     /// `true` when any row is a [`Status::Regression`] or a
@@ -122,6 +123,31 @@ pub fn compare(current: &EvalReport, baseline: &EvalReport, tol: &Tolerances) ->
             t.neutrality_mean,
         ),
     ];
+    // The tone means of registered references (docs/ADR/0028), only when
+    // either report has them, so a corpus without such references
+    // compares exactly as before.
+    if current.summary.tone.is_some() || baseline.summary.tone.is_some() {
+        let base = baseline.summary.tone.map(|t| t.all);
+        let cur = current.summary.tone.map(|t| t.all);
+        type Pick = fn(&ToneMeans) -> f32;
+        let fields: [(&str, Pick, f32); 3] = [
+            ("tone l_abs_diff", |m| m.l_abs_diff, t.tone_l_abs_diff),
+            (
+                "tone chroma_abs_diff",
+                |m| m.chroma_abs_diff,
+                t.tone_chroma_abs_diff,
+            ),
+            ("tone cast_ab", |m| m.cast_ab, t.tone_cast_ab),
+        ];
+        for (name, pick, tolerance) in fields {
+            rows.push(metric_row(
+                name,
+                base.as_ref().map(pick),
+                cur.as_ref().map(pick),
+                tolerance,
+            ));
+        }
+    }
     for roll in &current.rolls {
         let base = baseline.rolls.iter().find(|r| r.roll == roll.roll);
         rows.push(metric_row(
@@ -384,6 +410,9 @@ mod tests {
                 dmin_std: 0.005,
                 roll_to_roll_dmin_std: 0.01,
                 three_lights_de: 0.1,
+                tone_l_abs_diff: 0.5,
+                tone_chroma_abs_diff: 0.5,
+                tone_cast_ab: 0.5,
             },
             case: vec![],
         }
@@ -413,6 +442,8 @@ mod tests {
                     p95: de_mean * 2.0,
                     max: de_mean * 3.0,
                 },
+                alignment: None,
+                tone: None,
             }],
             neutrality: neutral.map(|v| Neutrality {
                 a_mean_abs: v,
@@ -424,6 +455,7 @@ mod tests {
             film_roll: None,
             rig: None,
             pool: None,
+            unaligned: vec![],
         }
     }
 
@@ -779,6 +811,8 @@ mod tests {
                 p95: 2.0,
                 max: 2.0,
             },
+            alignment: None,
+            tone: None,
         });
         // The frame was evaluated but its negadoctor render was absent.
         let mut current = one_frame(1.0, None);
@@ -873,5 +907,44 @@ mod tests {
                 .ends_with("regression gate: FAILED (1 regressed, 1 missing tracked case)"),
             "{t}"
         );
+    }
+
+    #[test]
+    fn tone_rows_appear_only_with_registered_references() {
+        let tol = tolerances();
+        let plain = compare(&summary_only(Some(1.0)), &summary_only(Some(1.0)), &tol);
+        assert!(!plain.rows.iter().any(|r| r.metric.starts_with("tone")));
+
+        let means = |cast: f32| report::ToneSummary {
+            all: ToneMeans {
+                references: 1,
+                l_p1_diff: 0.0,
+                l_p50_diff: 0.0,
+                l_p99_diff: 0.0,
+                chroma_diff: 0.0,
+                a_diff: 0.0,
+                b_diff: 0.0,
+                l_abs_diff: 1.0,
+                chroma_abs_diff: 2.0,
+                cast_ab: cast,
+            },
+            negpy: None,
+            negadoctor: None,
+            nlp: None,
+        };
+        let mut current = summary_only(Some(1.0));
+        let mut baseline = summary_only(Some(1.0));
+        current.summary.tone = Some(means(3.0));
+        baseline.summary.tone = Some(means(2.0));
+        let c = compare(&current, &baseline, &tol);
+        // 3.0 > 2.0 + 0.5.
+        assert_eq!(row(&c, "tone cast_ab").status, Status::Regression);
+        assert_eq!(row(&c, "tone l_abs_diff").status, Status::Ok);
+        assert_eq!(row(&c, "tone chroma_abs_diff").status, Status::Ok);
+        assert!(c.regressed);
+        // Only in the current report: n/a, no failure.
+        let c = compare(&current, &summary_only(Some(1.0)), &tol);
+        assert_eq!(row(&c, "tone cast_ab").status, Status::NotAvailable);
+        assert!(!c.regressed);
     }
 }

@@ -32,6 +32,12 @@ pub struct AnalysisGrid {
     /// Side of the square block each cell summarises, in source pixels.
     /// Blocks on the right and bottom edges may be smaller.
     pub block: usize,
+    /// Width of the source image the grid was built from, in pixels. Kept
+    /// by [`sub_grid`], so cell `i` of the original grid covers source
+    /// columns `[i b, min((i + 1) b, source_width))`.
+    pub source_width: usize,
+    /// Height of the source image the grid was built from, in pixels.
+    pub source_height: usize,
 }
 
 impl AnalysisGrid {
@@ -119,6 +125,76 @@ pub fn analysis_grid(image: &Image, long_side: usize) -> AnalysisGrid {
         median: median_img,
         cv,
         block,
+        source_width: image.width(),
+        source_height: image.height(),
+    }
+}
+
+/// The cells of one axis whose centres lie in `[p0, p1)`: cell `i` of a
+/// `cells`-long axis with block `b` over `n` source pixels has its centre
+/// at `(i b + min((i + 1) b, n)) / 2`. Compared doubled, in integers.
+fn axis_cells(cells: usize, b: usize, n: usize, p0: usize, p1: usize) -> (usize, usize) {
+    let twice_centre = |i: usize| i * b + ((i + 1) * b).min(n);
+    let first = (0..cells)
+        .find(|&i| twice_centre(i) >= 2 * p0)
+        .unwrap_or(cells);
+    let end = (first..cells)
+        .find(|&i| twice_centre(i) >= 2 * p1)
+        .unwrap_or(cells);
+    (first, end)
+}
+
+/// The analysis area of step 3 of `docs/MATHS.md`
+/// (`docs/MATHS.md#step-3-density-and-film-base`, Ruling 90): the cell
+/// rectangle `(cx0, cy0, cx1, cy1)`, ends exclusive, of the cells of `grid`
+/// whose centres in source pixels lie inside the pixel rectangle
+/// `rect = (x0, y0, x1, y1)` (ends exclusive). A cell's centre is
+/// `(i b + min((i + 1) b, W)) / 2` across and the same down, with `b` the
+/// block and `W` the source width. The result may be empty (`cx0 == cx1`
+/// or `cy0 == cy1`) when no centre falls inside.
+pub fn grid_cells_in(
+    grid: &AnalysisGrid,
+    rect: (usize, usize, usize, usize),
+) -> (usize, usize, usize, usize) {
+    let (x0, y0, x1, y1) = rect;
+    let b = grid.block.max(1);
+    let (cx0, cx1) = axis_cells(grid.width(), b, grid.source_width, x0, x1);
+    let (cy0, cy1) = axis_cells(grid.height(), b, grid.source_height, y0, y1);
+    (cx0, cy0, cx1, cy1)
+}
+
+/// The part of `grid` inside the cell rectangle
+/// `cells = (cx0, cy0, cx1, cy1)` (ends exclusive, clamped to the grid), as
+/// a grid of its own for the estimators of step 3 of `docs/MATHS.md`
+/// (`docs/MATHS.md#step-3-density-and-film-base`, Ruling 90): `median` and
+/// `cv` cropped, `block` and the source size kept. An empty rectangle gives
+/// a grid with no cells.
+pub fn sub_grid(grid: &AnalysisGrid, cells: (usize, usize, usize, usize)) -> AnalysisGrid {
+    let (w, h) = (grid.width(), grid.height());
+    let cx1 = cells.2.min(w);
+    let cy1 = cells.3.min(h);
+    let cx0 = cells.0.min(cx1);
+    let cy0 = cells.1.min(cy1);
+    let (sw, sh) = (cx1 - cx0, cy1 - cy0);
+    let (median, cv) = if sw == 0 || sh == 0 {
+        (Image::new(0, 0), Vec::new())
+    } else {
+        let median = grid
+            .median
+            .crop(cx0, cy0, sw, sh)
+            .expect("the cell rectangle is clamped to the grid");
+        let mut cv = Vec::with_capacity(sw * sh);
+        for y in cy0..cy1 {
+            cv.extend_from_slice(&grid.cv[y * w + cx0..y * w + cx1]);
+        }
+        (median, cv)
+    };
+    AnalysisGrid {
+        median,
+        cv,
+        block: grid.block,
+        source_width: grid.source_width,
+        source_height: grid.source_height,
     }
 }
 
@@ -251,6 +327,60 @@ mod tests {
         assert_eq!(grid.median.pixel(2, 0), [6.5; 3]);
         // Block (2,1) covers value 14 only.
         assert_eq!(grid.median.pixel(2, 1), [14.0; 3]);
+    }
+
+    #[test]
+    fn the_grid_records_its_source_size() {
+        let grid = analysis_grid(&Image::new(2049, 10), 1024);
+        assert_eq!((grid.source_width, grid.source_height), (2049, 10));
+    }
+
+    #[test]
+    fn cells_in_a_rect_are_those_whose_centres_lie_inside() {
+        // 10 x 7 source, block 3: columns cover [0,3) [3,6) [6,9) [9,10),
+        // centres 1.5, 4.5, 7.5, 9.5; rows [0,3) [3,6) [6,7), centres 1.5,
+        // 4.5, 6.5.
+        let grid = analysis_grid(&Image::new(10, 7), 4);
+        assert_eq!(grid.block, 3);
+        assert_eq!((grid.width(), grid.height()), (4, 3));
+        assert_eq!(grid_cells_in(&grid, (0, 0, 10, 7)), (0, 0, 4, 3));
+        assert_eq!(grid_cells_in(&grid, (2, 2, 8, 5)), (1, 1, 3, 2));
+        let grid1 = analysis_grid(&Image::new(8, 8), 4);
+        assert_eq!(grid1.block, 2);
+        // Centres 1, 3, 5, 7: one on the left edge is inside, one on the
+        // right edge is not.
+        assert_eq!(grid_cells_in(&grid1, (3, 0, 7, 8)), (1, 0, 3, 4));
+        // Centres 1, 3, 5, 7: [1, 5) holds the first two.
+        assert_eq!(grid_cells_in(&grid1, (1, 1, 5, 5)), (0, 0, 2, 2));
+        // No centre inside: empty.
+        let (cx0, _, cx1, _) = grid_cells_in(&grid1, (2, 0, 3, 8));
+        assert_eq!(cx0, cx1);
+    }
+
+    #[test]
+    fn sub_grid_crops_median_and_cv_and_keeps_block_and_source() {
+        let mut img = Image::new(6, 4);
+        for y in 0..4 {
+            for x in 0..6 {
+                let v = (y * 6 + x) as f32 + 1.0;
+                img.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        let mut grid = analysis_grid(&img, 6);
+        assert_eq!(grid.block, 1);
+        for (i, cv) in grid.cv.iter_mut().enumerate() {
+            *cv = i as f32;
+        }
+        let sub = sub_grid(&grid, (1, 2, 4, 4));
+        assert_eq!((sub.width(), sub.height()), (3, 2));
+        assert_eq!(sub.median.pixel(0, 0), grid.median.pixel(1, 2));
+        assert_eq!(sub.median.pixel(2, 1), grid.median.pixel(3, 3));
+        assert_eq!(sub.cv, vec![13.0, 14.0, 15.0, 19.0, 20.0, 21.0]);
+        assert_eq!(sub.block, 1);
+        assert_eq!((sub.source_width, sub.source_height), (6, 4));
+        assert_eq!(sub_grid(&grid, (0, 0, 6, 4)), grid);
+        assert_eq!(sub_grid(&grid, (2, 0, 2, 4)).cells(), 0);
+        assert_eq!(sub_grid(&grid, (0, 0, 99, 99)), grid);
     }
 
     #[test]

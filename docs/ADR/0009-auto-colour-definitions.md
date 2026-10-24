@@ -4,6 +4,8 @@
 
 Proposed, 2026-10-20 (controller ruling pending owner review). Amended 2026-10-21 (Ruling 30, pending owner review): luma and hue are read on `-e`; see "Amendment" below.
 
+Superseded in part by 0027 (2026-10-24): the choice of fitted cells (luma, chroma and hue now read after a provisional correction) and the slope clamp [0.8, 1.2] (now [0.5, 2]). The definitions on `-e`, the fitted lines and the applied correction stand.
+
 ## Context
 
 `docs/MATHS.md` step 6 fits a cast correction on the normalised log image `e_c` from step 4, on the analysis grid: split the cells into luma bands, keep the lowest-chroma cells outside the foliage and sky hue sectors, fit R and B against G as lines, and apply per-channel log-affine corrections before step 5. The plan uses the words luma, chroma and hue without defining them on `e_c`, and says "apply as per-channel log-affine corrections" without writing the correction down. `docs/MATHS.md` carried the line "TODO(spec): the plan does not define luma, chroma or hue on the normalised log image, nor the exact form of the applied correction (the implied form is to invert the fitted line so that the selected cells land on `e_G`, but this is not written down). Both need a decision before the first render lands." `fit_cast` and `apply_cast` in `negg-render` need the definitions, so this ADR records the ruling (contract item R-colour). The phase 2 roll mode TODO is not touched.

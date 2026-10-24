@@ -12,6 +12,14 @@
 //! the ICC profile embedded in a reference TIFF is read by `negg-decode`
 //! but not honoured here. TODO(phase 2): linearise references through
 //! their embedded profile with `negg-cms`.
+//!
+//! A reference registered onto the render ([`crate::eval::align`],
+//! docs/ADR/0028) is scored by [`aligned_stats`] over the overlap only,
+//! resampled bilinearly onto the render's pixel grid, and also described
+//! by [`ToneStats`]: L* percentiles (contrast and highlight roll-off),
+//! mean chroma (saturation) and the mean a* and b* difference (cast) of
+//! the render and the reference, which explain a CIEDE2000 difference
+//! rather than only count it.
 
 use negg_cms::lab::{ciede2000, rec2020_linear_to_lab, srgb_to_lab};
 use negg_types::Image;
@@ -20,6 +28,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::corpus::Rect;
+use crate::eval::align::{Registration, sample_rgb};
 use crate::eval::error::EvalError;
 
 /// Summary statistics of the per-pixel CIEDE2000 difference.
@@ -129,6 +138,173 @@ fn de2000_with(
         p95: values[rank - 1],
         max: values[n - 1],
     })
+}
+
+/// Tone and colour descriptors of one image over the overlap with
+/// another, in CIE L*a*b* (D65).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ToneDescriptors {
+    /// L* at the 1st percentile: the shadows.
+    pub l_p1: f32,
+    /// L* at the 50th percentile: the midtones.
+    pub l_p50: f32,
+    /// L* at the 99th percentile: the highlights and their roll-off.
+    pub l_p99: f32,
+    /// Mean chroma C*ab: the saturation.
+    pub chroma_mean: f32,
+    /// Mean a*.
+    pub a_mean: f32,
+    /// Mean b*.
+    pub b_mean: f32,
+}
+
+/// The tone and colour descriptors of the render and a registered
+/// reference over their overlap, and the cast between them.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ToneStats {
+    /// The engine's render.
+    pub render: ToneDescriptors,
+    /// The reference, resampled onto the render's grid.
+    pub reference: ToneDescriptors,
+    /// Mean a* of the render minus mean a* of the reference: positive is a
+    /// render more magenta than the reference.
+    pub a_diff: f32,
+    /// Mean b* of the render minus mean b* of the reference: positive is a
+    /// render more yellow than the reference.
+    pub b_diff: f32,
+}
+
+/// Width of an L* histogram bin for the percentiles of [`ToneStats`].
+const L_BIN: f32 = 0.01;
+/// Number of L* bins, covering `[0, 120)`; values outside are clamped
+/// into the end bins (a linear render may exceed L* 100).
+const L_BINS: usize = 12_000;
+/// Rows per band in the parallel pass of [`aligned_stats`].
+const BAND_ROWS: usize = 32;
+
+/// Per-band accumulators of [`aligned_stats`].
+struct Band {
+    de: Vec<f32>,
+    hist: [Vec<u32>; 2],
+    /// Sums of C*, a*, b* for the render then the reference.
+    sums: [f64; 6],
+}
+
+fn l_bin(l: f32) -> usize {
+    let b = (l / L_BIN).floor();
+    if b.is_nan() || b < 0.0 {
+        0
+    } else {
+        (b as usize).min(L_BINS - 1)
+    }
+}
+
+/// The nearest-rank percentile `p` (in `(0, 1]`) of a histogram of `n`
+/// values, as the centre of its bin.
+fn hist_percentile(hist: &[u32], n: usize, p: f64) -> f32 {
+    let rank = ((p * n as f64).ceil() as usize).clamp(1, n.max(1));
+    let mut seen = 0usize;
+    for (i, &count) in hist.iter().enumerate() {
+        seen += count as usize;
+        if seen >= rank {
+            return (i as f32 + 0.5) * L_BIN;
+        }
+    }
+    0.0
+}
+
+/// CIEDE2000 between `render` (linear Rec.2020) and `reference`
+/// (sRGB-encoded) over the overlap of `registration`, with the reference
+/// sampled bilinearly at the point each render pixel centre sees, and the
+/// [`ToneStats`] of the same pixels. The statistics are those of
+/// [`de2000_stats`]; the L* percentiles are nearest-rank on a histogram
+/// with bins of 0.01. Rows are processed in parallel in fixed bands
+/// summed in order, so the result does not depend on the thread count.
+///
+/// # Errors
+///
+/// [`EvalError::Mismatch`] (with an empty id) when the registration has
+/// no overlap with the render.
+pub fn aligned_stats(
+    render: &Image,
+    reference: &Image,
+    registration: &Registration,
+) -> Result<(DeStats, ToneStats), EvalError> {
+    let Some((x0, y0, x1, y1)) = registration.overlap_rect(render.width(), render.height()) else {
+        return Err(EvalError::Mismatch {
+            id: String::new(),
+            render: (render.width(), render.height()),
+            reference: (reference.width(), reference.height()),
+        });
+    };
+    let starts: Vec<usize> = (y0..y1).step_by(BAND_ROWS).collect();
+    let bands: Vec<Band> = starts
+        .par_iter()
+        .map(|&start| {
+            let mut band = Band {
+                de: Vec::with_capacity(BAND_ROWS * (x1 - x0)),
+                hist: [vec![0u32; L_BINS], vec![0u32; L_BINS]],
+                sums: [0.0; 6],
+            };
+            for y in start..(start + BAND_ROWS).min(y1) {
+                for x in x0..x1 {
+                    let lab_r = rec2020_linear_to_lab(render.pixel(x, y));
+                    let (p, q) = registration.to_reference(x as f64, y as f64);
+                    let lab_f = srgb_to_lab(sample_rgb(reference, p, q));
+                    band.de.push(ciede2000(lab_r, lab_f));
+                    band.hist[0][l_bin(lab_r[0])] += 1;
+                    band.hist[1][l_bin(lab_f[0])] += 1;
+                    for (k, lab) in [lab_r, lab_f].iter().enumerate() {
+                        let (a, b) = (f64::from(lab[1]), f64::from(lab[2]));
+                        band.sums[3 * k] += a.hypot(b);
+                        band.sums[3 * k + 1] += a;
+                        band.sums[3 * k + 2] += b;
+                    }
+                }
+            }
+            band
+        })
+        .collect();
+
+    let n = (x1 - x0) * (y1 - y0);
+    let mut values = Vec::with_capacity(n);
+    let mut hist = [vec![0u32; L_BINS], vec![0u32; L_BINS]];
+    let mut sums = [0.0f64; 6];
+    for band in bands {
+        values.extend_from_slice(&band.de);
+        for (total, part) in hist.iter_mut().zip(&band.hist) {
+            for (t, v) in total.iter_mut().zip(part) {
+                *t += v;
+            }
+        }
+        for (t, v) in sums.iter_mut().zip(band.sums) {
+            *t += v;
+        }
+    }
+    let sum: f64 = values.iter().map(|&v| f64::from(v)).sum();
+    values.sort_unstable_by(f32::total_cmp);
+    let rank = ((0.95 * n as f64).ceil() as usize).clamp(1, n);
+    let de = DeStats {
+        mean: (sum / n as f64) as f32,
+        p95: values[rank - 1],
+        max: values[n - 1],
+    };
+    let nf = n as f64;
+    let describe = |k: usize| ToneDescriptors {
+        l_p1: hist_percentile(&hist[k], n, 0.01),
+        l_p50: hist_percentile(&hist[k], n, 0.50),
+        l_p99: hist_percentile(&hist[k], n, 0.99),
+        chroma_mean: (sums[3 * k] / nf) as f32,
+        a_mean: (sums[3 * k + 1] / nf) as f32,
+        b_mean: (sums[3 * k + 2] / nf) as f32,
+    };
+    let tone = ToneStats {
+        render: describe(0),
+        reference: describe(1),
+        a_diff: ((sums[1] - sums[4]) / nf) as f32,
+        b_diff: ((sums[2] - sums[5]) / nf) as f32,
+    };
+    Ok((de, tone))
 }
 
 /// Mean |a*| and |b*| over the pixels of the render (linear Rec.2020)

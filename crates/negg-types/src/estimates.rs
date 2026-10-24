@@ -27,6 +27,12 @@ pub enum DminSource {
     Roll,
     /// Taken from a film profile.
     Profile,
+    /// In roll mode, per channel the lower of the roll's pooled Dmin and
+    /// the frame's own percentile estimate, when some channels took one
+    /// and some the other (Ruling 105, ADR 0029). A frame whose every
+    /// channel took its own estimate records `Percentile`, and one whose
+    /// every channel took the pool records `Roll`.
+    RollMin,
 }
 
 /// Where a per-channel gamma estimate came from. Step 4 of `docs/MATHS.md`.
@@ -67,11 +73,11 @@ pub enum CastSource {
 /// The identity correction has slopes of 1 and offsets of 0.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CastCorrection {
-    /// Fitted slope of `e_R` against `e_G`, clamped to [0.8, 1.2].
+    /// Fitted slope of `e_R` against `e_G`, bounded to [0.5, 2] (ADR 0027).
     pub slope_r: f32,
     /// Fitted offset of `e_R` against `e_G`.
     pub offset_r: f32,
-    /// Fitted slope of `e_B` against `e_G`, clamped to [0.8, 1.2].
+    /// Fitted slope of `e_B` against `e_G`, bounded to [0.5, 2] (ADR 0027).
     pub slope_b: f32,
     /// Fitted offset of `e_B` against `e_G`.
     pub offset_b: f32,

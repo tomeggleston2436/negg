@@ -7,20 +7,19 @@
 //! subsampling. The ICC profile goes into APP2 segments, which is what
 //! `image`'s `JpegEncoder::set_icc_profile` writes.
 
-use std::fs::File;
-use std::io::BufWriter;
 use std::path::Path;
 
 use image::ImageEncoder;
 use image::codecs::jpeg::JpegEncoder;
 use image::error::{ImageError, UnsupportedError};
 
-use crate::error::{IoError, check_rgb_dimensions, io_at};
+use crate::error::{IoError, check_rgb_dimensions};
+use crate::sidecar::write_atomic;
 
 /// The quality ADR 0010 fixes for JPEG exports.
 pub const DEFAULT_JPEG_QUALITY: u8 = 92;
 
-/// Options for [`write_jpeg8`].
+/// Options for [`write_jpeg8`] and [`encode_jpeg8`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JpegOptions {
     /// ICC profile bytes to embed in APP2 segments, if any.
@@ -38,32 +37,30 @@ impl Default for JpegOptions {
     }
 }
 
-/// Writes an interleaved 8-bit RGB buffer as a JPEG file.
+/// Encodes an interleaved 8-bit RGB buffer as JPEG bytes in memory.
 ///
-/// `rgb8` holds `width * height * 3` samples in row-major order, red first.
-/// The file is written in place (no temporary file); a failure part way
-/// through leaves a truncated file at `path`.
+/// `rgb` holds `width * height * 3` samples in row-major order, red first.
+/// The bytes are identical to those [`write_jpeg8`] writes to a file.
 ///
 /// # Errors
 ///
 /// [`IoError::Dimensions`] when the buffer does not match the dimensions or
 /// a side exceeds 65535 pixels, [`IoError::InvalidOption`] when `quality`
-/// is outside 1 to 100 or the ICC profile is empty, [`IoError::Io`] for
-/// file errors and [`IoError::Jpeg`] when the encoder fails (including an
-/// ICC profile too large for APP2 segments).
-pub fn write_jpeg8(
-    path: &Path,
+/// is outside 1 to 100 or the ICC profile is empty, and [`IoError::Jpeg`]
+/// when the encoder fails (including an ICC profile too large for APP2
+/// segments).
+pub fn encode_jpeg8(
     width: usize,
     height: usize,
-    rgb8: &[u8],
+    rgb: &[u8],
     opts: &JpegOptions,
-) -> Result<(), IoError> {
-    let (w, h) = check_rgb_dimensions(width, height, rgb8.len())?;
+) -> Result<Vec<u8>, IoError> {
+    let (w, h) = check_rgb_dimensions(width, height, rgb.len())?;
     if w > u32::from(u16::MAX) || h > u32::from(u16::MAX) {
         return Err(IoError::Dimensions {
             width,
             height,
-            len: rgb8.len(),
+            len: rgb.len(),
         });
     }
     if !(1..=100).contains(&opts.quality) {
@@ -78,22 +75,38 @@ pub fn write_jpeg8(
         ));
     }
 
-    let file = File::create(path).map_err(io_at(path))?;
-    let mut writer = BufWriter::new(file);
+    let mut out = Vec::new();
     {
-        let mut encoder = JpegEncoder::new_with_quality(&mut writer, opts.quality);
+        let mut encoder = JpegEncoder::new_with_quality(&mut out, opts.quality);
         if let Some(icc) = &opts.icc {
             encoder
                 .set_icc_profile(icc.clone())
                 .map_err(unsupported_to_io)?;
         }
-        encoder.write_image(rgb8, w, h, image::ExtendedColorType::Rgb8)?;
+        encoder.write_image(rgb, w, h, image::ExtendedColorType::Rgb8)?;
     }
-    let file = writer
-        .into_inner()
-        .map_err(|e| io_at(path)(e.into_error()))?;
-    file.sync_all().map_err(io_at(path))?;
-    Ok(())
+    Ok(out)
+}
+
+/// Writes an interleaved 8-bit RGB buffer as a JPEG file.
+///
+/// `rgb8` holds `width * height * 3` samples in row-major order, red first.
+/// The bytes come from [`encode_jpeg8`] and are written atomically (a
+/// temporary file beside `path`, synced, then renamed), so a failure leaves
+/// any existing file at `path` untouched.
+///
+/// # Errors
+///
+/// As [`encode_jpeg8`], plus [`IoError::Io`] for file errors.
+pub fn write_jpeg8(
+    path: &Path,
+    width: usize,
+    height: usize,
+    rgb8: &[u8],
+    opts: &JpegOptions,
+) -> Result<(), IoError> {
+    let bytes = encode_jpeg8(width, height, rgb8, opts)?;
+    write_atomic(path, &bytes)
 }
 
 fn unsupported_to_io(e: UnsupportedError) -> IoError {
@@ -105,7 +118,7 @@ mod tests {
     use super::*;
     use image::ImageDecoder;
     use image::codecs::jpeg::JpegDecoder;
-    use std::fs;
+    use std::fs::{self, File};
     use std::io::BufReader;
 
     struct TempDir(std::path::PathBuf);
@@ -194,6 +207,26 @@ mod tests {
         write_jpeg8(&path, 4, 4, &gradient(4, 4), &opts).unwrap();
         let mut decoder = JpegDecoder::new(BufReader::new(File::open(&path).unwrap())).unwrap();
         assert_eq!(decoder.icc_profile().unwrap(), Some(icc));
+    }
+
+    #[test]
+    fn encode_equals_the_file_write_jpeg8_writes() {
+        let dir = TempDir::new("encode");
+        let path = dir.path("e.jpg");
+        let (w, h) = (23, 17);
+        let opts = JpegOptions {
+            icc: Some((0..300u32).map(|i| (i % 251) as u8).collect()),
+            quality: 85,
+        };
+        let pixels = gradient(w, h);
+        write_jpeg8(&path, w, h, &pixels, &opts).unwrap();
+        let bytes = encode_jpeg8(w, h, &pixels, &opts).unwrap();
+        assert_eq!(bytes, fs::read(&path).unwrap());
+        assert!(!dir.path("e.jpg.tmp").exists());
+        assert!(matches!(
+            encode_jpeg8(w, h + 1, &pixels, &opts),
+            Err(IoError::Dimensions { .. })
+        ));
     }
 
     #[test]

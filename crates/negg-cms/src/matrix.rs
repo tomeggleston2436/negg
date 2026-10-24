@@ -41,6 +41,28 @@ pub const REC2020_GREEN: [f32; 2] = [0.170, 0.797];
 /// Rec.2020 blue primary as CIE xy, ITU-R BT.2020 table 3.
 pub const REC2020_BLUE: [f32; 2] = [0.131, 0.046];
 
+/// Linear Rec.709 (sRGB primaries, D65) to linear Rec.2020 (D65): the
+/// matrix of ITU-R BT.2087-0, "Colour conversion from Recommendation
+/// ITU-R BT.709 to Recommendation ITU-R BT.2020", equation (2), rounded
+/// to four places as published.
+///
+/// Derivation: `XYZ_TO_REC2020 * REC709_TO_XYZ`, where `REC709_TO_XYZ`
+/// is the RGB-to-XYZ matrix of the BT.709 primaries (R 0.640, 0.330;
+/// G 0.300, 0.600; B 0.150, 0.060) with the D65 white, and
+/// `XYZ_TO_REC2020` is the inverse of the same construction for the
+/// BT.2020 primaries ([`REC2020_RED`] and friends). Both spaces share the
+/// D65 white, so no chromatic adaptation is involved and every row sums to
+/// 1: Rec.709 `(1, 1, 1)` maps to Rec.2020 `(1, 1, 1)`.
+///
+/// The values are standard, not measured (ground rule 6). Step 7 applies
+/// this matrix to the print output of a RAW input, treating the three
+/// print channels as Rec.709 primaries (ADR 0026, Ruling 96).
+pub const REC709_TO_REC2020: Matrix3 = [
+    [0.6274, 0.3293, 0.0433],
+    [0.0691, 0.9195, 0.0114],
+    [0.0164, 0.0880, 0.8956],
+];
+
 /// The Bradford cone response matrix (Lam 1985, as reproduced in ICC.1
 /// annex E), mapping CIE XYZ to the sharpened RGB cone space in which the
 /// von Kries scaling of [`bradford_adaptation`] is applied.
@@ -365,6 +387,22 @@ mod tests {
         [0.212_672_9, 0.715_152_2, 0.072_175_0],
         [0.019_333_9, 0.119_192, 0.950_304_1],
     ];
+
+    #[test]
+    fn rec709_to_rec2020_is_the_bt2087_matrix() {
+        for row in REC709_TO_REC2020 {
+            assert!((row.iter().sum::<f32>() - 1.0).abs() < 1e-4, "{row:?}");
+        }
+        assert_vec_close(mul_vec(REC709_TO_REC2020, [1.0; 3]), [1.0; 3], 1e-4);
+        // It is the product of the two primaries-derived matrices.
+        let to_xyz =
+            rgb_to_xyz_from_primaries(0.64, 0.33, 0.30, 0.60, 0.15, 0.06, D65_XYZ).unwrap();
+        let derived = mul(*XYZ_TO_REC2020, to_xyz);
+        assert_matrix_close(REC709_TO_REC2020, derived, 2e-4);
+        // A saturated Rec.709 blue stays inside Rec.2020 (no negatives).
+        let blue = mul_vec(REC709_TO_REC2020, [0.0, 0.0, 1.0]);
+        assert!(blue.iter().all(|&v| v >= 0.0), "{blue:?}");
+    }
 
     #[test]
     fn mul_by_identity_is_identity() {

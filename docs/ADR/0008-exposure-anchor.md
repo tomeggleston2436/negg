@@ -4,6 +4,8 @@
 
 Proposed, 2026-10-20 (controller ruling pending owner review).
 
+Superseded in part by ADR 0030 (Ruling 107): `x_0` is no longer set by the anchor alone; it is `max(x_0_anchor, x_black)`, where `x_black` makes the film base (`e = 0`) print at `P = 2.0`. The anchor, its solve and the user's `exposure` and `cmy_c` stand. Since ADR 0031 `x_black` makes the base print at the knee of the toe, `P_black = Dmax_p - ln(2) / a_sh`, not at 2.0.
+
 ## Context
 
 `docs/MATHS.md` step 5 says `x_0` is chosen so that the frame's exposure anchor prints at `P = 0.75`, and that the anchor is "the trimmed mean of textured grid cells in the midtones". That is all the plan says. `docs/MATHS.md` carried the line "TODO(spec): the plan does not say how 'textured' cells are selected, what density band counts as 'midtones', what fraction the trimmed mean trims, or whether the anchor is one value or one per channel. The sign conventions and display units of `x_0` and `cmy_c` as user-facing sliders are also open." `exposure_anchor` in `negg-film` and `solve_x0` in `negg-render` need all of this, so this ADR records the ruling (contract item R-anchor).

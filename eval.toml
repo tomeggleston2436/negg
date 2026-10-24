@@ -16,6 +16,12 @@ gamma_variance = 0.010    # per roll, over its Dmin inliers
 dmin_std = 0.005              # log-D, per roll: std of per-frame Dmin over inliers
 roll_to_roll_dmin_std = 0.01  # log-D, per stock: std of pooled Dmin across rolls
 three_lights_de = 0.10        # per film roll: largest per-light mean card dE
+# Tone means over references registered onto the render (Negative Lab Pro
+# exports, docs/ADR/0028). Placeholders, TODO(measure): no registered
+# reference existed when they were chosen. Absent keys take these values.
+tone_l_abs_diff = 0.5         # L*: mean |difference| of the 1st, 50th, 99th percentiles
+tone_chroma_abs_diff = 0.5    # C*ab: mean |difference| of the mean chroma
+tone_cast_ab = 0.5            # a*b*: mean size of the mean a*, b* difference
 
 # Tracked cases: frames that once rendered badly. Each is compared on its own
 # per-frame metric against the baseline with the tolerance given here, so a

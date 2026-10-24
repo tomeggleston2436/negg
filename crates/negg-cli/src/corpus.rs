@@ -77,6 +77,72 @@ pub struct Frame {
     /// relative to the corpus directory. Frames of one roll share it.
     #[serde(default)]
     pub film_profile: Option<String>,
+    /// The frame's geometry (crop, analysis buffer, rotation and flip), as
+    /// `Settings.geometry` takes it. `negg eval` renders the frame with it
+    /// as a frame override in roll mode (Ruling 71: the whole geometry), so
+    /// the film holder can be cropped away per frame. Absent means the
+    /// roll's default geometry, exactly as before the field existed.
+    #[serde(default)]
+    pub geometry: Option<FrameGeometry>,
+}
+
+/// A frame's geometry as written in the manifest: the fields and defaults
+/// of [`negg_types::Geometry`], with unknown fields rejected like the rest
+/// of the manifest. Validated by [`negg_types::Geometry::validate`].
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameGeometry {
+    /// The crop, normalised to the source frame in its decoded orientation;
+    /// absent is the whole frame.
+    #[serde(default)]
+    pub crop: Option<Crop>,
+    /// Fraction of the crop's short side trimmed from every side for
+    /// analysis only, in `[0, 0.2]`; defaults to
+    /// [`negg_types::ANALYSIS_BUFFER_DEFAULT`].
+    #[serde(default = "default_analysis_buffer")]
+    pub analysis_buffer: f32,
+    /// Clockwise rotation in degrees: 0, 90, 180 or 270.
+    #[serde(default)]
+    pub rotate_degrees: u16,
+    /// Mirror the rotated image left to right.
+    #[serde(default)]
+    pub flip_horizontal: bool,
+}
+
+/// A crop rectangle as written in the manifest: the fields of
+/// [`negg_types::CropRect`], every one required.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Crop {
+    /// Left edge, fraction of the frame width.
+    pub x: f32,
+    /// Top edge, fraction of the frame height.
+    pub y: f32,
+    /// Width, fraction of the frame width; at least 0.01.
+    pub width: f32,
+    /// Height, fraction of the frame height; at least 0.01.
+    pub height: f32,
+}
+
+fn default_analysis_buffer() -> f32 {
+    negg_types::ANALYSIS_BUFFER_DEFAULT
+}
+
+impl FrameGeometry {
+    /// The engine's [`negg_types::Geometry`] with the same fields.
+    pub fn to_geometry(&self) -> negg_types::Geometry {
+        negg_types::Geometry {
+            crop: self.crop.map(|c| negg_types::CropRect {
+                x: c.x,
+                y: c.y,
+                width: c.width,
+                height: c.height,
+            }),
+            analysis_buffer: self.analysis_buffer,
+            rotate_degrees: self.rotate_degrees,
+            flip_horizontal: self.flip_horizontal,
+        }
+    }
 }
 
 /// A rectangle given as fractions of the image width and height.
@@ -113,6 +179,10 @@ pub enum Tool {
     Negpy,
     /// darktable's negadoctor module.
     Negadoctor,
+    /// Negative Lab Pro: an 8-bit sRGB JPEG (or TIFF) export, cropped by
+    /// hand and possibly mirrored or rotated, so it is always registered
+    /// to the render before scoring (docs/ADR/0028).
+    Nlp,
 }
 
 impl Tool {
@@ -121,6 +191,7 @@ impl Tool {
         match self {
             Tool::Negpy => "negpy",
             Tool::Negadoctor => "negadoctor",
+            Tool::Nlp => "nlp",
         }
     }
 }
@@ -192,6 +263,13 @@ pub enum CorpusError {
         /// The field that differs.
         field: &'static str,
     },
+    /// A frame's `geometry` fails validation.
+    Geometry {
+        /// Frame id.
+        id: String,
+        /// What is wrong.
+        reason: String,
+    },
 }
 
 impl fmt::Display for CorpusError {
@@ -213,6 +291,7 @@ impl fmt::Display for CorpusError {
                 )
             }
             CorpusError::GreyCard { id, reason } => write!(f, "frame {id:?}: {reason}"),
+            CorpusError::Geometry { id, reason } => write!(f, "frame {id:?}: geometry: {reason}"),
             CorpusError::Licence { id, licence } => write!(
                 f,
                 "frame {id:?}: licence {licence:?} is not one of {}",
@@ -250,7 +329,8 @@ impl std::error::Error for CorpusError {
 /// file and reference file is a plain relative path (no absolute, `.` or
 /// `..` components), `grey_card` is present exactly when `has_grey_card`,
 /// the rect lies within `[0, 1]` with positive size, and the licence is
-/// one of the allowed identifiers, `rig` and `film_profile` are
+/// one of the allowed identifiers, a `geometry` passes the checks of
+/// `Settings.geometry`, `rig` and `film_profile` are
 /// non-empty relative paths shared by every frame of a roll, every frame
 /// of a roll has the same stock, and frames of one `film_roll` share their
 /// stock. Whether the files exist is not
@@ -305,6 +385,9 @@ fn validate(manifest: &Manifest) -> Result<(), CorpusError> {
             }
             (true, Some(rect)) => check_rect(&frame.id, rect)?,
             (false, None) => {}
+        }
+        if let Some(geometry) = &frame.geometry {
+            check_geometry(&frame.id, geometry)?;
         }
         if !ALLOWED_LICENCES.contains(&frame.licence.as_str()) {
             return Err(CorpusError::Licence {
@@ -371,6 +454,21 @@ fn check_path(id: &str, file: &str) -> Result<(), CorpusError> {
         });
     }
     Ok(())
+}
+
+/// The geometry must pass [`negg_types::Geometry::validate`], the rule
+/// `Settings.geometry` is held to.
+fn check_geometry(id: &str, geometry: &FrameGeometry) -> Result<(), CorpusError> {
+    geometry
+        .to_geometry()
+        .validate()
+        .map_err(|e| CorpusError::Geometry {
+            id: id.to_owned(),
+            reason: match e {
+                negg_types::Error::Invalid(reason) => reason,
+                other => other.to_string(),
+            },
+        })
 }
 
 /// The rect must be finite, inside `[0, 1]` and have positive size.
@@ -808,6 +906,101 @@ licence = "CC0-1.0"
                 matches!(load(&dir.0), Err(CorpusError::BadProfilePath { .. })),
                 "{bad}"
             );
+        }
+    }
+
+    #[test]
+    fn nlp_tool_parses() {
+        let dir = full_corpus("nlp");
+        dir.manifest(&format!(
+            "schema_version = 1\n{}",
+            FRAME.replace(
+                "tool = \"negpy\", file = \"reference/r001-03.negpy.tif\"",
+                "tool = \"nlp\", file = \"reference/r001-03.nlp.jpg\""
+            )
+        ));
+        let m = load(&dir.0).unwrap();
+        assert_eq!(m.frame[0].references[0].tool, Tool::Nlp);
+        assert_eq!(Tool::Nlp.to_string(), "nlp");
+        assert_eq!(serde_json::to_string(&Tool::Nlp).unwrap(), "\"nlp\"");
+    }
+
+    #[test]
+    fn geometry_is_optional_loads_and_defaults_like_settings() {
+        let dir = full_corpus("geometry");
+        let m = load(&dir.0).unwrap();
+        assert!(m.frame[0].geometry.is_none());
+        dir.manifest(&format!(
+            "schema_version = 1\n{}",
+            frame_with(
+                "r001-03",
+                "r001",
+                "geometry = { crop = { x = 0.1, y = 0.05, width = 0.8, height = 0.9 }, rotate_degrees = 90, flip_horizontal = true }"
+            )
+        ));
+        let m = load(&dir.0).unwrap();
+        let g = m.frame[0].geometry.unwrap().to_geometry();
+        assert_eq!(
+            g.crop,
+            Some(negg_types::CropRect {
+                x: 0.1,
+                y: 0.05,
+                width: 0.8,
+                height: 0.9
+            })
+        );
+        assert_eq!(g.analysis_buffer, negg_types::ANALYSIS_BUFFER_DEFAULT);
+        assert_eq!((g.rotate_degrees, g.flip_horizontal), (90, true));
+        // An empty table is the default geometry, the identity.
+        dir.manifest(&format!(
+            "schema_version = 1\n{}",
+            frame_with("r001-03", "r001", "geometry = {}")
+        ));
+        let m = load(&dir.0).unwrap();
+        assert_eq!(
+            m.frame[0].geometry.unwrap().to_geometry(),
+            negg_types::Geometry::default()
+        );
+    }
+
+    #[test]
+    fn bad_geometry_is_rejected() {
+        let dir = full_corpus("badgeometry");
+        for (bad, needle) in [
+            (
+                "geometry = { crop = { x = 0.5, y = 0.0, width = 0.6, height = 1.0 } }",
+                "x + width",
+            ),
+            (
+                "geometry = { crop = { x = 0.0, y = 0.0, width = 0.005, height = 1.0 } }",
+                "width",
+            ),
+            ("geometry = { rotate_degrees = 45 }", "rotate_degrees"),
+            ("geometry = { analysis_buffer = 0.3 }", "analysis_buffer"),
+        ] {
+            dir.manifest(&format!(
+                "schema_version = 1\n{}",
+                frame_with("r001-03", "r001", bad)
+            ));
+            match load(&dir.0) {
+                Err(e @ CorpusError::Geometry { .. }) => {
+                    let msg = e.to_string();
+                    assert!(msg.contains("r001-03") && msg.contains(needle), "{msg}");
+                }
+                other => panic!("expected Geometry for {bad}, got {other:?}"),
+            }
+        }
+        // Unknown keys fail to parse, in the geometry and in its crop.
+        for bad in [
+            "geometry = { rotate = 90 }",
+            "geometry = { crop = { x = 0.0, y = 0.0, width = 1.0, height = 1.0, w = 1 } }",
+            "geometry = { crop = { x = 0.0, y = 0.0, width = 1.0 } }",
+        ] {
+            dir.manifest(&format!(
+                "schema_version = 1\n{}",
+                frame_with("r001-03", "r001", bad)
+            ));
+            assert!(matches!(load(&dir.0), Err(CorpusError::Parse(_))), "{bad}");
         }
     }
 }

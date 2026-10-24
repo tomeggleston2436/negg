@@ -12,16 +12,18 @@ use std::path::{Path, PathBuf};
 
 use negg_types::{ContentHash, RollPool, RollSettings};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::error::{IoError, io_at};
-use crate::sidecar::write_atomic;
+use crate::sidecar::{schema_version_of, write_atomic};
 
 /// File name of the roll sidecar inside a roll directory.
 pub const ROLL_SIDECAR_NAME: &str = "roll.negg.json";
 
-/// Schema version of the roll sidecar. It starts at 1, independent of the
-/// frame sidecar's version (Ruling 51).
-pub const ROLL_SIDECAR_SCHEMA_VERSION: u32 = 1;
+/// Schema version of the roll sidecar. It started at 1, independent of the
+/// frame sidecar's version (Ruling 51); version 2 holds settings of schema
+/// 3, with `geometry` (Ruling 71).
+pub const ROLL_SIDECAR_SCHEMA_VERSION: u32 = 2;
 
 /// Everything negg records about one roll.
 ///
@@ -63,24 +65,70 @@ pub fn roll_sidecar_path(dir: &Path) -> PathBuf {
     dir.join(ROLL_SIDECAR_NAME)
 }
 
-/// Reads a roll sidecar.
+/// Reads a roll sidecar through [`migrate_roll`].
 ///
 /// # Errors
 ///
 /// [`IoError::Io`] when the file cannot be read, [`IoError::Json`] when it
-/// does not parse, and [`IoError::Schema`] when `schema_version` is not
-/// [`ROLL_SIDECAR_SCHEMA_VERSION`].
+/// does not parse, and whatever [`migrate_roll`] returns.
 pub fn read_roll_sidecar(path: &Path) -> Result<RollSidecar, IoError> {
     let text = fs::read_to_string(path).map_err(io_at(path))?;
-    let sidecar: RollSidecar = serde_json::from_str(&text)?;
-    if sidecar.schema_version != ROLL_SIDECAR_SCHEMA_VERSION {
-        return Err(IoError::Schema(format!(
-            "roll sidecar schema_version {} is not understood (this build reads version \
-             {ROLL_SIDECAR_SCHEMA_VERSION})",
-            sidecar.schema_version
-        )));
-    }
+    let value: Value = serde_json::from_str(&text)?;
+    migrate_roll(value)
+}
+
+/// Turns a parsed roll sidecar JSON value into the current [`RollSidecar`]
+/// (Ruling 71), a ladder like [`crate::migrate`]: version 1 becomes 2 by
+/// setting `schema_version = 2` and `settings.shared.schema_version = 3`,
+/// nothing else (the shared `geometry` takes its default). A missing
+/// `schema_version` is read as the current version, so `{}` loads as the
+/// default, as it always has.
+///
+/// # Errors
+///
+/// [`IoError::Schema`] when the value is not an object, `schema_version` is
+/// not a non-negative integer, is 0, or is newer than
+/// [`ROLL_SIDECAR_SCHEMA_VERSION`]; [`IoError::Json`] when the body does not
+/// deserialise.
+pub fn migrate_roll(value: Value) -> Result<RollSidecar, IoError> {
+    let version = match value.as_object() {
+        Some(object) if !object.contains_key("schema_version") => ROLL_SIDECAR_SCHEMA_VERSION,
+        _ => schema_version_of(&value)?,
+    };
+    let value = match version {
+        1 => upgrade_roll_v1_to_v2(value),
+        ROLL_SIDECAR_SCHEMA_VERSION => value,
+        v if v > ROLL_SIDECAR_SCHEMA_VERSION => {
+            return Err(IoError::Schema(format!(
+                "roll sidecar schema_version {v} is newer than this build understands (up to \
+                 {ROLL_SIDECAR_SCHEMA_VERSION}); upgrade negg to read it"
+            )));
+        }
+        other => {
+            return Err(IoError::Schema(format!(
+                "roll sidecar schema_version {other} is not a version negg has ever written"
+            )));
+        }
+    };
+    let mut sidecar: RollSidecar = serde_json::from_value(value)?;
+    sidecar.schema_version = ROLL_SIDECAR_SCHEMA_VERSION;
     Ok(sidecar)
+}
+
+/// Upgrades a version 1 roll sidecar value to version 2 (Ruling 71).
+fn upgrade_roll_v1_to_v2(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("schema_version".into(), Value::from(2));
+        if let Some(shared) = object
+            .get_mut("settings")
+            .and_then(Value::as_object_mut)
+            .and_then(|settings| settings.get_mut("shared"))
+            .and_then(Value::as_object_mut)
+        {
+            shared.insert("schema_version".into(), Value::from(3));
+        }
+    }
+    value
 }
 
 /// Writes a roll sidecar as pretty JSON with a trailing newline, atomically
@@ -189,7 +237,7 @@ mod tests {
         write_roll_sidecar(&path, &sample()).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.ends_with('\n'));
-        assert!(text.contains("\n  \"schema_version\": 1"));
+        assert!(text.contains("\n  \"schema_version\": 2"));
         assert_eq!(read_roll_sidecar(&path).unwrap(), sample());
         assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1, "no temp file");
     }
@@ -207,13 +255,18 @@ mod tests {
         let dir = TempDir::new("reject");
         let path = roll_sidecar_path(&dir.0);
         let mut s = sample();
-        s.schema_version = 2;
+        s.schema_version = 3;
         assert!(matches!(
             write_roll_sidecar(&path, &s),
             Err(IoError::Schema(_))
         ));
-        fs::write(&path, r#"{"schema_version": 2}"#).unwrap();
-        assert!(matches!(read_roll_sidecar(&path), Err(IoError::Schema(_))));
+        for bad in [r#"{"schema_version": 3}"#, r#"{"schema_version": 0}"#] {
+            fs::write(&path, bad).unwrap();
+            assert!(
+                matches!(read_roll_sidecar(&path), Err(IoError::Schema(_))),
+                "{bad}"
+            );
+        }
         let mut s = sample();
         s.frames.push("sub/c.dng".into());
         assert!(matches!(

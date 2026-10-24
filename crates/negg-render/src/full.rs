@@ -6,7 +6,7 @@
 //! `negg_film::density_value`, or [`crate::density_model_pixel`] with a rig
 //! density model), inversion (step 4, then the film correction's neutral
 //! offset), the cast correction (step 6),
-//! the print stage (step 5) and the optional camera matrix (step 7) on each
+//! the print stage (step 5) and the optional step 7 matrix on each
 //! pixel in turn, over row bands in parallel, without materialising the
 //! intermediate images, not even the full-size density image. It calls
 //! the same per-pixel kernels as the separate functions
@@ -51,6 +51,55 @@ pub fn render_full(
     density: Option<&DensityModel>,
     matrix: Option<[[f32; 3]; 3]>,
 ) -> Result<Image> {
+    check_estimates(est)?;
+    let mut out = linear.clone();
+    render_in_place(&mut out, est, print, density, matrix);
+    Ok(out)
+}
+
+/// A rectangle of pixels of an image: the `width` by `height` block whose
+/// top-left pixel is `(x, y)`. Used by [`render_region`] for preview tiles
+/// (Step 8 of docs/MATHS.md (preview), Ruling 73).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Region {
+    /// Left column, in pixels.
+    pub x: usize,
+    /// Top row, in pixels.
+    pub y: usize,
+    /// Width in pixels.
+    pub width: usize,
+    /// Height in pixels.
+    pub height: usize,
+}
+
+/// Steps 3 to 7 of `docs/MATHS.md` on one rectangle of `image`: exactly
+/// [`render_full`] restricted to `region`, for preview tiles (Step 8 of
+/// docs/MATHS.md (preview), Ruling 73). Every step of the fused kernel is
+/// per pixel with no neighbourhood, so the result is bitwise equal to the
+/// same pixels of `render_full(image, est, print, density, matrix)`; only
+/// the region is copied and rendered.
+///
+/// # Errors
+///
+/// [`Error::Invalid`] when `region` is empty or extends beyond `image`, and
+/// every error of [`render_full`].
+pub fn render_region(
+    image: &Image,
+    region: Region,
+    est: &Estimates,
+    print: &PrintCoefficients,
+    density: Option<&DensityModel>,
+    matrix: Option<[[f32; 3]; 3]>,
+) -> Result<Image> {
+    check_estimates(est)?;
+    let mut out = image.crop(region.x, region.y, region.width, region.height)?;
+    render_in_place(&mut out, est, print, density, matrix);
+    Ok(out)
+}
+
+/// The preconditions of [`render_full`] and [`render_region`]: step 4's
+/// Dmin and gamma checks and a finite neutral offset.
+fn check_estimates(est: &Estimates) -> Result<()> {
     // Validate step 4's preconditions up front on an empty image so the
     // fused kernel below cannot divide by a zero gamma.
     invert_in_place(&mut Image::new(0, 0), est.dmin, est.gamma)?;
@@ -60,12 +109,24 @@ pub fn render_full(
             est.neutral_offset
         )));
     }
+    Ok(())
+}
+
+/// The fused per-pixel kernel of steps 3 to 7, applied in place to `out`
+/// (linear input on entry, the positive on return). The caller has run
+/// [`check_estimates`].
+fn render_in_place(
+    out: &mut Image,
+    est: &Estimates,
+    print: &PrintCoefficients,
+    density: Option<&DensityModel>,
+    matrix: Option<[[f32; 3]; 3]>,
+) {
     let dmin = est.dmin;
     let gamma = est.gamma;
     let offset = est.neutral_offset;
     let cast = est.cast;
-    let mut out = linear.clone();
-    for_each_pixel_mut(&mut out, |i| {
+    for_each_pixel_mut(out, |i| {
         let d = match density {
             Some(m) => density_model_pixel(i, m),
             None => [
@@ -83,7 +144,6 @@ pub fn render_full(
             None => positive,
         }
     });
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -292,6 +352,106 @@ mod tests {
             assert!(px[0] >= previous - 1e-7, "{} after {previous}", px[0]);
             previous = px[0];
         }
+    }
+
+    #[test]
+    fn render_region_equals_the_slice_of_render_full_at_every_tile() {
+        let linear = random_linear(97, 61, 0xC0FF_EE11);
+        let model = DensityModel {
+            a: [0.05, -0.02, 0.1],
+            g: [[-1.05, 0.04, 0.01], [0.03, -0.95, 0.02], [0.0, 0.06, -1.1]],
+        };
+        let mut est = estimates();
+        est.neutral_offset = [0.012, 0.0, -0.007];
+        let settings = PrintSettings::default();
+        est.x0 = solve_x0(est.anchor, &settings);
+        let c = PrintCoefficients::new(&settings, est.x0).unwrap();
+        let m = [[0.9, 0.1, 0.0], [0.05, 0.9, 0.05], [0.0, 0.2, 0.8]];
+        for (density, matrix) in [(None, None), (Some(&model), Some(m))] {
+            let full = render_full(&linear, &est, &c, density, matrix).unwrap();
+            // A 32 px tiling of a 97 x 61 image: interior tiles, the
+            // 1 px wide right column and the 29 px bottom row of tiles.
+            for t in linear.tiles(32) {
+                let region = Region {
+                    x: t.x,
+                    y: t.y,
+                    width: t.width,
+                    height: t.height,
+                };
+                let tile = render_region(&linear, region, &est, &c, density, matrix).unwrap();
+                let want = full.crop(t.x, t.y, t.width, t.height).unwrap();
+                assert_eq!(tile.width(), t.width);
+                assert_eq!(tile.height(), t.height);
+                for (a, b) in tile.data().iter().zip(want.data()) {
+                    assert_eq!(a.to_bits(), b.to_bits(), "tile {t:?}");
+                }
+            }
+            // The whole image as one region is the whole render.
+            let whole = Region {
+                x: 0,
+                y: 0,
+                width: 97,
+                height: 61,
+            };
+            let all = render_region(&linear, whole, &est, &c, density, matrix).unwrap();
+            assert_eq!(all, full);
+        }
+    }
+
+    #[test]
+    fn render_region_rejects_empty_or_outside_regions() {
+        let linear = random_linear(10, 8, 3);
+        let est = estimates();
+        let c = PrintCoefficients::new(&PrintSettings::default(), 0.0).unwrap();
+        let bad = [
+            Region {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 4,
+            },
+            Region {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 0,
+            },
+            Region {
+                x: 7,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+            Region {
+                x: 0,
+                y: 5,
+                width: 4,
+                height: 4,
+            },
+            Region {
+                x: usize::MAX,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+        ];
+        for region in bad {
+            assert!(
+                matches!(
+                    render_region(&linear, region, &est, &c, None, None),
+                    Err(Error::Invalid(_))
+                ),
+                "{region:?}"
+            );
+        }
+        // Bad estimates are rejected as by render_full.
+        let ok = Region {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        };
+        assert!(render_region(&linear, ok, &Estimates::default(), &c, None, None).is_err());
     }
 
     #[test]

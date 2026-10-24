@@ -21,6 +21,14 @@ pub enum EvalError {
     /// A reference render could not be decoded. (A frame whose own
     /// decode fails is skipped, not an error.)
     Decode(DecodeError),
+    /// A JPEG reference render could not be read or has a colour type the
+    /// eval does not read.
+    Reference {
+        /// The reference file.
+        path: PathBuf,
+        /// What went wrong.
+        message: String,
+    },
     /// Linearising a frame or building its camera matrix failed.
     Cms(CmsError),
     /// The engine refused to render a frame.
@@ -137,6 +145,9 @@ impl fmt::Display for EvalError {
         match self {
             EvalError::Corpus(e) => write!(f, "corpus: {e}"),
             EvalError::Decode(e) => write!(f, "decode: {e}"),
+            EvalError::Reference { path, message } => {
+                write!(f, "decode: reference {}: {message}", path.display())
+            }
             EvalError::Cms(e) => write!(f, "colour management: {e}"),
             EvalError::Render(e) => write!(f, "render: {e}"),
             EvalError::Io(e) => write!(f, "cannot write results: {e}"),
@@ -168,7 +179,7 @@ impl std::error::Error for EvalError {
             EvalError::Render(e) => Some(e),
             EvalError::Io(e) => Some(e),
             EvalError::Json(e) => Some(e),
-            EvalError::Mismatch { .. } => None,
+            EvalError::Mismatch { .. } | EvalError::Reference { .. } => None,
             EvalError::Tolerances(e) => Some(e),
             EvalError::Baseline { source, .. } => Some(source),
             EvalError::Roll { source, .. } => Some(source),

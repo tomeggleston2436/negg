@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "source": "frame.dng",
+  "settings": {
+    "schema_version": 1,
+    "film": {"film_base": {"mode": "auto"}, "dmax": {"mode": "auto"}, "gamma": {"mode": "auto"}},
+    "print": {"grade": 100.0, "exposure": 0.35, "cmy": [0.0, 0.01, -0.02],
+              "paper_dmin": 0.06, "paper_dmax": 2.3, "shoulder": 3.0, "toe": 6.0,
+              "black_point_compensation": false},
+    "colour": {"auto_colour": true, "output_space": "srgb"}
+  },
+  "settings_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "estimates": {
+    "dmin": [0.21, 0.55, 0.78],
+    "dmin_source": "border",
+    "dmax": [1.9, 2.2, 2.4],
+    "gamma": [1.69, 1.65, 1.62],
+    "gamma_source": "range",
+    "anchor": -0.42,
+    "x0": 1.25,
+    "cast": {"slope_r": 1.05, "offset_r": -0.01, "slope_b": 0.97, "offset_b": 0.02, "cells_used": 123}
+  },
+  "negg_version": "0.1.0"
+}

@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The library behind the `negg` command-line tool: argument types,
-//! `convert`, `batch` and roll mode, `lock`, `profile rig` and
-//! `profile film`, the corpus manifest and `eval`. The binary in
-//! `main.rs` parses arguments and maps results to exit statuses; the
-//! library is public so that integration tests (the Gate 1 timing in
-//! `tests/perf.rs`) can call [`convert::convert_frame`] directly.
+//! The library behind the `negg` command-line tool: argument types, the
+//! printing of `convert`, `batch` and `lock`, `profile rig` and
+//! `profile film`, the corpus manifest and `eval`. The convert, batch,
+//! roll and lock flows themselves live in `negg-session` (Ruling 68),
+//! re-exported from [`convert`] and [`roll`] so that callers keep their
+//! paths. The binary in `main.rs` parses arguments and maps results to
+//! exit statuses; the library is public so that integration tests (the
+//! Gate 1 timing in `tests/perf.rs`) can call [`convert::convert_frame`]
+//! directly.
 //!
-//! Owns orchestration only. Must not contain image maths; that lives in
-//! the engine crates.
+//! Owns orchestration and printing only. Must not contain image maths for rendering;
+//! that lives in the engine crates. The one exception is the eval's own
+//! scoring maths (reference alignment, metrics, comparison), which lives
+//! in `eval/` (ADR 0028).
 
 pub mod cli;
 pub mod convert;

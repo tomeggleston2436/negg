@@ -8,7 +8,10 @@
 //! - [`lab`]: the pure colour science `negg eval` scores with: sRGB
 //!   transfer functions, XYZ, CIE 1976 L*a*b* and CIEDE2000.
 //! - [`matrix`]: 3x3 maths, the Bradford adaptation, the Rec.2020 matrices
-//!   and [`camera_to_rec2020`], the step 7 entry into the working space.
+//!   and [`camera_to_rec2020`], the white-normalised camera-to-Rec.2020
+//!   matrix of ADR 0012. Since ADR 0026 RAW input does not use it for
+//!   step 7 (it enters with [`REC709_TO_REC2020`]); it stays for the rig
+//!   and print characterisation.
 //! - [`profiles`]: the linear Rec.2020 working profile and the five output
 //!   profiles, generated from primaries with Little-CMS.
 //! - [`transform`]: Little-CMS transforms out of the working space to
@@ -27,7 +30,7 @@ pub mod profiles;
 pub mod transform;
 
 pub use error::CmsError;
-pub use matrix::camera_to_rec2020;
+pub use matrix::{REC709_TO_REC2020, camera_to_rec2020};
 pub use profiles::{output_profile, profile_bytes, working_profile};
 pub use transform::{
     Intent, OutputTransform, gamma22_to_linear, icc_linearise_native, working_to_output,

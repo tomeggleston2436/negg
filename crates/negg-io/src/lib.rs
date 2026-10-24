@@ -10,8 +10,8 @@
 //!
 //! - [`write_tiff16`]: 16-bit RGB TIFF, Deflate by default, ICC in tag
 //!   34675, Orientation 1, 300 pixels per inch.
-//! - [`write_jpeg8`]: 8-bit RGB JPEG at quality 92 with the ICC profile in
-//!   APP2.
+//! - [`write_jpeg8`] and [`encode_jpeg8`]: 8-bit RGB JPEG at quality 92 (or
+//!   the caller's) with the ICC profile in APP2; the second returns the bytes.
 //! - [`Sidecar`], [`sidecar_path`], [`read_sidecar`], [`write_sidecar`]
 //!   and [`migrate`]: the schema-versioned sidecar beside each source.
 //!
@@ -37,7 +37,7 @@ pub use csv::{
     read_wedge_csv,
 };
 pub use error::IoError;
-pub use jpeg::{DEFAULT_JPEG_QUALITY, JpegOptions, write_jpeg8};
+pub use jpeg::{DEFAULT_JPEG_QUALITY, JpegOptions, encode_jpeg8, write_jpeg8};
 pub use profile::{read_film_profile, read_rig_profile, write_film_profile, write_rig_profile};
 pub use roll::{
     ROLL_SIDECAR_NAME, ROLL_SIDECAR_SCHEMA_VERSION, RollSidecar, read_roll_sidecar,

@@ -8,8 +8,10 @@ roll is rendered in roll mode, with its rig and film profile when the manifest
 names them, and the Gate 2 metrics (docs/ADR/0019) are reported: the standard
 deviation of the per-frame Dmin over each roll's inliers, grey-card neutrality
 per light source on a film roll scanned under three lights with a rig, and the
-spread of the pooled values between rolls of one stock. The corpus keeps
-pipeline changes honest, so breadth matters more than polish.
+spread of the pooled values between rolls of one stock. References exported
+by hand from Negative Lab Pro are registered onto the render first and also
+described by tone and colour (see "Negative Lab Pro references" below). The
+corpus keeps pipeline changes honest, so breadth matters more than polish.
 
 ## Target
 
@@ -23,7 +25,7 @@ corpus holding at least 10 frames with reference renders.
 corpus/
   manifest.toml        one [[frame]] entry per scan (see the field notes inside)
   frames/<roll>/       RAW scans, one directory per roll (local-only)
-  reference/           reference renders, <id>.<tool>.tif (local-only)
+  reference/           reference renders, <id>.<tool>.tif or <id>.nlp.jpg (local-only)
   LICENSE              Apache-2.0, the licence for the corpus data
 ```
 
@@ -43,7 +45,9 @@ storage when a second contributor needs it.
 - The RAW is `frames/<roll>/<id>.<ext>`, keeping the camera's own extension
   in lower case: `frames/r001/r001-03.dng`.
 - A reference render is `reference/<id>.<tool>.tif`, where tool is `negpy` or
-  `negadoctor`: `reference/r001-03.negpy.tif`.
+  `negadoctor`: `reference/r001-03.negpy.tif`. A Negative Lab Pro export is
+  `reference/<id>.nlp.jpg` (or `.tif`). Keep the tool name in the file name:
+  a tracked case whose reference file is absent is matched to its tool by it.
 - A physical film roll scanned more than once (for example under three light
   sources for Gate 2) is one `roll` per scan, all sharing a `film_roll` such
   as `f001`. Name the rig profile each scan used in `rig`.
@@ -81,6 +85,50 @@ sRGB-encoded (8 or 16 bit), because the phase 0 metrics assume sRGB encoding
 when they convert a render to Lab. Record the tool version in the `references`
 entry so a later regeneration can be told apart.
 
+## Per-frame geometry
+
+A frame whose scan shows the film holder, or which should be framed
+differently from the rest of its roll, takes a `geometry` table in its
+manifest entry, with the fields and rules of `Settings.geometry`:
+
+```
+geometry = { crop = { x = 0.04, y = 0.06, width = 0.92, height = 0.88 }, rotate_degrees = 0, flip_horizontal = false }
+```
+
+The crop is given as fractions of the scan in its decoded orientation; every
+field is optional (`analysis_buffer` defaults to 0.05). `negg eval` renders
+the frame with it as a frame override, so the crop restricts what the
+estimators see and frames the render the references are scored against; the
+roll still pools over all its frames. The grey card rect stays in fractions of
+the whole scan. A geometry that `Settings.geometry` would reject (a crop
+outside the frame, a turn other than 0, 90, 180 or 270) fails the manifest.
+
+## Negative Lab Pro references
+
+Tool `nlp` is a Negative Lab Pro export: an 8-bit sRGB JPEG (TIFF is read
+too), cropped by hand, at its own size, and possibly mirrored (a film scanned
+base side to the lens) or turned by quarter turns. It is never compared pixel
+by pixel. `negg eval` registers it onto the render (docs/ADR/0028): it tries
+the 8 orientations and, for each, a scale at which the reference covers 60%
+to 110% of the render width, every placement within the frame and a small
+rotation of up to 2 degrees (hand straightening in the editor), maximising
+the correlation of L* (and, on the finer levels, of its edges) coarse to fine, then checks the edges (the correlation
+of the L* gradient) at the best placement. The reference is resampled onto
+the render's pixels and only the overlap is scored. Per reference the results
+record the orientation, scale, rotation angle (`angle_degrees`), offset, overlap fraction and correlation, and
+describe tone and colour: L* at the 1st, 50th and 99th percentiles (contrast
+and highlight roll-off), mean C*ab (saturation) and the mean a* and b*
+difference (cast), for the render and the reference. The summary averages
+them per tool and overall, and `eval.toml` gates three of those means. A
+reference whose edge correlation is below 0.5 is listed as `unaligned` and
+left out of every mean. A NegPy or negadoctor reference whose size matches
+neither the render nor its analysis grid is registered the same way, and is
+skipped as a size mismatch when it does not register.
+
+Export from Negative Lab Pro as sRGB JPEG at full quality; any crop, size or
+orientation is fine. Give the frame a `geometry` crop that removes the film
+holder, so the render and the export show roughly the same picture.
+
 ## Private corpus
 
 Frames you can use for testing but do not want to license or publish (personal
@@ -99,6 +147,15 @@ negg eval --corpus ~/negg-private-corpus \
 Never commit a private frame's manifest entry, a reference render, a crop or a
 test fixture made from one, or an `eval-baseline.json` regenerated from it. A
 test fails if the committed manifest carries `LicenseRef-Private`.
+
+A private corpus is where Negative Lab Pro references usually live: export
+each frame from NLP as `reference/<id>.nlp.jpg`, list it in the frame's
+`references` with `tool = "nlp"` and the NLP version, give the frame the
+`geometry` crop that removes the holder, and run the eval as above. Check the
+registration rows of the table (turn, flip, scale, overlap, correlation) the
+first time; an `unaligned` entry in the skipped list means the export does not
+look like the render at all (a wrong file, or a crop outside the 60% to 110%
+range).
 
 ## Licensing
 

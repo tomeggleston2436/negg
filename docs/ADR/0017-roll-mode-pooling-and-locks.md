@@ -4,6 +4,8 @@
 
 Proposed, 2026-10-23 (controller rulings 47 to 50 and 59 pending owner review).
 
+Superseded in part by ADR 0029 (Rulings 105 and 106): a frame whose own Dmin is a Percentile estimate never takes a pooled Dmin above its own (amends Ruling 59), `gamma_f` uses the Dmin each frame renders with (amends the gamma rule of Ruling 48), and the pooled cast is applied only when the pooled Dmin came from Border frames (amends Ruling 49).
+
 ## Context
 
 `docs/MATHS.md` steps 3, 4 and 6 say that Dmin, gamma and the cast fit are pooled across a roll with outlier rejection, and the plan asks for per-frame lock and override with `RollSettings` inheritance. The plan does not define what a roll is, how frames are chosen as candidates, the confidence weight and inlier rule for the cast pool (a `TODO(spec)` in step 6), or how a user lock interacts with the pool.

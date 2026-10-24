@@ -50,7 +50,7 @@ The steps are numbered in the order the plan presents them. In the per-pixel pip
 | 5 | `negg-render` | 1 |
 | 6 | `negg-render` | 1; roll mode in phase 2 (cast pooling in `negg-film`) |
 | 7 | `negg-cms` | 1 |
-| 8 | `negg-io` | 1; linear DNG in phase 4 |
+| 8 | `negg-io`; geometry in `negg-types` | 1; linear DNG in phase 4; geometry in phase 3 |
 
 A GPU preview kernel for steps 4 to 7 arrives in phase 4 and is tested against the CPU path on every CI run (ground rule 3).
 
@@ -67,7 +67,7 @@ Rules:
 I_c = (raw_c - black_c) / (white_c - black_c)
 ```
 
-- Record the camera-to-XYZ matrix from `rawler` for use in step 7, but do not apply it here. Record with it the CIE XYZ of the illuminant the matrix was measured under (`Decoded::matrix_white`: D65, D50, D55, D75 or A from the CIE tables; D65 with a warning for any other) (ADR 0012, Proposed).
+- Record the camera-to-XYZ matrix from `rawler`; it is not applied here and, since ADR 0026, not in step 7 either (kept for the rig and print characterisation). Record with it the CIE XYZ of the illuminant the matrix was measured under (`Decoded::matrix_white`: D65, D50, D55, D75 or A from the CIE tables; D65 with a warning for any other) (ADR 0012, Proposed).
 - 16-bit TIFF input: honour the embedded ICC profile if it is a matrix/TRC profile (linearise with its TRC); otherwise assume linear if the file says so, else assume gamma 2.2 and emit a warning. Never downconvert to 8-bit.
 - Demosaic is bilinear for Bayer CFAs, written in `negg-decode`; X-Trans and other CFAs are unsupported in phase 1 and decode returns `Unsupported`. TIFF linearisation (the ICC profile or the gamma 2.2 fallback) is done by the caller through `negg-cms`; the decoder passes the ICC bytes and a transfer flag up, so its output is linear only when that flag says so (ADR 0010, Proposed). An embedded matrix/TRC profile is honoured by undoing its TRC per channel in the profile's own primaries, so steps 3 to 6 see the scan's channels; its colorants give the step 7 matrix. LUT-based profiles are unsupported (ADR 0012, Proposed).
 
@@ -162,6 +162,16 @@ D_c = -log10(max(I_c, 1e-6))
 
 **Analysis grid.** Downsample the frame to about 1024 px on the long side using block medians (not means), then compute every statistic in this step and in step 6 on the grid, never on the full-resolution image.
 
+**Analysis area (phase 3; Rulings 70, 90 and 91, ADR 0021).** With `geometry.crop = None` everything in this step and in step 6 uses the whole grid, exactly as above, and `analysis_buffer` is ignored. With a crop `r` (normalised to the source frame in its decoded orientation) two cell sets are taken from the same whole-frame grid, so block size and cells match the no-crop case:
+
+- The **crop pixel rect** is `x0 = round(x W)` clamped to `[0, W - 1]` and `x1 = round((x + width) W)` clamped to `[x0 + 1, W]`, likewise for y (round half away from zero, in `f64`).
+- The **analysis pixel rect** is the crop pixel rect shrunk on every side by `round(analysis_buffer * min(x1 - x0, y1 - y0))` pixels, leaving at least 1 pixel in each direction.
+- A grid cell with block size `b` is **in a rect** when its centre in source pixels, `(i b + min((i + 1) b, W)) / 2` for column `i` (rows alike), lies inside the rect. The **crop grid** is the cells in the crop rect; the **analysis grid** is the cells in the analysis rect.
+- The crop grid feeds Dmin, including the border search (the outer 15% band is the outer 15% of the crop grid, unbuffered, so a tight crop usually falls back to the percentile path), and the Dmin pool candidates. The analysis grid feeds Dmax, the exposure anchor (step 5), the step 6 cast fit, and the roll pool inputs derived from Dmax and the density grid (cast pool and gamma).
+- Fewer than 64 cells in the analysis grid is an error ("crop too small to analyse").
+
+Why: a scan with the film holder in shot pins Dmax at the 6.0 cap and renders dark; the film area must be what the analysis sees. `analysis_buffer` keeps ragged crop edges (dust, a sliver of holder) out of Dmax and the cast fit.
+
 **Dmin (film base) per channel.** If the frame has a detectable unexposed border, `Dmin_c` is the median of the flat border cells in the outer 15% band of the grid, where a cell is flat if its std/mean is below 0.03. Otherwise `Dmin_c` is the 0.5th percentile of `D_c` over the grid. The estimator must expose which of the two sources was used.
 
 The border is detectable, and the border path used, only when at least 20 cells and at least 5% of the cells in the outer 15% band are flat and the per-channel median density of those flat cells is at most 0.05 log-D above the 0.5th-percentile density of the whole grid; otherwise the percentile path is used, and the estimator reports which path was taken (ADR 0007, Proposed).
@@ -172,10 +182,12 @@ The border is detectable, and the border path used, only when at least 20 cells 
 
 - **Dmin candidates:** the frames whose `dmin_source` is Border when at least 2 non-excluded frames are Border, else all non-excluded frames.
 - **Pool:** take the per-channel median over the candidates. Reject a frame when any channel lies more than 0.3 log-D from that median (Chebyshev distance). The pooled value is the per-channel median of the inliers. No inliers means no pooled value: the frames keep their own estimates and a warning is issued.
-- **Gamma:** per frame `gamma_f = max(Dmax_f - Dmin_pooled, 0.05)` per channel (the frame's own Dmin if none is pooled), pooled by the same rule over all non-excluded frames. This is the step 4 fallback applied to the pooled base. The pooled gamma G also supplies `gamma_G` for the neutral-patch fit and the film correction in step 4.
+- **Gamma:** per frame `gamma_f = max(Dmax_f - Dmin_f, 0.05)` per channel, with `Dmin_f` the Dmin the frame renders with (below: fixed, else the pooled Dmin as capped for a percentile frame, else its own), pooled by the same rule over all non-excluded frames (Ruling 48 as amended by Ruling 105; ADR 0029). This is the step 4 fallback applied to the pooled base. The pooled gamma G also supplies `gamma_G` for the neutral-patch fit and the film correction in step 4.
 - **Inlier frames for Gate 2** are the Dmin inliers.
 
 The cast pool is defined in step 6. Precedence per estimate: settings Fixed, then film correction (gamma and offsets), then the roll pool, then the frame's own estimate (R-lock, Ruling 50). A frame whose quantity is Fixed (role Excluded) neither feeds nor takes that pool. A frame Rejected from a pool does take the pooled value when it is rendered (Ruling 59): the Rejected role only keeps it out of the median, so an outlier is rendered with the roll's value, and a user who wants it to keep its own estimate fixes it with `negg lock`. When no pooled value exists (no inliers), every frame keeps its own estimate (Ruling 48).
+
+**Percentile frames (Ruling 105, amends Ruling 59; ADR 0029).** A frame whose own Dmin source is Percentile never takes a pooled Dmin above its own estimate: per channel it renders with `Dmin_c = min(own_c, pooled_c)`, Rejected or not. A percentile estimate is the frame's thinnest scene density, not a measured base, so a pool above it would push part of the frame's shadows below the base and the `d >= 0` clamp of step 4 would print them as one flat grey. A Border frame takes the pooled value as above, and a fixed base wins over both. The frame's `dmin_source` is `roll` when every channel took the pooled value (ties count as pooled), `percentile` when every channel took its own estimate, and `roll_min` when the channels differ.
 
 Constants:
 
@@ -190,6 +202,8 @@ Constants:
 | border minimum flat fraction | 5% | Of the cells in the outer 15% band, also needed. Controller choice, `TODO(measure)` (ADR 0007, Proposed). |
 | border Dmin tolerance | 0.05 log-D | Flat-cell median at most this far above the grid's 0.5th percentile, per channel. Controller choice, `TODO(measure)` (ADR 0007, Proposed). |
 | Dmax percentile | 99.5 | Always. |
+| analysis buffer | 0.05 | Fraction of the crop's short side trimmed on every side for analysis only; valid range 0 to 0.2; ignored without a crop. Controller choice, `TODO(measure)` (ADR 0021). |
+| minimum analysis cells | 64 | Fewer is an error. Controller choice (ADR 0021). |
 | roll reject threshold | 0.3 log-D | Chebyshev distance of a frame's per-channel value from the across-frame median, for Dmin and gamma. |
 | roll Border preference | at least 2 non-excluded Border frames | Else all non-excluded frames are Dmin candidates. Controller choice, `TODO(measure)` (ADR 0017, Proposed). |
 | pooled gamma floor | 0.05 log-D | `gamma_f = max(Dmax_f - Dmin_pooled, 0.05)`. Same value as the step 4 floor. |
@@ -303,6 +317,18 @@ clamped to [2, 10].
 
 The anchor `a` is one scalar: on the grid after step 4, luma is `l = (e_R + e_G + e_B) / 3`, a cell is textured when its block's std/mean is at least 0.03, midtones are the textured cells whose `l` lies between the 25th and 75th percentiles of `l` over textured cells, and `a` is the 10% trimmed mean of `l` over those cells (the median of `l` over all grid cells if fewer than 16 midtone cells exist). `x_0` is solved analytically so that `x = a * k + x_0` prints at `P = 0.75`, using `softplus_inv(y) = ln(e^y - 1)`: `v = Dmax_p - softplus_inv(a_sh * (Dmax_p - 0.75)) / a_sh`, `x_target = Dmin_p + softplus_inv(a_hl * (v - Dmin_p)) / a_hl`, `x_0 = x_target - a * k`; the user's `exposure` is added to `x_0` and `cmy_c` to `x_c`, positive meaning more print density (darker) in both cases (ADR 0008, Proposed).
 
+**Black point (ADR 0030, Ruling 107).** The anchor alone does not tie the film base to black: when the anchor sits high (close to `e = 0`, as in a frame whose textured midtones are thin shadows under a flat sky) the base prints as a lifted grey. `x_0` is therefore floored so that the film base, `e = 0`, prints at least at `P_black`, the knee of the toe (ADR 0031, which replaced the fixed `P_black = 2.0` of ADR 0030):
+
+```
+P_black    = Dmax_p - ln(2) / a_sh                                  # knee of the toe: 2.1845 with the defaults
+x_0_anchor = x_target - a * k                                       # as above
+v_black    = Dmax_p - softplus_inv(a_sh * (Dmax_p - P_black)) / a_sh   # = Dmax_p exactly
+x_black    = Dmin_p + softplus_inv(a_hl * (v_black - Dmin_p)) / a_hl
+x_0        = max(x_0_anchor, x_black)
+```
+
+The knee is where the straight line of the curve meets paper black: there `v = Dmax_p` and the toe's softplus is `ln 2`, so `P_black` is derived from the paper constants and `x_black = Dmin_p + softplus_inv(a_hl * (Dmax_p - Dmin_p)) / a_hl`. With the default grade the negative's normalised span `e` in `[-1, 0]` then prints from `P = 0.179` (above paper white, so the densest highlights keep detail) to `P = 2.1845`. At `e = 0` the paper exposure is `x = x_0`, so `k` drops out and `x_black` depends on the paper constants only, never on scene content (2.2996 with the defaults). The floor is active when `x_black > x_0_anchor`, which with the defaults is when the anchor lies above about `e = -0.632`; then the base prints at `P_black` and the anchor prints darker than `P = 0.75`. When the anchor already prints the base at or beyond `P_black` nothing changes. A softer toe (smaller `a_sh`) lowers `P_black = Dmax_p - ln(2) / a_sh`, so the base prints lighter at the same `x_0`; `x_black` itself does not depend on `a_sh`. The floor is inactive whenever `P_black` is at or below the anchor's print density (0.75 by default), because then `x_black <= x_0_anchor`. Black point compensation, when enabled, acts on `out_c` after the floor, so the base lands darker than the floor's target `P_black`. The user's `exposure` and `cmy_c` are added after the floor, so an explicit exposure still moves the whole print, base included (a negative exposure can lift the base below `P_black` on purpose). The grade `k` still pivots around the anchor when the floor is off and around the base when it is on. `P_black` is reachable for every valid paper (`Dmax_p > Dmin_p`), so the floor is always defined; when the anchor is unreachable `x_0` is not finite and the frame is rejected as before. The floor is not stored in `Estimates` (`x0` is the floored value); `--dump-stats` prints `black point floor: on` or `off`.
+
 **Optional black point compensation**, applied to `out_c`:
 
 ```
@@ -326,6 +352,7 @@ Constants:
 | grade `R` | 115 | Range 50 to 180. |
 | `k` | `290 / R` | Clamped to [2, 10]. `range` in `2.9 * range / (R/100)` is 1.0 by construction; the 2.9 has no cited source, `TODO(measure)` (ADR 0006, Proposed). |
 | exposure anchor | `P = 0.75` | `x_0` is solved so the anchor lands here. |
+| black point `P_black` | `Dmax_p - ln(2) / a_sh` (2.1845) | The film base (`e = 0`) prints at least here: `x_0 = max(x_0_anchor, x_black)` (ADR 0030). Derived: the knee of the toe, where the curve's straight line meets paper black (ADR 0031, replacing the fixed 2.0 of ADR 0030). |
 | anchor textured threshold | std/mean >= 0.03 | Complement of the step 3 flat threshold (ADR 0008, Proposed). |
 | anchor midtone band | 25th to 75th percentile | Of luma over textured cells. Controller choice, `TODO(measure)` (ADR 0008, Proposed). |
 | anchor trim | 10% | Dropped from each end of the midtone luma values. Controller choice, `TODO(measure)` (ADR 0008, Proposed). |
@@ -339,61 +366,66 @@ Why: a darkroom print is a second film-like response applied to the positive: a 
 
 Phase 1, crate `negg-render`. Roll mode is phase 2.
 
-On the normalised log image from step 4 (`e_c` on the analysis grid):
+On the normalised log image from step 4 (`e_c` on the analysis grid), the cast is fitted as one line per channel against G and applied before step 5. The cells it is fitted on are chosen in two stages, because a cast moves neutral cells in hue and in chroma, so neither can be read before the cast is known (ADR 0027):
 
-1. Split the cells into three luma bands (shadows, mids, highlights) by the 20th, 50th and 80th percentiles.
-2. In each band take the lowest-chroma 30% of cells, excluding cells whose hue falls in the foliage sector (green, 90 to 160 degrees) or the sky sector (blue, 200 to 260 degrees).
-3. Fit R against G and B against G as a line through those cells, giving a slope and an offset for each of R and B. Clamp the slope deviation from 1 to plus or minus 0.2.
+1. Provisional selection: the lowest-chroma 30% of all cells, read on the uncorrected cells, with no luma bands and no hue sectors. Fit.
+2. Refinement, at most 4 times: correct every cell with the current fit, then split the corrected cells into three luma bands (shadows, mids, highlights) by the 20th, 50th and 80th percentiles; in each band drop cells whose corrected hue falls in the foliage sector (green, 90 to 160 degrees) or the sky sector (blue, 200 to 260 degrees) and cells whose corrected chroma exceeds 0.1, and keep the lowest-chroma 30% of the rest. Pool the bands and refit. Stop when the selection no longer changes; if fewer than 8 cells survive, keep the previous fit.
+3. Each fit is R against G and B against G as a line through the selected (uncorrected) cells, giving a slope and an offset for each of R and B, with the slope bounded to [0.5, 2].
 4. Apply the result as per-channel log-affine corrections to `e_R` and `e_B` before step 5.
 
-Luma and hue are read in print-space orientation, on `p = -e` per grid cell, because after ADR 0011 a more negative `e_c` prints brighter in channel `c`: a cell that prints green has `p_G` largest, and the shadows are the cells that print darkest (ADR 0009, amended by Ruling 30). Luma is `l = (p_R + p_G + p_B) / 3`, chroma is `c = max(p) - min(p)` (equal to `max(e) - min(e)`), hue is the standard HSV hue angle of `p` (undefined when `c < 1e-4`, in which case the cell cannot fall in an excluded sector and is kept), the bands are `[p0, p20)`, `[p20, p80)` and `[p80, p100]` of `l` with the 50th percentile as the centre of the mids band rather than a boundary, and the hue exclusion is applied before the 30% chroma cut. The kept cells of all three bands are pooled and fitted by ordinary least squares as `e_R = s_R * e_G + o_R` and `e_B = s_B * e_G + o_B` with the slopes clamped to [0.8, 1.2] (when a slope is clamped the offset is recomputed through the centroid of the pooled cells, `o = mean(e_target) - s_clamped * mean(e_G)`, so the selected cells still land on `e_G` on average (ADR 0009, amended)), and the correction is applied to the full-resolution image as `e_R <- (e_R - o_R) / s_R` and `e_B <- (e_B - o_B) / s_B` so the selected cells land on `e_G`; if fewer than 8 cells survive, the correction is the identity and the estimator says so (ADR 0009, Proposed).
+Luma, chroma and hue are read in print-space orientation, on `p = -e` of a cell (the uncorrected cell in stage 1, the corrected cell `(e_R - o_R) / s_R, e_G, (e_B - o_B) / s_B` in stage 2), because after ADR 0011 a more negative `e_c` prints brighter in channel `c`: a cell that prints green has `p_G` largest, and the shadows are the cells that print darkest (ADR 0009, amended by Ruling 30). Luma is `l = (p_R + p_G + p_B) / 3`, chroma is `c = max(p) - min(p)` (equal to `max(e) - min(e)`), hue is the standard HSV hue angle of `p` (undefined when `c < 1e-4`, in which case the cell cannot fall in an excluded sector and is kept), the bands are `[p0, p20)`, `[p20, p80)` and `[p80, p100]` of the corrected `l` with the 50th percentile as the centre of the mids band rather than a boundary, and the hue and chroma exclusions are applied before the 30% chroma cut. Chroma ties are broken by cell order; the 30% is rounded up. Each fit is ordinary least squares, `e_R = s_R * e_G + o_R` and `e_B = s_B * e_G + o_B`, on the uncorrected `e` of the selected cells, with the slope bounded to [0.5, 2] (and 1 when their `e_G` has no spread at all). The returned fit reports a slope only when its own cells identify one: when their `e_G` has a standard deviation below 0.03, its slopes are set to 1. The provisional fit and the refits in between are not held to that rule, because under a slope cast the lowest-chroma cells cluster where the fitted lines cross neutral. After the bound or the rule the offset is taken through the centroid of the selected cells, `o = mean(e_target) - s * mean(e_G)`, so they still land on `e_G` on average (ADR 0009, amended; ADR 0027). The correction is applied to the full-resolution image as `e_R <- (e_R - o_R) / s_R` and `e_B <- (e_B - o_B) / s_B` so the selected cells land on `e_G`. If the provisional selection has fewer than 8 cells, the correction is the identity and the estimator says so; otherwise `cells_used` is the size of the selection the returned fit was made on.
 
-**Roll mode (phase 2).** Each non-excluded frame's cast is fitted on its own analysis grid inverted with the pooled Dmin and gamma (and the film correction offsets, if any), and the fits are pooled by confidence-weighted median (R-cast-pool, Ruling 49; ADR 0017, Proposed):
+A frame that is one colour everywhere cannot be told apart from a grey scene under a cast of that colour and is corrected to neutral (Ruling 100); sky and foliage beside neutrals are excluded in the expected case, where the provisional pull is roughly along their own hue; a cell near a sector edge pulled at an angle can leave the sector (ADR 0027).
+
+**Roll mode (phase 2).** Each non-excluded frame's cast is fitted on its own analysis grid inverted with its Dmin and gamma in effect (the pooled values, with a percentile frame's Dmin capped as in step 3, and the film correction offsets, if any), and the fits are pooled by confidence-weighted median (R-cast-pool, Ruling 49; ADR 0017, Proposed). The cast is pooled only when the roll's pooled Dmin came from Border frames, that is every Dmin candidate is a Border frame (Ruling 106; ADR 0029): only then do the frames share a true base reference. Otherwise no cast is pooled, every non-excluded frame's cast role is Unused, and each frame is corrected with its own fit (`cast_source = fit`, or `identity` when fewer than 8 cells survive).
 
 - **Candidates:** frames not Rejected for Dmin or gamma in step 3, with at least one cell used in the fit. A frame with `colour.cast` fixed, or with `auto_colour` off, is Excluded.
-- **Confidence weight:** the number of cells used in the frame's fit, `cells_used`.
+- **Confidence weight:** the number of cells used in the frame's fit, `cells_used` (since ADR 0027, the size of the final selection; the definition of the weight is unchanged).
 - **Pooled value:** each of `slope_r`, `offset_r`, `slope_b` and `offset_b` is the weighted median of its own values: sort ascending and take the first value at which the cumulative weight reaches half the total weight. The pooled `cells_used` is the sum of the candidate weights. No candidates means no pooled cast.
 
-A pooled cast is used by frames that are not fixed, in place of their own fit, including frames Rejected from the pool (Ruling 59). The precedence is in step 3. With a film correction in use the cast is the identity (R-contrast), nothing is pooled and every non-fixed frame has `cast_source = Identity`. The `cast_source` of each frame records which of Fit, Fixed, Roll or Identity applied (R-cast-source, Ruling 55; ADR 0018, Proposed): Identity when auto colour is off, fewer than 8 cells survive, or a film correction is in use.
+A pooled cast, when there is one, is used by frames that are not fixed, in place of their own fit, including frames Rejected from the pool (Ruling 59). The precedence is in step 3. With a film correction in use the cast is the identity (R-contrast), nothing is pooled and every non-fixed frame has `cast_source = Identity`. The `cast_source` of each frame records which of Fit, Fixed, Roll or Identity applied (R-cast-source, Ruling 55; ADR 0018, Proposed): Identity when auto colour is off, fewer than 8 cells survive the provisional selection, or a film correction is in use.
 
 Constants:
 
 | Name | Default | Notes |
 | --- | --- | --- |
-| luma band percentiles | 20 / 50 / 80 | Of luma on `-e`. 20 and 80 are the band boundaries; 50 marks the centre of the mids band (ADR 0009, Proposed). |
-| lowest-chroma fraction | 30% | Per band. |
-| foliage hue exclusion | 90 to 160 degrees | Green in the print: hue of `-e` (ADR 0009, amended). |
-| sky hue exclusion | 200 to 260 degrees | Blue in the print: hue of `-e` (ADR 0009, amended). |
-| slope deviation clamp | plus or minus 0.2 | On the fitted slope of R and B against G. |
+| luma band percentiles | 20 / 50 / 80 | Of luma on `-e` after the current fit. 20 and 80 are the band boundaries; 50 marks the centre of the mids band (ADR 0009, Proposed; ADR 0027). |
+| lowest-chroma fraction | 30% | Of all cells in the provisional selection; per band in a refinement (ADR 0027). |
+| foliage hue exclusion | 90 to 160 degrees | Green in the print: hue of `-e` after the current fit (ADR 0009, amended; ADR 0027). |
+| sky hue exclusion | 200 to 260 degrees | Blue in the print: hue of `-e` after the current fit (ADR 0009, amended; ADR 0027). |
+| neutral chroma maximum | 0.1 | In a refinement, a cell whose chroma after the current fit exceeds this is dropped. Controller choice, `TODO(measure)` (ADR 0027). |
+| refinements | at most 4 | Stops early when the selection no longer changes. Controller choice, `TODO(measure)` (ADR 0027). |
+| slope bound | 0.5 to 2 | On the fitted slope of R and B against G; the Fixed cast validation range (ADR 0027, Ruling 99). |
+| minimum `e_G` spread for a slope | 0.03 | Standard deviation of `e_G` over the cells of the returned fit; below it the returned slopes are 1 (the mitigation for dark frames). Controller choice, `TODO(measure)` (ADR 0027). |
 | chroma floor | 1e-4 | Below this hue is undefined and the cell is kept. Controller choice, `TODO(measure)` (ADR 0009, Proposed). |
-| minimum fit cells | 8 | Below this the correction is the identity. Controller choice, `TODO(measure)` (ADR 0009, Proposed). |
+| minimum fit cells | 8 | Below this in the provisional selection the correction is the identity; below this in a refinement the previous fit is kept. Controller choice, `TODO(measure)` (ADR 0009, Proposed; ADR 0027). |
 | auto colour | on | Default lives in `ColourSettings` in `negg-types`. |
 | roll cast weight | `cells_used` | Weight of each frame in the weighted median (R-cast-pool). Controller choice, `TODO(measure)` (ADR 0017, Proposed). |
 | fixed cast slopes | finite, in [0.5, 2] | `colour.cast` Fixed values; offsets finite (validation in `negg-types`). |
 
-Why: after step 4 a neutral surface should have `e_R = e_G = e_B`. Whatever residual cast remains is, to first order, an affine error in log space per channel, so fitting a line through the most nearly neutral cells and removing it is the smallest correction that fixes it. Working on three luma bands stops a cast in the shadows from being corrected at the expense of the highlights. Excluding foliage and sky hues stops a frame that is mostly grass or mostly sky from being "corrected" to grey. All of this runs on the block-median grid (ground rule 5), so dust does not pull the fit.
+Why: after step 4 a neutral surface should have `e_R = e_G = e_B`. Whatever residual cast remains is, to first order, an affine error in log space per channel, so fitting a line through the most nearly neutral cells and removing it is the smallest correction that fixes it. Working on three luma bands stops a cast in the shadows from being corrected at the expense of the highlights. Excluding foliage and sky hues stops grass or sky beside neutrals from being "corrected" to grey. Reading hue and chroma only after a provisional correction lets a blue or green cast be removed at all (a cast moves the neutrals into the sectors), and rejecting cells that stay saturated after it stops a band full of one strong colour from being fitted as grey (ADR 0027). All of this runs on the block-median grid (ground rule 5), so dust does not pull the fit.
 
 ## Step 7: colour management
 
 Phase 1, crate `negg-cms`.
 
-The working space for all post-inversion adjustments is linear Rec.2020 with a D65 white point (decision 2, `docs/ADR/0002-working-space-rec2020.md`). It is entered via the camera matrix recorded in step 1, applied **after** inversion to `out_c`:
+The working space for all post-inversion adjustments is linear Rec.2020 with a D65 white point (decision 2, `docs/ADR/0002-working-space-rec2020.md`). It is entered **after** inversion, from `out_c`, by one of three matrices according to the input:
+
+- **RAW input (ADR 0026, Ruling 96).** The print channels are synthetic tone curves of dye densities, not camera responses to scene light, so the camera's scene matrix does not describe them and is **not applied**. The channels are read as Rec.709/sRGB primaries with a D65 white and mapped with the ITU-R BT.2087 matrix (`negg_cms::REC709_TO_REC2020`):
 
 ```
-camera RGB -> XYZ -> Rec.2020
+M = [ 0.6274  0.3293  0.0433 ]
+    [ 0.0691  0.9195  0.0114 ]
+    [ 0.0164  0.0880  0.8956 ]
 ```
 
-with a Bradford chromatic adaptation to D65. The phase 2 rig fit does not replace it (R-step7, below); this is the best available characterisation of the camera.
+  This is `XYZ_TO_REC2020 * REC709_TO_XYZ`; both spaces share D65, so no adaptation is needed and every row sums to 1 (neutral to neutral). It holds until a measured print characterisation exists. The camera matrix recorded in step 1 stays in the decode for the rig and that characterisation.
+- **TIFF with an embedded matrix/TRC ICC profile.** `M = XYZ_TO_REC2020 * Bradford(D50 -> D65) * C`, with `C` the profile's colorant matrix (columns rXYZ, gXYZ, bXYZ, relative to the D50 profile connection space), white-normalised by construction (ADR 0012, Proposed).
+- **Untagged TIFF.** No matrix; the output stays in the scan's own space.
 
-The matrix is white-normalised, so that a camera neutral (equal channels after steps 4 to 6) lands on a Rec.2020 neutral. With `X2C` the recorded XYZ-to-camera matrix and `W` the XYZ of its illuminant:
+**Superseded: the camera matrix entry.** ADR 0012 built the RAW entry as `M = XYZ_TO_REC2020 * Bradford(W -> D65) * inverse(X2C) * diag(X2C * W)`, with `X2C` the recorded XYZ-to-camera matrix and `W` the XYZ of its illuminant. It mapped camera neutrals to neutrals but roughly doubled chroma and, through its negative off-diagonal terms, drove saturated blues out of gamut (ADR 0026). `negg_cms::camera_to_rec2020` remains available for the rig and print characterisation.
 
-```
-M = XYZ_TO_REC2020 * Bradford(W -> D65) * inverse(X2C) * diag(X2C * W)
-```
-
-so camera `(1, 1, 1)` maps to `W`, then to D65, then to Rec.2020 `(1, 1, 1)`. For a TIFF linearised through a matrix/TRC ICC profile in its own primaries (step 1), the entry is `M = XYZ_TO_REC2020 * Bradford(D50 -> D65) * C`, with `C` the profile's colorant matrix (columns rXYZ, gXYZ, bXYZ, relative to the D50 profile connection space), which is white-normalised by construction (ADR 0012, Proposed).
-
-**Unchanged by a rig profile (R-step7, Ruling 41; ADR 0015, Proposed).** The white-normalised matrix above is applied to `out_c` whatever the rig: flat field, unmix and the density model do not alter it. No phase 2 measurement characterises the colorimetry of the positive, a wedge constrains only the grey axis, and white normalisation already maps neutrals to neutrals, so neutrality does not depend on this choice. Until a measured characterisation exists, saturation and hue come from the camera matrix alone.
+**Unchanged by a rig profile (R-step7, Ruling 41; ADR 0015, Proposed).** The step 7 matrix is applied to `out_c` whatever the rig: flat field, unmix and the density model do not alter it. No phase 2 measurement characterises the colorimetry of the positive, and a wedge constrains only the grey axis. Until a measured characterisation exists, saturation and hue for RAW input come from the Rec.709 reading above.
 
 **Export.** Convert via `lcms2` to sRGB, Adobe RGB, Display P3, ProPhoto or Rec.2020, with the ICC profile embedded in the output file.
 
@@ -404,8 +436,8 @@ Constants:
 | Name | Default | Notes |
 | --- | --- | --- |
 | working space | linear Rec.2020, D65 | Decision 2. Not ProPhoto. |
-| chromatic adaptation | Bradford | Matrix illuminant white (or the ICC D50) to D65. |
-| matrix white normalisation | `diag(X2C * W)` | Camera `(1, 1, 1)` is the illuminant white (ADR 0012, Proposed). |
+| chromatic adaptation | Bradford | The ICC D50 to D65 (ICC TIFF only; RAW needs none). |
+| RAW print primaries | Rec.709, D65 | BT.2087 matrix to Rec.2020 (ADR 0026). |
 | display fallback | sRGB | When no monitor profile is known. |
 | output space | sRGB | Default lives in `ColourSettings` in `negg-types`. |
 
@@ -418,11 +450,22 @@ Phase 1, crate `negg-io`. Linear DNG is phase 4.
 - 16-bit TIFF: deflate compression, ICC profile in tag 34675, orientation 1, resolution tags present.
 - 8-bit JPEG with the ICC profile embedded.
 - Linear DNG (phase 4), written with the `tiff` crate. The AGPL `dng` crate is forbidden.
-- Sidecar `frame.negg.json` beside the source file containing the settings, the estimated `Dmin_c`, `Dmax_c` and `gamma_c`, the source of each estimate (`dmin_source`: border, percentile, fixed, roll or profile; `gamma_source`: range, fixed, neutral_fit, roll or profile; `cast_source`: fit, fixed, roll or identity), and a `schema_version`.
+- Sidecar `frame.negg.json` beside the source file containing the settings, the estimated `Dmin_c`, `Dmax_c` and `gamma_c`, the source of each estimate (`dmin_source`: border, percentile, fixed, roll, roll_min or profile; `gamma_source`: range, fixed, neutral_fit, roll or profile; `cast_source`: fit, fixed, roll or identity), and a `schema_version`.
+
+**Geometry (phase 3; Ruling 70, ADR 0021).** After step 7 (`render_full`) and before the output transform, the export applies the frame's geometry to the linear working-space image: crop (the crop rect itself, no analysis buffer, pixels as in step 3), then the clockwise rotation (0, 90, 180 or 270 degrees), then the mirror left to right of the rotated image. This only moves pixels and changes no value, so it lives in `negg-types` (`Geometry::apply`). An identity geometry (no crop, rotation 0, no flip) skips the copy, so exports without geometry are byte-identical to earlier phases. Arbitrary-angle rotation is deferred to phase 4.
+
+**Preview (phase 3; Rulings 73 to 76, ADR 0022).** The preview is not an export and never feeds one.
+
+- *Pyramid:* level 0 is the full linear image after steps 1 and 2; level `n` is `downscale_half` of level `n - 1`, a 2 x 2 box mean in linear light (odd edge rows or columns average the pixels that exist; size `ceil(w/2) x ceil(h/2)`), until `max(w_n, h_n) <= 512`.
+- *Tiles:* 512 x 512 regions of a level, rendered by `render_region` with the frame's plan (estimates from the analysis grid, step 3) and then converted to 8-bit sRGB with perceptual intent and alpha 255. Display is sRGB only in phase 3. Level 0 tiles assembled are byte-equal to the 8-bit conversion of the full render; higher levels are a render of a downscale, not a downscale of a render.
+- *Scopes:* from the 8-bit sRGB render of the whole frame at the first level with long side at most 1024, with geometry applied. Histogram: 256 bins each for R, G, B and luma `round(0.2126 R + 0.7152 G + 0.0722 B)`. Parade: per channel, 256 columns (`floor(x * 256 / width)`) by 256 code values. Vectorscope: with `R', G', B'` as codes over 255, `Y' = 0.2126 R' + 0.7152 G' + 0.0722 B'`, `Cb = (B' - Y') / 1.8556`, `Cr = (R' - Y') / 1.5748`, column `min(255, floor((Cb + 0.5) * 256))`, row `min(255, floor((0.5 - Cr) * 256))`. Counts are u16 and saturate.
+- *Thumbnail:* the full render of the cached analysis grid (about 1024 px), geometry applied, 8-bit sRGB, JPEG quality 85.
+
+The schema versions are now 3 for settings and the frame sidecar (adds `geometry`) and 2 for the roll sidecar (ADR 0021). Embedded ICC profiles are deterministic: the header creation date is fixed at 2026-01-01 00:00:00 and the profile ID is zeroed (ADR 0022).
 
 This is the only place the pipeline quantises: `f32` is converted to 16-bit or 8-bit integers here and nowhere else (ground rule 4).
 
-TIFF resolution tags are 300 pixels per inch with `ResolutionUnit` inch; JPEG quality is 92 with the encoder's default chroma subsampling; the sidecar fields are `schema_version`, `source` (file name only), `settings`, `settings_hash`, `estimates` (optional: `dmin`, `dmin_source`, `dmax`, `gamma`, `gamma_source`, `neutral_offset`, `anchor`, `x0`, `cast`, `cast_source`), `overrides` (phase 2: the frame's `FrameOverrides`, omitted when empty), `roll` (phase 2: `roll.negg.json` when rendered in roll mode) and `negg_version` (ADR 0010, Proposed; schema version 2 per ADR 0018, Proposed). Version 1 sidecars migrate with `neutral_offset = [0, 0, 0]` and a `cast_source` of Fit when `cast.cells_used > 0`, else Identity. A roll sidecar `roll.negg.json` (its own schema version 1) beside the frames holds the shared `RollSettings`, the pool and the frame list (ADR 0017, Proposed).
+TIFF resolution tags are 300 pixels per inch with `ResolutionUnit` inch; JPEG quality is 92 with the encoder's default chroma subsampling; the sidecar fields are `schema_version`, `source` (file name only), `settings`, `settings_hash`, `estimates` (optional: `dmin`, `dmin_source`, `dmax`, `gamma`, `gamma_source`, `neutral_offset`, `anchor`, `x0`, `cast`, `cast_source`), `overrides` (phase 2: the frame's `FrameOverrides`, omitted when empty), `roll` (phase 2: `roll.negg.json` when rendered in roll mode) and `negg_version` (ADR 0010, Proposed; schema version 3 since phase 3 per ADR 0018 and ADR 0021). Version 1 sidecars migrate with `neutral_offset = [0, 0, 0]` and a `cast_source` of Fit when `cast.cells_used > 0`, else Identity. A roll sidecar `roll.negg.json` (its own schema version, 2 since phase 3) beside the frames holds the shared `RollSettings`, the pool and the frame list (ADR 0017, Proposed).
 
 Constants:
 

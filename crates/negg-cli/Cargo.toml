@@ -13,12 +13,15 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true }
+# JPEG reading for Negative Lab Pro reference renders in `negg eval`.
+image = { workspace = true, default-features = false, features = ["jpeg"] }
 negg-calib = { path = "../negg-calib", version = "0.0.0" }
 negg-cms = { path = "../negg-cms", version = "0.0.0" }
 negg-decode = { path = "../negg-decode", version = "0.0.0" }
 negg-film = { path = "../negg-film", version = "0.0.0" }
 negg-io = { path = "../negg-io", version = "0.0.0" }
 negg-render = { path = "../negg-render", version = "0.0.0" }
+negg-session = { path = "../negg-session", version = "0.0.0" }
 negg-types = { path = "../negg-types", version = "0.0.0" }
 rayon = { workspace = true }
 serde = { workspace = true }

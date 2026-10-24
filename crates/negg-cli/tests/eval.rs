@@ -1008,3 +1008,392 @@ fn version_1_baseline_is_rejected_with_exit_2() {
     assert!(stderr.contains("regenerate the baseline"), "{stderr}");
     assert!(!out.exists(), "fails before scoring");
 }
+
+// Per-frame geometry, Negative Lab Pro references and registration
+// (docs/ADR/0028).
+
+/// `MANIFEST` with `extra` lines added to its frame.
+fn manifest_with(extra: &str) -> String {
+    MANIFEST.replace(
+        "licence = \"CC0-1.0\"\n",
+        &format!("licence = \"CC0-1.0\"\n{extra}\n"),
+    )
+}
+
+#[test]
+fn a_manifest_without_the_new_fields_writes_none_of_them() {
+    // Nothing about registration appears in the results of a corpus that
+    // has no Negative Lab Pro reference and no per-frame geometry, so the
+    // file is byte-identical to one written before they existed.
+    let dir = one_frame_corpus("nonew");
+    let out = dir.path("eval-results.json");
+    assert_eq!(run_eval(&dir.0, &out).status.code(), Some(0));
+    let text = std::fs::read_to_string(&out).unwrap();
+    for key in [
+        "\"alignment\"",
+        "\"tone\"",
+        "\"unaligned\"",
+        "\"nlp\"",
+        "\"geometry\"",
+    ] {
+        assert!(!text.contains(key), "{key} in {text}");
+    }
+    // The table has no registration rows or tone line either.
+    let output = run_eval_table(&dir.0, &out);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("tone ("), "{stdout}");
+    assert!(!stdout.contains("corr"), "{stdout}");
+}
+
+#[test]
+fn per_frame_geometry_is_applied_before_scoring() {
+    // The left half of the 64x48 frame: a 32x48 render, compared pixel by
+    // pixel with a 32x48 reference.
+    let dir = one_frame_corpus("geometry");
+    write_grey_tiff(&dir.path("reference/r001-01.negpy.tif"), 32, 48);
+    let out = dir.path("eval-results.json");
+    // Without the geometry the 64x48 render cannot be matched to it.
+    let output = run_eval(&dir.0, &out);
+    assert_eq!(output.status.code(), Some(0));
+    let v = read_json(&out);
+    assert_eq!(v["corpus"]["skipped_references"], 1, "{v}");
+    assert!(
+        v["skipped"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("size mismatch: "),
+        "{v}"
+    );
+
+    dir.write(
+        "manifest.toml",
+        manifest_with(
+            "geometry = { crop = { x = 0.0, y = 0.0, width = 0.5, height = 1.0 }, analysis_buffer = 0.0 }",
+        )
+        .as_bytes(),
+    );
+    let output = run_eval(&dir.0, &out);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let v = read_json(&out);
+    assert_eq!(v["corpus"]["skipped_references"], 0, "{v}");
+    let f = &v["frames"][0];
+    assert!(f["references"][0]["de2000"]["mean"].is_number(), "{f}");
+    // Compared pixel by pixel: no registration.
+    assert!(f["references"][0]["alignment"].is_null(), "{f}");
+    // The grey card is measured on the uncropped render, and the frame
+    // still pools with its roll.
+    assert!(f["neutrality"]["de"].is_number(), "{f}");
+    assert_eq!(f["pool"]["dmin_role"], "inlier", "{f}");
+
+    // Turned a quarter: 48x32.
+    write_grey_tiff(&dir.path("reference/r001-01.negpy.tif"), 48, 32);
+    dir.write(
+        "manifest.toml",
+        manifest_with(
+            "geometry = { crop = { x = 0.0, y = 0.0, width = 0.5, height = 1.0 }, rotate_degrees = 90 }",
+        )
+        .as_bytes(),
+    );
+    let output = run_eval(&dir.0, &out);
+    assert_eq!(output.status.code(), Some(0));
+    let v = read_json(&out);
+    assert_eq!(v["corpus"]["skipped_references"], 0, "{v}");
+}
+
+#[test]
+fn a_bad_geometry_exits_2_and_names_the_frame() {
+    let dir = one_frame_corpus("badgeometry");
+    dir.write(
+        "manifest.toml",
+        manifest_with("geometry = { crop = { x = 0.6, y = 0.0, width = 0.5, height = 1.0 } }")
+            .as_bytes(),
+    );
+    let out = dir.path("eval-results.json");
+    let output = run_eval(&dir.0, &out);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("r001-01") && stderr.contains("geometry"),
+        "{stderr}"
+    );
+    assert!(!out.exists());
+}
+
+/// A textured synthetic negative as a linear float TIFF: smooth colour
+/// blobs and a fine texture on a density ramp inside an unexposed border,
+/// so a render of it has edges to register on.
+fn write_textured_negative(path: &Path, w: usize, h: usize) {
+    let border = w.min(h) / 10;
+    let blobs: [([f32; 2], f32, [f32; 3]); 5] = [
+        ([0.30, 0.35], 0.12, [0.5, 0.2, -0.3]),
+        ([0.70, 0.30], 0.08, [-0.4, 0.3, 0.4]),
+        ([0.55, 0.70], 0.15, [0.3, -0.4, 0.2]),
+        ([0.20, 0.75], 0.07, [-0.3, -0.3, 0.5]),
+        ([0.85, 0.80], 0.10, [0.4, 0.4, -0.2]),
+    ];
+    let mut data = Vec::with_capacity(w * h * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let interior = x >= border && x < w - border && y >= border && y < h - border;
+            let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+            let mut t = [0.0f32; 3];
+            if interior {
+                let texture = 0.06 * ((0.8 * x as f32).sin() * (0.55 * y as f32 + 0.3).sin());
+                t = [0.25 + 0.5 * u, 0.30 + 0.4 * v, 0.35 + 0.3 * u * v].map(|c| c + texture);
+                for (centre, radius, colour) in &blobs {
+                    let d2 =
+                        ((u - centre[0]).powi(2) + (v - centre[1]).powi(2)) / (radius * radius);
+                    for c in 0..3 {
+                        t[c] += colour[c] * (-d2).exp();
+                    }
+                }
+            }
+            let (dmin, gamma) = ([0.2f32, 0.5, 0.7], [1.7f32, 1.7, 1.6]);
+            for c in 0..3 {
+                data.push(10f32.powf(-(dmin[c] + gamma[c] * t[c].clamp(0.0, 1.0))));
+            }
+        }
+    }
+    common::write_float_tiff(path, w, h, &data);
+}
+
+/// Reads a 16-bit RGB TIFF as `(width, height, samples)`.
+fn read_tiff16(path: &Path) -> (usize, usize, Vec<u16>) {
+    let mut d = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+    let (w, h) = d.dimensions().unwrap();
+    match d.read_image().unwrap() {
+        tiff::decoder::DecodingResult::U16(v) => (w as usize, h as usize, v),
+        other => panic!("expected 16-bit samples, got {other:?}"),
+    }
+}
+
+/// The `cw` by `ch` crop at `(x0, y0)` of a `w`-wide 16-bit RGB image,
+/// mirrored left to right and then turned 90 degrees clockwise, as 8-bit
+/// RGB: `(width, height, samples)`.
+fn crop_mirror_turn(
+    w: usize,
+    src: &[u16],
+    (x0, y0, cw, ch): (usize, usize, usize, usize),
+) -> (usize, usize, Vec<u8>) {
+    let px = |x: usize, y: usize| {
+        let i = (y * w + x) * 3;
+        [src[i], src[i + 1], src[i + 2]].map(|v| ((f32::from(v) / 257.0).round()) as u8)
+    };
+    // Mirrored crop m(u, v) = crop(cw - 1 - u, v); turned clockwise, the
+    // output (a, b) of size ch x cw shows m(b, ch - 1 - a).
+    let (ow, oh) = (ch, cw);
+    let mut out = Vec::with_capacity(ow * oh * 3);
+    for b in 0..oh {
+        for a in 0..ow {
+            let (u, v) = (b, ch - 1 - a);
+            out.extend_from_slice(&px(x0 + cw - 1 - u, y0 + v));
+        }
+    }
+    (ow, oh, out)
+}
+
+/// A one-frame corpus of a textured negative with a Negative Lab Pro
+/// reference made from `negg convert`'s own export of it: cropped to 80%,
+/// mirrored, turned and saved as a JPEG.
+fn nlp_corpus(tag: &str) -> TempDir {
+    let dir = TempDir::new(tag);
+    let (w, h) = (192, 128);
+    write_textured_negative(&dir.path("frames/r001/r001-01.tif"), w, h);
+    // The export, made from a copy outside the corpus so no sidecar lands
+    // there.
+    write_textured_negative(&dir.path("scratch/r001-01.tif"), w, h);
+    let output = Command::new(env!("CARGO_BIN_EXE_negg"))
+        .arg("convert")
+        .arg(dir.path("scratch/r001-01.tif"))
+        .arg("--out")
+        .arg(dir.path("scratch/out"))
+        .output()
+        .expect("run negg convert");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (ew, eh, export) = read_tiff16(&dir.path("scratch/out/r001-01.negg.tif"));
+    assert_eq!((ew, eh), (w, h));
+    let (rw, rh, rgb) = crop_mirror_turn(ew, &export, (19, 13, 154, 102));
+    let path = dir.path("reference/r001-01.nlp.jpg");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    negg_io::write_jpeg8(
+        &path,
+        rw,
+        rh,
+        &rgb,
+        &negg_io::JpegOptions {
+            icc: None,
+            quality: 95,
+        },
+    )
+    .unwrap();
+    let manifest = MANIFEST
+        .replace(
+            r#"{ tool = "negpy", file = "reference/r001-01.negpy.tif", version = "0.3.1" }"#,
+            r#"{ tool = "nlp", file = "reference/r001-01.nlp.jpg", version = "NLP 3.0" }"#,
+        )
+        .replace("has_grey_card = true", "has_grey_card = false")
+        .replace(
+            "grey_card = { x = 0.25, y = 0.25, width = 0.5, height = 0.5 }\n",
+            "",
+        );
+    dir.write("manifest.toml", manifest.as_bytes());
+    dir
+}
+
+#[test]
+fn an_nlp_reference_is_registered_and_described() {
+    let dir = nlp_corpus("nlp");
+    let out = dir.path("eval-results.json");
+    let output = run_eval_table(&dir.0, &out);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let v = read_json(&out);
+    assert_eq!(v["schema_version"], 2);
+    assert_eq!(v["corpus"]["with_references"], 1, "{v}");
+    assert_eq!(v["skipped"], serde_json::json!([]), "{v}");
+    let r = &v["frames"][0]["references"][0];
+    eprintln!("registered NLP reference: {r}");
+    assert_eq!(r["tool"], "nlp");
+    let a = &r["alignment"];
+    // Stored mirrored then turned 90 degrees: brought back by a 270
+    // degree turn and a mirror.
+    assert_eq!(a["rotate_degrees"], 270, "{a}");
+    assert_eq!(a["flip_horizontal"], true, "{a}");
+    let num = |v: &serde_json::Value| v.as_f64().unwrap();
+    assert!((num(&a["scale"]) - 1.0).abs() < 0.01, "{a}");
+    // The recovered angle reaches the JSON (this export is not turned).
+    assert!(num(&a["angle_degrees"]).abs() < 0.3, "{a}");
+    assert!((num(&a["offset"][0]) - 19.0).abs() < 1.5, "{a}");
+    assert!((num(&a["offset"][1]) - 13.0).abs() < 1.5, "{a}");
+    assert!(
+        (num(&a["overlap"]) - (154.0 * 102.0) / (192.0 * 128.0)).abs() < 0.03,
+        "{a}"
+    );
+    assert!(num(&a["correlation"]) > 0.8, "{a}");
+    // The export is the engine's own render through the sRGB output
+    // transform and a JPEG: close, not identical.
+    let de = num(&r["de2000"]["mean"]);
+    assert!(de < 3.0, "{r}");
+    let t = &r["tone"];
+    for key in ["l_p1", "l_p50", "l_p99", "chroma_mean"] {
+        let diff = num(&t["render"][key]) - num(&t["reference"][key]);
+        assert!(diff.abs() < 3.0, "{key}: {t}");
+    }
+    assert!(
+        num(&t["a_diff"]).abs() < 2.0 && num(&t["b_diff"]).abs() < 2.0,
+        "{t}"
+    );
+    // Per-tool and tone means.
+    let s = &v["summary"];
+    assert!(
+        (num(&s["de2000_mean_by_tool"]["nlp"]) - de).abs() < 1e-6,
+        "{s}"
+    );
+    assert!((num(&s["de2000_mean"]) - de).abs() < 1e-6, "{s}");
+    assert_eq!(s["tone"]["all"]["references"], 1, "{s}");
+    assert_eq!(s["tone"]["nlp"]["references"], 1, "{s}");
+    assert!(s["tone"]["negpy"].is_null(), "{s}");
+    // The table shows the placement and the tone line.
+    assert!(
+        stdout.contains("tone (render minus reference, 1 registered)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.starts_with("r001-01") && l.contains("nlp") && l.contains("270")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("nlp "), "{stdout}");
+
+    // A second run compared against the first: deterministic, and the
+    // tone rows are gated.
+    let second = dir.path("second.json");
+    let output = run_eval_with_baseline(&dir.0, &second, &out, &repo_eval_toml());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(&out).unwrap(),
+        std::fs::read_to_string(&second).unwrap()
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.starts_with("tone cast_ab") && l.ends_with("OK")),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn an_unrelated_nlp_reference_is_unaligned_and_left_out() {
+    let dir = nlp_corpus("nlpunaligned");
+    // Replace the export with an unrelated picture of the same size.
+    let (rw, rh) = (102, 154);
+    let mut rgb = Vec::with_capacity(rw * rh * 3);
+    for y in 0..rh {
+        for x in 0..rw {
+            let stripes = ((x as f32 * 0.35).sin() * 60.0 + 128.0) as u8;
+            let rings =
+                (((x as f32 - 30.0).hypot(y as f32 - 100.0) * 0.4).cos() * 70.0 + 120.0) as u8;
+            rgb.extend_from_slice(&[stripes, rings, ((x * y) % 200) as u8]);
+        }
+    }
+    negg_io::write_jpeg8(
+        &dir.path("reference/r001-01.nlp.jpg"),
+        rw,
+        rh,
+        &rgb,
+        &negg_io::JpegOptions::default(),
+    )
+    .unwrap();
+    let out = dir.path("eval-results.json");
+    let output = run_eval_table(&dir.0, &out);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    let v = read_json(&out);
+    let f = &v["frames"][0];
+    eprintln!("unaligned NLP reference: {}", f["unaligned"]);
+    assert_eq!(f["references"], serde_json::json!([]), "{f}");
+    assert_eq!(f["unaligned"][0]["tool"], "nlp", "{f}");
+    assert_eq!(
+        f["unaligned"][0]["file"], "reference/r001-01.nlp.jpg",
+        "{f}"
+    );
+    assert_eq!(v["corpus"]["skipped_references"], 1);
+    assert_eq!(v["corpus"]["with_references"], 0);
+    let reason = v["skipped"][0]["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with("unaligned: reference/r001-01.nlp.jpg ("),
+        "{reason}"
+    );
+    // Left out of every mean.
+    assert!(v["summary"]["de2000_mean"].is_null(), "{v}");
+    assert!(v["summary"]["tone"].is_null(), "{v}");
+    assert!(v["summary"]["de2000_mean_by_tool"]["nlp"].is_null(), "{v}");
+    assert!(stdout.contains("  r001-01: unaligned: "), "{stdout}");
+}
+
+#[test]
+fn an_unreadable_jpeg_reference_exits_1() {
+    let dir = nlp_corpus("badjpeg");
+    dir.write("reference/r001-01.nlp.jpg", b"not a jpeg");
+    let output = run_eval(&dir.0, &dir.path("out.json"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("r001-01.nlp.jpg"), "{stderr}");
+}

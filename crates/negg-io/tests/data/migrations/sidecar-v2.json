@@ -1,0 +1,34 @@
+{
+  "schema_version": 2,
+  "source": "frame.tif",
+  "settings": {
+    "schema_version": 2,
+    "film": {"film_base": {"mode": "auto"}, "dmax": {"mode": "auto"}, "gamma": {"mode": "fixed", "value": [1.6, 1.6, 1.6]}},
+    "print": {"grade": 100.0, "exposure": 0.35, "cmy": [0.0, 0.01, -0.02],
+              "paper_dmin": 0.06, "paper_dmax": 2.3, "shoulder": 3.0, "toe": 6.0,
+              "black_point_compensation": true},
+    "colour": {"auto_colour": true, "cast": {"mode": "auto"}, "output_space": "adobe_rgb"},
+    "profiles": {"rig": "/rigs/bench.rig.negg.toml", "film": null}
+  },
+  "settings_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "estimates": {
+    "dmin": [0.21, 0.55, 0.78],
+    "dmin_source": "roll",
+    "dmax": [1.9, 2.2, 2.4],
+    "gamma": [1.6, 1.6, 1.6],
+    "gamma_source": "fixed",
+    "neutral_offset": [0.0, 0.0, 0.0],
+    "anchor": -0.42,
+    "x0": 1.25,
+    "cast": {"slope_r": 1.05, "offset_r": -0.01, "slope_b": 0.97, "offset_b": 0.02, "cells_used": 123},
+    "cast_source": "roll"
+  },
+  "overrides": {
+    "film": {"film_base": null, "dmax": null, "gamma": {"mode": "fixed", "value": [1.6, 1.6, 1.6]}},
+    "print": {"grade": null, "exposure": 0.35, "cmy": null, "paper_dmin": null, "paper_dmax": null,
+              "shoulder": null, "toe": null, "black_point_compensation": true},
+    "colour": {"auto_colour": null, "cast": null, "output_space": null}
+  },
+  "roll": "roll.negg.json",
+  "negg_version": "0.2.0"
+}

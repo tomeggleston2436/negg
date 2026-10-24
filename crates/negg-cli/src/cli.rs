@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use negg_types::CropRect;
 use negg_types::settings::OutputSpace;
 
 /// The `negg` film negative converter.
@@ -103,10 +104,46 @@ pub struct OutputArgs {
     /// (sRGB unless a settings file says otherwise).
     #[arg(long, value_enum)]
     pub space: Option<Space>,
+    /// Crop as `x,y,w,h`: four fractions of the frame in its source
+    /// orientation (before any rotation). The crop is the area the
+    /// analysis sees and the exported framing. In roll mode it is stored in
+    /// `roll.negg.json` and shared by every frame.
+    #[arg(long, value_name = "X,Y,W,H", value_parser = parse_crop)]
+    pub crop: Option<CropRect>,
     /// Print the estimates (Dmin, Dmax, gamma, anchor, x0, cast) and the
     /// grid and image sizes to stdout after each frame.
     #[arg(long)]
     pub dump_stats: bool,
+}
+
+/// Parses `--crop x,y,w,h` (Ruling 92): four comma-separated numbers that
+/// form a valid [`CropRect`].
+///
+/// # Errors
+///
+/// A message naming the problem when there are not four numbers or the
+/// rectangle fails [`CropRect::validate`].
+pub fn parse_crop(text: &str) -> Result<CropRect, String> {
+    let parts: Vec<&str> = text.split(',').map(str::trim).collect();
+    if parts.len() != 4 {
+        return Err(format!(
+            "expected four comma-separated fractions x,y,w,h, got {text:?}"
+        ));
+    }
+    let mut v = [0f32; 4];
+    for (slot, part) in v.iter_mut().zip(&parts) {
+        *slot = part
+            .parse::<f32>()
+            .map_err(|e| format!("{part:?} is not a number: {e}"))?;
+    }
+    let rect = CropRect {
+        x: v[0],
+        y: v[1],
+        width: v[2],
+        height: v[3],
+    };
+    rect.validate().map_err(|e| e.to_string())?;
+    Ok(rect)
 }
 
 /// Profile and roll options shared by `negg convert` and `negg batch`.
@@ -498,6 +535,41 @@ mod tests {
             panic!("expected lock");
         };
         assert!(args.gamma && !args.dmin && !args.cast);
+    }
+
+    #[test]
+    fn crop_parses_four_fractions_and_rejects_the_rest() {
+        let cli =
+            Cli::try_parse_from(["negg", "batch", "roll", "--crop", "0.1,0.2,0.5,0.6"]).unwrap();
+        let Command::Batch(args) = cli.command else {
+            panic!("expected batch");
+        };
+        assert_eq!(
+            args.output.crop,
+            Some(CropRect {
+                x: 0.1,
+                y: 0.2,
+                width: 0.5,
+                height: 0.6
+            })
+        );
+        let cli = Cli::try_parse_from(["negg", "convert", "f.dng"]).unwrap();
+        let Command::Convert(args) = cli.command else {
+            panic!("expected convert");
+        };
+        assert_eq!(args.output.crop, None);
+        for bad in [
+            "0.5,0.5,0.6,0.1",
+            "1,2,3",
+            "a,b,c,d",
+            "0,0,1,1,1",
+            "0,0,0,1",
+        ] {
+            assert!(
+                Cli::try_parse_from(["negg", "convert", "f.dng", "--crop", bad]).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

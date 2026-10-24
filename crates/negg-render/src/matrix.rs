@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Step 7 of `docs/MATHS.md`: the camera matrix applied to the positive.
+//! Step 7 of `docs/MATHS.md`: the entry matrix applied to the positive.
 //!
-//! The matrix itself (camera RGB to linear Rec.2020 D65 via XYZ with a
-//! Bradford adaptation) is built by `negg-cms`; this module only applies a
-//! 3x3 to every pixel of `out_c` after inversion and the print stage, and
+//! The matrix itself is chosen by the caller with `negg-cms`: the BT.2087
+//! Rec.709-to-Rec.2020 matrix for RAW input (ADR 0026), the embedded
+//! profile's colorants for a tagged TIFF (ADR 0012). This module only
+//! applies a 3x3 to every pixel of `out_c` after inversion and the print
+//! stage, and
 //! clips the result at 0. Ground rule 3 puts the per-pixel operation here.
 
 use negg_types::Image;

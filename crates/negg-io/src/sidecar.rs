@@ -24,7 +24,7 @@ use serde_json::Value;
 use crate::error::{IoError, io_at};
 
 /// The sidecar schema version this build writes and the newest it reads.
-pub const SIDECAR_SCHEMA_VERSION: u32 = 2;
+pub const SIDECAR_SCHEMA_VERSION: u32 = 3;
 
 /// Extension chain appended to the source's stem to name its sidecar.
 pub const SIDECAR_SUFFIX: &str = ".negg.json";
@@ -207,9 +207,10 @@ fn temp_path(path: &Path) -> PathBuf {
 /// The `schema_version` field is read first; only then is the rest of the
 /// value interpreted. Migration is a ladder: a version `n` file is upgraded
 /// to `n + 1` by a function that edits the raw `Value`, and so on until the
-/// current version, which is deserialised. Adding version 3 means bumping
-/// [`SIDECAR_SCHEMA_VERSION`], writing `upgrade_v2_to_v3`, and adding it to
-/// the ladder below.
+/// current version, which is deserialised. Version 3 (Ruling 71) adds the
+/// settings' `geometry`, which takes its default; adding version 4 means
+/// bumping [`SIDECAR_SCHEMA_VERSION`], writing `upgrade_v3_to_v4`, and
+/// adding it to the ladder below.
 ///
 /// # Errors
 ///
@@ -225,8 +226,9 @@ pub fn migrate(value: Value) -> Result<Sidecar, IoError> {
         )));
     }
     let value = match version {
-        1 => upgrade_v1_to_v2(value),
-        2 => value,
+        1 => upgrade_v2_to_v3(upgrade_v1_to_v2(value)),
+        2 => upgrade_v2_to_v3(value),
+        3 => value,
         other => {
             return Err(IoError::Schema(format!(
                 "schema_version {other} is not a sidecar version negg has ever written"
@@ -264,7 +266,20 @@ fn upgrade_v1_to_v2(mut value: Value) -> Value {
     value
 }
 
-fn schema_version_of(value: &Value) -> Result<u32, IoError> {
+/// Upgrades a version 2 sidecar value to version 3 (Ruling 71): sets
+/// `schema_version` and `settings.schema_version` to 3 and nothing else, so
+/// the settings' `geometry` (and any frame override's) takes its default.
+fn upgrade_v2_to_v3(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("schema_version".into(), Value::from(3));
+        if let Some(settings) = object.get_mut("settings").and_then(Value::as_object_mut) {
+            settings.insert("schema_version".into(), Value::from(3));
+        }
+    }
+    value
+}
+
+pub(crate) fn schema_version_of(value: &Value) -> Result<u32, IoError> {
     let object = value
         .as_object()
         .ok_or_else(|| IoError::Schema("sidecar is not a JSON object".into()))?;
@@ -391,7 +406,7 @@ mod tests {
 
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.ends_with('\n'), "trailing newline");
-        assert!(text.contains("\n  \"schema_version\": 2"), "pretty printed");
+        assert!(text.contains("\n  \"schema_version\": 3"), "pretty printed");
         assert!(text.contains(&sidecar.settings_hash.to_hex()));
         assert!(!dir.path("roll.01.frame.negg.json.tmp").exists());
 
@@ -439,7 +454,7 @@ mod tests {
             Err(IoError::InvalidSidecar(_))
         ));
         let mut future = sample_sidecar();
-        future.schema_version = 3;
+        future.schema_version = 4;
         assert!(matches!(
             write_sidecar(&path, &future),
             Err(IoError::Schema(_))
@@ -448,11 +463,11 @@ mod tests {
     }
 
     #[test]
-    fn migrate_accepts_versions_1_and_2_and_fills_defaults() {
-        let sidecar = migrate(json!({ "schema_version": 1 })).unwrap();
-        assert_eq!(sidecar, Sidecar::default());
-        let sidecar = migrate(json!({ "schema_version": 2 })).unwrap();
-        assert_eq!(sidecar, Sidecar::default());
+    fn migrate_accepts_versions_1_to_3_and_fills_defaults() {
+        for version in 1..=3 {
+            let sidecar = migrate(json!({ "schema_version": version })).unwrap();
+            assert_eq!(sidecar, Sidecar::default(), "{version}");
+        }
 
         let partial = migrate(json!({
             "schema_version": 2,
@@ -496,7 +511,8 @@ mod tests {
     fn migrate_v1_adds_zero_offsets_and_fit_cast_source() {
         let s = migrate(v1_fixture(123)).unwrap();
         assert_eq!(s.schema_version, SIDECAR_SCHEMA_VERSION);
-        assert_eq!(s.settings.schema_version, 2);
+        assert_eq!(s.settings.schema_version, 3);
+        assert!(s.settings.geometry.is_identity());
         assert_eq!(s.settings.print.exposure, 0.35);
         assert!(s.overrides.is_empty());
         assert_eq!(s.roll, None);
@@ -518,7 +534,7 @@ mod tests {
     fn migrate_v1_without_estimates_or_settings_still_loads() {
         let s = migrate(json!({ "schema_version": 1, "source": "f.dng" })).unwrap();
         assert_eq!(s.estimates, None);
-        assert_eq!(s.settings.schema_version, 2);
+        assert_eq!(s.settings.schema_version, 3);
     }
 
     #[test]
@@ -545,7 +561,7 @@ mod tests {
     #[test]
     fn migrate_rejects_unknown_and_missing_versions() {
         for (value, needle) in [
-            (json!({ "schema_version": 3 }), "newer"),
+            (json!({ "schema_version": 4 }), "newer"),
             (json!({ "schema_version": 0 }), "ever written"),
             (json!({ "source": "frame.dng" }), "missing"),
             (json!({ "schema_version": "1" }), "non-negative integer"),

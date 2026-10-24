@@ -1022,12 +1022,14 @@ name = "negg-cli"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "image",
  "negg-calib",
  "negg-cms",
  "negg-decode",
  "negg-film",
  "negg-io",
  "negg-render",
+ "negg-session",
  "negg-types",
  "rayon",
  "serde",
@@ -1087,6 +1089,19 @@ dependencies = [
  "negg-types",
  "proptest",
  "rayon",
+]
+
+[[package]]
+name = "negg-session"
+version = "0.0.0"
+dependencies = [
+ "negg-calib",
+ "negg-cms",
+ "negg-decode",
+ "negg-io",
+ "negg-render",
+ "negg-types",
+ "serde_json",
 ]
 
 [[package]]

@@ -23,8 +23,8 @@ comment names its step.
 | --- | --- | --- |
 | `invert` | 4 | `invert`, `invert_in_place`, `invert_pixel`: `e_c = -max(D_c - dmin_c, 0) / gamma_c`. Gamma must be finite and positive, else `Error::Invalid`. |
 | `print` | 5 | `softplus`, `softplus_inv` (f64 inside, stable at both ends), `grade_k` (`290 / R` clamped to `[2, 10]`, ADR 0006), `solve_x0` (analytic anchor at `P = 0.75`, ADR 0008), `PrintCoefficients::new` (validates like `Settings::validate`, folds `x0 + exposure + cmy_c`), `print_pixel`, `print`. |
-| `cast` | 6 | `fit_cast` on the analysis grid per ADR 0009 (luma bands at p20/p80, lowest-chroma 30% per band after dropping foliage and sky hues, OLS of R and B against G, slopes clamped to `[0.8, 1.2]`, identity below 8 cells), `apply_cast`, `apply_cast_pixel`. |
-| `matrix` | 7 | `apply_matrix`, `apply_matrix_pixel`: the camera matrix on the positive, clipped at 0. The matrix itself comes from `negg-cms`. |
+| `cast` | 6 | `fit_cast` on the analysis grid per ADR 0009 and ADR 0027 (provisional fit on the lowest-chroma 30% of all cells, then up to 4 refinements that read luma, chroma and hue after the current correction: luma bands at p20/p80, foliage and sky hues and chroma above 0.1 dropped, lowest-chroma 30% per band; OLS of R and B against G, slopes bounded to `[0.5, 2]`, the returned slopes set to 1 when its cells' `e_G` spreads by less than 0.03; identity below 8 provisional cells), `apply_cast`, `apply_cast_pixel`. |
+| `matrix` | 7 | `apply_matrix`, `apply_matrix_pixel`: the step 7 entry matrix on the positive, clipped at 0 (BT.2087 Rec.709 to Rec.2020 for RAW, ADR 0026; the profile's colorants for a tagged TIFF). The matrix itself comes from `negg-cms`. |
 | `rig` | 2, 3 | `apply_rig_linear`: the flat field gain (bilinear between grid cell centres, R-flat) then the unmix `I <- max(M^-1 I, 0)` (R-crosstalk), in place on the caller's step 1 image; `Error::Invalid` on a flat for another frame size. `density_model_pixel`, `density_grid`: the step 3 density from a rig `DensityModel` (`None` is `negg_film::density`). |
 | `full` | 3 to 7 | `render_full`: takes linear RGB and runs the step 3 density (`negg_film::density_value`, or the rig density model when one is passed), the inversion minus `Estimates::neutral_offset`, and all of the above fused per pixel, with no intermediate images (not even a full-size density image). Equals the composition of the separate functions (tested within 1e-5). |
 | `pipeline` | 3 to 7 | `render_frame_with` (returns `FrameRender`: the image, the `Estimates` and the grid size): the one pipeline of ground rule 3. Builds the analysis grid (`ANALYSIS_GRID_LONG_SIDE` = 1024) and its density, runs `estimate_frame`, then renders with `render_full`. `estimate_frame` applies the R-lock precedence with a `RenderContext` (rig density model, film correction, pooled roll estimates). `render_frame` is `render_frame_with` with the default context and renders exactly as phase 1. The estimators are `negg-film`'s; the step 7 matrix is passed in. |
@@ -49,8 +49,9 @@ the two paths are bitwise identical.
   with every selected cell counted in `cells_used`.
 - The lowest-chroma 30% of a band is rounded up, so a non-empty band keeps
   at least one cell.
-- When a fitted slope is clamped, the offset is recomputed through the
-  centroid of the pooled cells so that they still land on `e_G` on average.
+- When a fitted slope is bounded or not identified, the offset is
+  recomputed through the centroid of the selected cells so that they still
+  land on `e_G` on average.
 - The nearest-rank percentile used for the luma bands is a private helper
   here because `negg-render` cannot depend on `negg-film`.
 - With a rig density model, Dmin and Dmax are found by running the

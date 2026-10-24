@@ -4,6 +4,8 @@
 
 Proposed, 2026-10-21 (controller ruling pending owner review).
 
+Superseded in part by 0026: the step 7 matrix for RAW input is no longer the camera matrix; the ICC input path stands.
+
 ## Context
 
 `docs/MATHS.md` step 7 enters the working space through the camera matrix recorded in step 1, "camera RGB -> XYZ -> Rec.2020 with a Bradford chromatic adaptation to D65", applied after inversion. The phase 1 final review found two problems with how that entry was built.

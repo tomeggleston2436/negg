@@ -26,7 +26,10 @@ mod stats;
 
 pub use anchor::exposure_anchor;
 pub use estimators::{DminEstimate, estimate_dmax, estimate_dmin, no_profile_gamma};
-pub use grid::{AnalysisGrid, TRANSMITTANCE_FLOOR, analysis_grid, density, density_value};
+pub use grid::{
+    AnalysisGrid, TRANSMITTANCE_FLOOR, analysis_grid, density, density_value, grid_cells_in,
+    sub_grid,
+};
 pub use neutral::{NEUTRAL_MIN_SPREAD, NeutralFit, fit_neutral};
 pub use patch::patch_median;
 pub use pool::{

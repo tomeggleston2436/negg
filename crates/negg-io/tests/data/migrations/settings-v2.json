@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "film": {"film_base": {"mode": "fixed", "value": [0.2, 0.5, 0.7]}, "dmax": {"mode": "auto"}, "gamma": {"mode": "auto"}},
+  "print": {"grade": 120.0, "exposure": -0.2, "cmy": [0.0, 0.0, 0.0],
+            "paper_dmin": 0.06, "paper_dmax": 2.3, "shoulder": 3.0, "toe": 6.0,
+            "black_point_compensation": false},
+  "colour": {"auto_colour": false, "cast": {"mode": "auto"}, "output_space": "display_p3"},
+  "profiles": {"rig": null, "film": null}
+}

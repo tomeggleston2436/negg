@@ -21,6 +21,10 @@ Use the border path only when both of the following hold, otherwise use the perc
 - `DminEstimate` in `negg-film` carries `source` and `flat_border_cells`, and the sidecar (ADR 0010) records the source, so `negg-cli eval` can separate border-derived and percentile-derived frames when the corpus exists.
 - Phase 2 roll pooling takes the per-frame values as they are; it does not need to know which path produced them.
 
+## Phase 3 amendment
+
+Ruling 91 (ADR 0021, Accepted): when `geometry.crop` is set, the border search above runs only inside the crop rect, unbuffered. The outer 15% band is the outer 15% of the crop grid, not of the whole frame. A tight crop therefore usually loses the border source, and Dmin falls back to the 0.5th percentile of the crop grid (`dmin_source = percentile`); a crop that keeps some rebate keeps the border source. The thresholds (20 cells, 5%, 0.05 log-D) and the guard are unchanged. With no crop the behaviour is exactly as above.
+
 ## Eval delta
 
 None measured; the corpus has no frames yet.

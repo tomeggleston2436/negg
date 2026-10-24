@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "settings": {
+    "schema_version": 2,
+    "shared": {
+      "schema_version": 2,
+      "film": {"film_base": {"mode": "auto"}, "dmax": {"mode": "auto"}, "gamma": {"mode": "auto"}},
+      "print": {"grade": 110.0, "exposure": 0.1, "cmy": [0.0, 0.0, 0.0],
+                "paper_dmin": 0.06, "paper_dmax": 2.3, "shoulder": 3.0, "toe": 6.0,
+                "black_point_compensation": false},
+      "colour": {"auto_colour": true, "cast": {"mode": "auto"}, "output_space": "srgb"},
+      "profiles": {"rig": null, "film": null}
+    },
+    "pool_film_base": true,
+    "pool_gamma": false,
+    "pool_colour": true
+  },
+  "settings_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "pool": {
+    "dmin": [0.25, 0.5, 0.75],
+    "gamma": null,
+    "cast": {"slope_r": 1.0, "offset_r": 0.0, "slope_b": 1.0, "offset_b": 0.0, "cells_used": 10},
+    "frames": [
+      {"source": "a.dng", "dmin": [0.25, 0.5, 0.75], "dmin_source": "border",
+       "dmax": [2.0, 2.0, 2.0], "gamma": [1.5, 1.5, 1.5],
+       "cast": {"slope_r": 1.0, "offset_r": 0.0, "slope_b": 1.0, "offset_b": 0.0, "cells_used": 10},
+       "dmin_role": "inlier", "gamma_role": "unused", "cast_role": "inlier"}
+    ]
+  },
+  "frames": ["a.dng", "b.dng"],
+  "negg_version": "0.2.0"
+}

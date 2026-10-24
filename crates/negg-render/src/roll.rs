@@ -16,17 +16,18 @@
 //! decides each frame's candidacy and role and feeds them in order.
 
 use negg_film::{
-    DminEstimate, analysis_grid, dmin_candidates, no_profile_gamma, pool_cast, pool_channels,
+    AnalysisGrid, DminEstimate, analysis_grid, dmin_candidates, no_profile_gamma, pool_cast,
+    pool_channels,
 };
 use negg_types::settings::ChannelEstimate;
 use negg_types::{
-    CastCorrection, CastEstimate, DensityModel, DminSource, FilmCorrection, Image, PoolFrame,
-    PoolRole, Result, RollPool, RollSettings, Settings,
+    CastCorrection, CastEstimate, DensityModel, DminSource, Error, FilmCorrection, Geometry, Image,
+    PoolFrame, PoolRole, Result, RollPool, RollSettings, Settings,
 };
 
 use crate::cast::fit_cast;
 use crate::invert::invert;
-use crate::pipeline::{ANALYSIS_GRID_LONG_SIDE, estimate_dmin_dmax};
+use crate::pipeline::{ANALYSIS_GRID_LONG_SIDE, analysis_area, area_dmin_dmax, dmin_with_pool};
 use crate::rig::density_grid;
 
 /// What pass 1 keeps of one frame: the step 3 density of its analysis grid
@@ -35,7 +36,8 @@ use crate::rig::density_grid;
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameAnalysis {
     /// The density of the analysis grid (step 3), with the rig density
-    /// model when one was given.
+    /// model when one was given: the whole grid without a crop, else the
+    /// buffered analysis grid (Ruling 90), as the cast pool uses it.
     pub grid_density: Image,
     /// The frame's own Dmin estimate and its source (Border or Percentile).
     pub dmin: DminEstimate,
@@ -43,20 +45,79 @@ pub struct FrameAnalysis {
     pub dmax: [f32; 3],
 }
 
-/// Step 3 of `docs/MATHS.md` for one frame of a roll: the analysis grid of
-/// `linear` (after the caller's step 2, [`crate::apply_rig_linear`]), its
-/// density with the rig model `density` when given (R-density-use), and the
-/// frame's own Dmin and Dmax estimated on that density exactly as
-/// [`crate::estimate_frame`] does (so a rig density model is honoured).
-pub fn analyse_frame(linear: &Image, density: Option<&DensityModel>) -> FrameAnalysis {
-    let grid = analysis_grid(linear, ANALYSIS_GRID_LONG_SIDE);
-    let grid_density = density_grid(&grid.median, density);
-    let (dmin, dmax) = estimate_dmin_dmax(&grid, &grid_density, density);
-    FrameAnalysis {
+/// Step 3 of `docs/MATHS.md` for one frame of a roll from its cached
+/// whole-frame analysis grid and grid density (Rulings 90 and 91): the
+/// frame's own Dmin and Dmax estimated exactly as
+/// [`crate::estimate_frame`] does under `geometry` (Dmin on the crop grid,
+/// Dmax on the buffered analysis grid, a rig density model honoured), and
+/// the grid density the cast pool fits on (the analysis grid's part). With
+/// no crop the whole grid is used and the analysis buffer is ignored.
+///
+/// # Errors
+///
+/// [`Error::Invalid`] when the grid has no cells, `grid_density` does not
+/// match it, the geometry fails validation, or a crop leaves fewer than
+/// [`crate::MIN_ANALYSIS_CELLS`] analysis cells.
+pub fn analyse_grid(
+    grid: &AnalysisGrid,
+    grid_density: &Image,
+    geometry: &Geometry,
+    density: Option<&DensityModel>,
+) -> Result<FrameAnalysis> {
+    analyse_owned(grid, grid_density.clone(), geometry, density)
+}
+
+/// [`analyse_grid`] taking the grid density by value, so that the no-crop
+/// path keeps it without a copy.
+fn analyse_owned(
+    grid: &AnalysisGrid,
+    grid_density: Image,
+    geometry: &Geometry,
+    density: Option<&DensityModel>,
+) -> Result<FrameAnalysis> {
+    if grid.cells() == 0 {
+        return Err(Error::Invalid(
+            "analysis grid has no cells: nothing to analyse".to_string(),
+        ));
+    }
+    if grid_density.width() != grid.width() || grid_density.height() != grid.height() {
+        return Err(Error::Invalid(format!(
+            "grid density is {}x{} but the analysis grid is {}x{}",
+            grid_density.width(),
+            grid_density.height(),
+            grid.width(),
+            grid.height()
+        )));
+    }
+    let area = analysis_area(grid, &grid_density, geometry)?;
+    let (dmin, dmax) = area_dmin_dmax(grid, &grid_density, area.as_ref(), density);
+    let grid_density = match area {
+        Some(a) => a.analysis_density,
+        None => grid_density,
+    };
+    Ok(FrameAnalysis {
         grid_density,
         dmin,
         dmax,
-    }
+    })
+}
+
+/// Step 3 of `docs/MATHS.md` for one frame of a roll: the analysis grid of
+/// `linear` (after the caller's step 2, [`crate::apply_rig_linear`]), its
+/// density with the rig model `density` when given (R-density-use), then
+/// [`analyse_grid`] under `geometry`.
+///
+/// # Errors
+///
+/// As [`analyse_grid`]; an image with no pixels has no grid cells.
+pub fn analyse_frame(
+    linear: &Image,
+    density: Option<&DensityModel>,
+    geometry: &Geometry,
+) -> Result<FrameAnalysis> {
+    let grid = analysis_grid(linear, ANALYSIS_GRID_LONG_SIDE);
+    let grid_density = density_grid(&grid.median, density);
+    analyse_owned(&grid, grid_density, geometry, density)
 }
 
 /// One frame as [`pool_roll`] sees it: its file name, its pass 1 analysis
@@ -96,10 +157,14 @@ fn mark_excluded(mut roles: Vec<PoolRole>, excluded: &[bool]) -> Vec<PoolRole> {
 ///   The candidates are chosen by [`dmin_candidates`] (Border frames when
 ///   at least two non-excluded frames are Border) and pooled by
 ///   [`pool_channels`].
+/// - Dmin in effect: Fixed, else `dmin_with_pool`
+///   of its own estimate and the pooled Dmin (the pooled value, capped per
+///   channel by the frame's own estimate when that is a percentile one,
+///   Ruling 105), exactly as [`crate::estimate_frame`] renders it.
 /// - Gamma: per frame `gamma_f = max(Dmax_f - Dmin_f, 0.05)` with `Dmin_f`
-///   the frame's Dmin in effect (Fixed, else the pooled Dmin, else its own)
-///   and `Dmax_f` its Dmax in effect (Fixed, else its own). A frame whose
-///   `film.gamma` is Fixed is Excluded; every other frame is a candidate.
+///   the frame's Dmin in effect and `Dmax_f` its Dmax in effect (Fixed,
+///   else its own). A frame whose `film.gamma` is Fixed is Excluded; every
+///   other frame is a candidate.
 /// - Cast: a frame with `colour.cast` Fixed or `auto_colour` off is
 ///   Excluded. Every other frame's cast is fitted with [`fit_cast`] on its
 ///   grid density inverted with its Dmin and gamma in effect (Fixed, else
@@ -108,6 +173,11 @@ fn mark_excluded(mut roles: Vec<PoolRole>, excluded: &[bool]) -> Vec<PoolRole> {
 ///   [`pool_cast`] (weight `cells_used`). With a film correction the cast is
 ///   the identity (R-contrast), so nothing is fitted or pooled: the cast
 ///   pool is `None`, user-fixed frames are Excluded and the rest Unused.
+///   The cast is pooled only when the pooled Dmin came from Border frames
+///   (every Dmin candidate is Border, Ruling 106); otherwise the fits are
+///   kept in the record but not pooled: the cast pool is `None`, user-fixed
+///   frames are Excluded and the rest Unused, and each frame is rendered
+///   with its own fit.
 /// - A `pool_*` flag of `roll` that is off gives that pool `None` with
 ///   every role Unused.
 ///
@@ -150,11 +220,25 @@ pub fn pool_roll(
     } else {
         (None, vec![PoolRole::Unused; n])
     };
+    // The Dmin each frame renders with (Ruling 105): exactly what
+    // `estimate_frame` takes, so the gamma pooled below and the cast fits
+    // use the same base as the render.
     let dmin_in_effect: Vec<[f32; 3]> = frames
         .iter()
         .zip(&dmin_fixed)
-        .map(|(f, fx)| fx.or(pooled_dmin).unwrap_or(f.analysis.dmin.value))
+        .map(|(f, fx)| fx.unwrap_or_else(|| dmin_with_pool(&f.analysis.dmin, pooled_dmin).0))
         .collect();
+    // Ruling 106: the cast is pooled only when the pooled Dmin came from
+    // Border frames, that is every Dmin candidate (Inlier or Rejected) is
+    // a Border frame, as the border preference of `dmin_candidates` makes
+    // it when at least two non-excluded frames are Border.
+    let border_pool = pooled_dmin.is_some() && {
+        let mut candidates = (0..n)
+            .filter(|&i| matches!(dmin_roles[i], PoolRole::Inlier | PoolRole::Rejected))
+            .peekable();
+        candidates.peek().is_some()
+            && candidates.all(|i| frames[i].analysis.dmin.source == DminSource::Border)
+    };
     let dmax_in_effect: Vec<[f32; 3]> = frames
         .iter()
         .map(|f| fixed(f.settings.film.dmax).unwrap_or(f.analysis.dmax))
@@ -215,7 +299,7 @@ pub fn pool_roll(
     }
     let (pooled_cast, cast_roles) = if !roll.pool_colour {
         (None, vec![PoolRole::Unused; n])
-    } else if film.is_some() {
+    } else if film.is_some() || !border_pool {
         (
             None,
             mark_excluded(vec![PoolRole::Unused; n], &cast_excluded),
@@ -265,6 +349,7 @@ pub fn pool_roll(
 mod tests {
     use super::*;
     use crate::pipeline::{RenderContext, render_frame, render_frame_with};
+    use negg_types::CastSource;
 
     const W: usize = 128;
     const H: usize = 96;
@@ -273,8 +358,13 @@ mod tests {
     /// of `dmin` around a textured ramp from `dmin` to `dmin + gamma`, with
     /// a tint in the interior so the cast fit has cells to use.
     fn negative(dmin: [f32; 3], gamma: [f32; 3]) -> Image {
+        negative_with_border(dmin, gamma, 16)
+    }
+
+    /// As [`negative`] with a border `border` pixels wide; with 0 the frame
+    /// has no unexposed border and its own Dmin is a percentile estimate.
+    fn negative_with_border(dmin: [f32; 3], gamma: [f32; 3], border: usize) -> Image {
         let mut img = Image::new(W, H);
-        let border = 16;
         for y in 0..H {
             for x in 0..W {
                 let interior = x >= border && x < W - border && y >= border && y < H - border;
@@ -298,7 +388,9 @@ mod tests {
     fn analyses(dmins: &[[f32; 3]]) -> Vec<FrameAnalysis> {
         dmins
             .iter()
-            .map(|&d| analyse_frame(&negative(d, [1.6, 1.7, 1.8]), None))
+            .map(|&d| {
+                analyse_frame(&negative(d, [1.6, 1.7, 1.8]), None, &Geometry::default()).unwrap()
+            })
             .collect()
     }
 
@@ -323,7 +415,7 @@ mod tests {
     #[test]
     fn analyse_frame_matches_the_pipeline_estimates() {
         let img = negative([0.2, 0.5, 0.7], [1.6, 1.7, 1.8]);
-        let a = analyse_frame(&img, None);
+        let a = analyse_frame(&img, None, &Geometry::default()).unwrap();
         let r = render_frame(&img, &Settings::default(), None).unwrap();
         assert_eq!(a.dmin.value, r.estimates.dmin);
         assert_eq!(a.dmin.source, r.estimates.dmin_source);
@@ -333,7 +425,7 @@ mod tests {
             a: [0.1, 0.1, 0.1],
             g: [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]],
         };
-        let m = analyse_frame(&img, Some(&model));
+        let m = analyse_frame(&img, Some(&model), &Geometry::default()).unwrap();
         for c in 0..3 {
             assert!((m.dmin.value[c] - a.dmin.value[c] - 0.1).abs() < 1e-4);
             assert!((m.dmax[c] - a.dmax[c] - 0.1).abs() < 1e-4);
@@ -477,7 +569,10 @@ mod tests {
             .iter()
             .map(|&d| negative(d, [1.6, 1.7, 1.8]))
             .collect();
-        let a: Vec<FrameAnalysis> = imgs.iter().map(|i| analyse_frame(i, None)).collect();
+        let a: Vec<FrameAnalysis> = imgs
+            .iter()
+            .map(|i| analyse_frame(i, None, &Geometry::default()).unwrap())
+            .collect();
         let s = vec![Settings::default(); 3];
         let nm = names(3);
         let roll = RollSettings::default();
@@ -494,5 +589,115 @@ mod tests {
             assert_eq!(r.estimates.gamma, pool.gamma.unwrap());
             assert_eq!(r.estimates.cast, pool.cast.unwrap());
         }
+    }
+
+    /// Pass 1, the pool and pass 2 over `imgs` with default settings: the
+    /// pool and each frame's render estimates.
+    fn pool_and_render(imgs: &[Image]) -> (RollPool, Vec<negg_types::Estimates>) {
+        let a: Vec<FrameAnalysis> = imgs
+            .iter()
+            .map(|i| analyse_frame(i, None, &Geometry::default()).unwrap())
+            .collect();
+        let s = vec![Settings::default(); imgs.len()];
+        let nm = names(imgs.len());
+        let roll = RollSettings::default();
+        let pool = pool_roll(&frames(&nm, &a, &s), &roll, None).unwrap();
+        let pooled = pool.pooled(&roll);
+        let ctx = RenderContext {
+            pooled: Some(&pooled),
+            ..RenderContext::default()
+        };
+        let estimates = imgs
+            .iter()
+            .map(|img| {
+                render_frame_with(img, &Settings::default(), &ctx, None)
+                    .unwrap()
+                    .estimates
+            })
+            .collect();
+        (pool, estimates)
+    }
+
+    #[test]
+    fn a_percentile_frame_keeps_its_own_base_below_the_pool() {
+        let dmins = [
+            [0.50, 0.80, 1.00],
+            [0.50, 0.80, 1.00],
+            [0.50, 0.80, 1.00],
+            [0.15, 0.45, 0.65],
+        ];
+        let imgs: Vec<Image> = dmins
+            .iter()
+            .map(|&d| negative_with_border(d, [1.6, 1.7, 1.8], 0))
+            .collect();
+        let (pool, est) = pool_and_render(&imgs);
+        let own = &pool.frames[3];
+        assert_eq!(own.dmin_source, DminSource::Percentile);
+        assert_eq!(own.dmin_role, PoolRole::Rejected);
+        let pooled = pool.dmin.unwrap();
+        // Ruling 105: d renders with its own base, not the higher pool.
+        assert_eq!(est[3].dmin, own.dmin);
+        assert_eq!(est[3].dmin_source, DminSource::Percentile);
+        assert!((0..3).all(|c| own.dmin[c] < pooled[c]));
+        // The others' own estimates equal the pool, which they take.
+        for e in &est[..3] {
+            assert_eq!((e.dmin, e.dmin_source), (pooled, DminSource::Roll));
+        }
+        // gamma_f uses the Dmin the frame renders with.
+        for c in 0..3 {
+            let want = (own.dmax[c] - own.dmin[c]).max(0.05);
+            assert!((own.gamma[c] - want).abs() < 1e-6, "{:?}", own.gamma);
+        }
+        // Ruling 106: a percentile pool gives no pooled cast; each frame is
+        // corrected with its own fit, the one the pool recorded.
+        assert_eq!(pool.cast, None);
+        for (f, e) in pool.frames.iter().zip(&est) {
+            assert_eq!(f.cast_role, PoolRole::Unused);
+            assert_eq!(e.cast_source, CastSource::Fit);
+            assert_eq!(e.cast, f.cast);
+        }
+    }
+
+    #[test]
+    fn a_border_frame_rejected_from_the_pool_still_takes_it() {
+        let dmins = [
+            [0.50, 0.80, 1.00],
+            [0.50, 0.80, 1.00],
+            [0.50, 0.80, 1.00],
+            [0.15, 0.45, 0.65],
+        ];
+        let imgs: Vec<Image> = dmins
+            .iter()
+            .map(|&d| negative(d, [1.6, 1.7, 1.8]))
+            .collect();
+        let (pool, est) = pool_and_render(&imgs);
+        assert_eq!(pool.frames[3].dmin_source, DminSource::Border);
+        assert_eq!(pool.frames[3].dmin_role, PoolRole::Rejected);
+        let pooled = pool.dmin.unwrap();
+        for e in &est {
+            assert_eq!((e.dmin, e.dmin_source), (pooled, DminSource::Roll));
+        }
+        // A Border pool still pools the cast (Ruling 49).
+        let cast = pool.cast.unwrap();
+        for e in &est {
+            assert_eq!((e.cast, e.cast_source), (cast, CastSource::Roll));
+        }
+    }
+
+    #[test]
+    fn one_border_frame_among_percentile_frames_pools_no_cast() {
+        // Fewer than two Border frames: every frame is a Dmin candidate, so
+        // the pool did not come from Border frames alone (Ruling 106).
+        let imgs = vec![
+            negative([0.2, 0.5, 0.7], [1.6, 1.7, 1.8]),
+            negative_with_border([0.2, 0.5, 0.7], [1.6, 1.7, 1.8], 0),
+            negative_with_border([0.2, 0.5, 0.7], [1.6, 1.7, 1.8], 0),
+        ];
+        let (pool, est) = pool_and_render(&imgs);
+        assert_eq!(pool.frames[0].dmin_source, DminSource::Border);
+        assert_eq!(pool.frames[0].dmin_role, PoolRole::Inlier);
+        assert!(pool.dmin.is_some());
+        assert_eq!(pool.cast, None);
+        assert!(est.iter().all(|e| e.cast_source == CastSource::Fit));
     }
 }

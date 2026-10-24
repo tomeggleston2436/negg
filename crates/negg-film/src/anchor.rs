@@ -117,6 +117,8 @@ mod tests {
             median: Image::new(w, h),
             cv: vec![cv; w * h],
             block: 1,
+            source_width: w,
+            source_height: h,
         };
         (grid, e)
     }

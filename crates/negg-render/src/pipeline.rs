@@ -12,7 +12,7 @@
 //! kernel). [`render_frame`] is the same with the default context, which
 //! renders exactly as phase 1. The estimators themselves live in
 //! `negg-film`; this module only calls them in order. It does no I/O and
-//! no colour management: the camera matrix of step 7 is computed by the
+//! no colour management: the matrix of step 7 is chosen by the
 //! caller with `negg-cms` and passed in. The linear part of step 2 (flat
 //! field, unmix) is applied by the caller beforehand with
 //! [`crate::apply_rig_linear`] (R-rig-order).
@@ -22,20 +22,22 @@
 //! grid-sized intermediates are about a thousand
 //! pixels on the long side and are not counted.
 
+use std::borrow::Cow;
+
 use negg_film::{
     AnalysisGrid, DminEstimate, analysis_grid, estimate_dmax, estimate_dmin, exposure_anchor,
-    no_profile_gamma,
+    grid_cells_in, no_profile_gamma, sub_grid,
 };
 use negg_types::settings::ChannelEstimate;
 use negg_types::{
     CastCorrection, CastEstimate, CastSource, DensityModel, DminSource, Error, Estimates,
-    FilmCorrection, GammaSource, Image, PooledEstimates, Result, Settings,
+    FilmCorrection, GammaSource, Geometry, Image, PooledEstimates, Result, Settings,
 };
 
 use crate::cast::{apply_cast, fit_cast};
 use crate::full::render_full;
 use crate::invert::invert;
-use crate::print::{PrintCoefficients, solve_x0};
+use crate::print::{PrintCoefficients, solve_exposure};
 use crate::rig::density_grid;
 
 /// Long side of the analysis grid of step 3 of `docs/MATHS.md`, in cells
@@ -48,13 +50,20 @@ pub const ANALYSIS_GRID_LONG_SIDE: usize = 1024;
 pub struct FrameRender {
     /// The positive after step 5 and, when a matrix was given, step 7:
     /// linear Rec.2020 (or whatever working space the matrix maps into)
-    /// when `camera_to_working` was `Some`, otherwise linear camera RGB.
+    /// when `camera_to_working` was `Some`, otherwise the input's own linear
+    /// RGB.
     pub image: Image,
     /// Steps 3 to 6: what was estimated or fixed for this frame, as written
     /// to the sidecar (step 8).
     pub estimates: Estimates,
-    /// Number of cells in the analysis grid of step 3.
+    /// Number of cells in the analysis grid of step 3: the whole grid
+    /// without a crop, else the buffered analysis grid (Ruling 90).
     pub grid_cells: u32,
+    /// Step 5 (ADR 0030): true when the black-point floor raised `x_0`
+    /// above the anchor's, so the frame prints darker than the anchor alone
+    /// would make it. Derived from `estimates.anchor` and the print
+    /// settings; not stored in the sidecar.
+    pub black_point_floor: bool,
 }
 
 /// What a frame is rendered with besides its own pixels and settings
@@ -87,18 +96,129 @@ pub(crate) fn estimate_dmin_dmax(
     grid_density: &Image,
     model: Option<&DensityModel>,
 ) -> (DminEstimate, [f32; 3]) {
+    let g = model_grid(grid, grid_density, model);
+    (estimate_dmin(&g), estimate_dmax(&g))
+}
+
+/// The grid the step 3 estimators run on: `grid` itself without a density
+/// model, else a grid whose block medians are `10^-D` of `grid_density`
+/// and whose `cv`, block and source size are `grid`'s (see
+/// [`estimate_dmin_dmax`]).
+fn model_grid<'a>(
+    grid: &'a AnalysisGrid,
+    grid_density: &Image,
+    model: Option<&DensityModel>,
+) -> Cow<'a, AnalysisGrid> {
     match model {
-        None => (estimate_dmin(grid), estimate_dmax(grid)),
+        None => Cow::Borrowed(grid),
         Some(_) => {
             let data = grid_density.data().iter().map(|d| 10f32.powf(-d)).collect();
             let median = Image::from_vec(grid_density.width(), grid_density.height(), data)
                 .expect("same shape as the density grid");
-            let as_linear = AnalysisGrid {
+            Cow::Owned(AnalysisGrid {
                 median,
                 cv: grid.cv.clone(),
                 block: grid.block,
-            };
-            (estimate_dmin(&as_linear), estimate_dmax(&as_linear))
+                source_width: grid.source_width,
+                source_height: grid.source_height,
+            })
+        }
+    }
+}
+
+/// Fewest cells the analysis grid of a cropped frame may have (Ruling 90).
+/// Controller choice.
+pub const MIN_ANALYSIS_CELLS: usize = 64;
+
+/// The analysis area of step 3 of `docs/MATHS.md` for a frame with a crop
+/// (Rulings 90 and 91): the crop grid (cells whose centres lie in the crop)
+/// and the analysis grid (cells whose centres lie in the crop shrunk by the
+/// analysis buffer), each with its part of the grid density.
+pub(crate) struct AnalysisArea {
+    /// The crop grid: the step 3 Dmin border search and percentile.
+    pub crop: AnalysisGrid,
+    /// The grid density of the crop grid.
+    pub crop_density: Image,
+    /// The buffered analysis grid: Dmax, the anchor and the cast fit.
+    pub analysis: AnalysisGrid,
+    /// The grid density of the analysis grid.
+    pub analysis_density: Image,
+}
+
+/// Cuts the cells `cells` out of `grid` and its density.
+fn cut(
+    grid: &AnalysisGrid,
+    grid_density: &Image,
+    cells: (usize, usize, usize, usize),
+) -> Result<(AnalysisGrid, Image)> {
+    let sub = sub_grid(grid, cells);
+    if sub.cells() == 0 {
+        return Err(Error::Invalid("crop too small to analyse".to_string()));
+    }
+    let density = grid_density.crop(cells.0, cells.1, sub.width(), sub.height())?;
+    Ok((sub, density))
+}
+
+/// The analysis area of `grid` under `geometry` (Rulings 90 and 91), or
+/// `None` when there is no crop: the whole grid is then used with no copy
+/// and the analysis buffer is ignored.
+///
+/// # Errors
+///
+/// [`Error::Invalid`] when the geometry fails validation, `grid_density`
+/// does not match the grid, or the analysis grid has fewer than
+/// [`MIN_ANALYSIS_CELLS`] cells ("crop too small to analyse").
+pub(crate) fn analysis_area(
+    grid: &AnalysisGrid,
+    grid_density: &Image,
+    geometry: &Geometry,
+) -> Result<Option<AnalysisArea>> {
+    if geometry.crop.is_none() {
+        return Ok(None);
+    }
+    geometry.validate()?;
+    if grid_density.width() != grid.width() || grid_density.height() != grid.height() {
+        return Err(Error::Invalid(format!(
+            "grid density is {}x{} but the analysis grid is {}x{}",
+            grid_density.width(),
+            grid_density.height(),
+            grid.width(),
+            grid.height()
+        )));
+    }
+    let (w, h) = (grid.source_width, grid.source_height);
+    let analysis_cells = grid_cells_in(grid, geometry.analysis_pixels(w, h));
+    let count = (analysis_cells.2 - analysis_cells.0) * (analysis_cells.3 - analysis_cells.1);
+    if count < MIN_ANALYSIS_CELLS {
+        return Err(Error::Invalid("crop too small to analyse".to_string()));
+    }
+    let (analysis, analysis_density) = cut(grid, grid_density, analysis_cells)?;
+    let crop_cells = grid_cells_in(grid, geometry.crop_pixels(w, h));
+    let (crop, crop_density) = cut(grid, grid_density, crop_cells)?;
+    Ok(Some(AnalysisArea {
+        crop,
+        crop_density,
+        analysis,
+        analysis_density,
+    }))
+}
+
+/// Step 3 Dmin and Dmax of `grid` under `geometry` (Rulings 90 and 91):
+/// with no crop, [`estimate_dmin_dmax`] on the whole grid exactly as
+/// before; with a crop, Dmin on the crop grid and Dmax on the buffered
+/// analysis grid.
+pub(crate) fn area_dmin_dmax(
+    grid: &AnalysisGrid,
+    grid_density: &Image,
+    area: Option<&AnalysisArea>,
+    model: Option<&DensityModel>,
+) -> (DminEstimate, [f32; 3]) {
+    match area {
+        None => estimate_dmin_dmax(grid, grid_density, model),
+        Some(a) => {
+            let crop = model_grid(&a.crop, &a.crop_density, model);
+            let analysis = model_grid(&a.analysis, &a.analysis_density, model);
+            (estimate_dmin(&crop), estimate_dmax(&analysis))
         }
     }
 }
@@ -118,6 +238,48 @@ fn check_film(film: &FilmCorrection) -> Result<()> {
     }
 }
 
+/// Step 3 of `docs/MATHS.md`, roll mode: the Dmin a frame whose film base
+/// is not fixed renders with, given its own estimate `own` and the roll's
+/// pooled Dmin `pooled` (R-pool, Ruling 59 as amended by Ruling 105, ADR
+/// 0029).
+///
+/// - No pooled Dmin: the frame's own estimate and source.
+/// - A frame whose own source is not `Percentile` (a Border frame, Rejected
+///   or not): the pooled value, source `Roll` (Ruling 59).
+/// - A `Percentile` frame: per channel `min(own_c, pooled_c)`, so the pool
+///   never lifts its base above its own estimate. The source is `Roll`
+///   when every channel took the pooled value (ties count as pooled),
+///   `Percentile` when every channel took its own, else `RollMin`.
+///
+/// [`crate::pool_roll`] uses this for the Dmin in effect of each frame, so
+/// the gamma it pools and the cast it fits are taken from the same Dmin the
+/// frame is rendered with by [`estimate_frame`].
+pub(crate) fn dmin_with_pool(
+    own: &DminEstimate,
+    pooled: Option<[f32; 3]>,
+) -> ([f32; 3], DminSource) {
+    let Some(pooled) = pooled else {
+        return (own.value, own.source);
+    };
+    if own.source != DminSource::Percentile {
+        return (pooled, DminSource::Roll);
+    }
+    let took_own = (0..3).any(|c| own.value[c] < pooled[c]);
+    let took_pool = (0..3).any(|c| pooled[c] < own.value[c]);
+    match (took_own, took_pool) {
+        (false, _) => (pooled, DminSource::Roll),
+        (true, false) => (own.value, DminSource::Percentile),
+        (true, true) => (
+            [
+                own.value[0].min(pooled[0]),
+                own.value[1].min(pooled[1]),
+                own.value[2].min(pooled[2]),
+            ],
+            DminSource::RollMin,
+        ),
+    }
+}
+
 /// Steps 3 to 6 of `docs/MATHS.md` for one frame on its analysis grid:
 /// every estimate the render needs, by the precedence of R-lock (ADR 0017),
 /// R-contrast (ADR 0016) and R-cast-source (ADR 0018).
@@ -125,8 +287,10 @@ fn check_film(film: &FilmCorrection) -> Result<()> {
 /// `grid_density` must be the density of `grid.median` as step 3 defines
 /// it for this context, that is `density_grid(&grid.median, ctx.density)`.
 ///
-/// - Dmin: settings Fixed (`Fixed`) > `ctx.pooled` Dmin (`Roll`) > the
-///   frame's estimate (`Border` or `Percentile`).
+/// - Dmin: settings Fixed (`Fixed`) > `ctx.pooled` Dmin, capped for a
+///   percentile frame by `dmin_with_pool` (`Roll`, `RollMin` or
+///   `Percentile`, Ruling 105) > the frame's estimate (`Border` or
+///   `Percentile`).
 /// - Dmax: settings Fixed > the frame's estimate.
 /// - Gamma: settings Fixed (`Fixed`) > the film correction (`Profile`,
 ///   `gamma_c = ratio_c * gamma_G` with `gamma_G` the pooled green gamma
@@ -139,22 +303,40 @@ fn check_film(film: &FilmCorrection) -> Result<()> {
 ///   the identity when `auto_colour` is off or a film correction is in use
 ///   (`Identity`) > `ctx.pooled` cast (`Roll`) > [`fit_cast`] on the
 ///   inverted grid (`Fit`, or `Identity` when no cells survive).
-/// - The anchor and `x_0` as phase 1: [`exposure_anchor`] on the inverted,
-///   offset and cast-corrected grid, then [`solve_x0`].
+/// - The anchor and `x_0`: [`exposure_anchor`] on the inverted, offset and
+///   cast-corrected grid, then [`solve_exposure`]: the anchor's
+///   [`crate::solve_x0`] floored by the black point of ADR 0030 so that the film
+///   base prints at least at the knee of the toe, `P = Dmax_p - ln(2) / a_sh`
+///   (ADR 0031).
 ///
 /// # Errors
 ///
 /// [`Error::Invalid`] when the settings fail validation, the grid has no
 /// cells, `grid_density` does not match the grid, the film correction has
 /// a non-finite or non-positive ratio or a non-finite offset, the gamma in
-/// effect is not finite and positive, or the exposure anchor cannot be
-/// printed at `P = 0.75` with the paper densities in `settings.print`.
+/// effect is not finite and positive, the exposure anchor cannot be
+/// printed at `P = 0.75` with the paper densities in `settings.print`, or
+/// a crop leaves fewer than [`MIN_ANALYSIS_CELLS`] analysis cells ("crop
+/// too small to analyse").
 pub fn estimate_frame(
     grid: &AnalysisGrid,
     grid_density: &Image,
     settings: &Settings,
     ctx: &RenderContext,
 ) -> Result<Estimates> {
+    estimate_frame_and_floor(grid, grid_density, settings, ctx).map(|(estimates, _)| estimates)
+}
+
+/// [`estimate_frame`] plus whether the black-point floor of step 5
+/// (ADR 0030) raised `x_0` above the anchor's: the `floor_active` of the
+/// one [`solve_exposure`] call that produced `x_0`, so [`plan_frame`] and
+/// [`render_frame_with`] never solve the exposure a second time.
+fn estimate_frame_and_floor(
+    grid: &AnalysisGrid,
+    grid_density: &Image,
+    settings: &Settings,
+    ctx: &RenderContext,
+) -> Result<(Estimates, bool)> {
     settings.validate()?;
     if grid.cells() == 0 {
         return Err(Error::Invalid(
@@ -175,15 +357,23 @@ pub fn estimate_frame(
     }
     let pooled = ctx.pooled.copied().unwrap_or_default();
 
+    // Step 3: the analysis area (Rulings 90 and 91). Without a crop the
+    // whole grid is used, with no copy, exactly as before.
+    let area = analysis_area(grid, grid_density, &settings.geometry)?;
+    let (a_grid, a_density) = match &area {
+        Some(a) => (&a.analysis, &a.analysis_density),
+        None => (grid, grid_density),
+    };
+
     // Step 3: Dmin and Dmax. The estimators run only when a value is needed.
     let needs_estimate = matches!(settings.film.film_base, ChannelEstimate::Auto)
         || matches!(settings.film.dmax, ChannelEstimate::Auto);
-    let estimated = needs_estimate.then(|| estimate_dmin_dmax(grid, grid_density, ctx.density));
-    let (dmin, dmin_source) = match (settings.film.film_base, pooled.dmin, estimated) {
-        (ChannelEstimate::Fixed { value }, _, _) => (value, DminSource::Fixed),
-        (ChannelEstimate::Auto, Some(value), _) => (value, DminSource::Roll),
-        (ChannelEstimate::Auto, None, Some((est, _))) => (est.value, est.source),
-        (ChannelEstimate::Auto, None, None) => unreachable!("estimated when Auto"),
+    let estimated =
+        needs_estimate.then(|| area_dmin_dmax(grid, grid_density, area.as_ref(), ctx.density));
+    let (dmin, dmin_source) = match (settings.film.film_base, estimated) {
+        (ChannelEstimate::Fixed { value }, _) => (value, DminSource::Fixed),
+        (ChannelEstimate::Auto, Some((est, _))) => dmin_with_pool(&est, pooled.dmin),
+        (ChannelEstimate::Auto, None) => unreachable!("estimated when Auto"),
     };
     let dmax = match (settings.film.dmax, estimated) {
         (ChannelEstimate::Fixed { value }, _) => value,
@@ -215,7 +405,7 @@ pub fn estimate_frame(
     };
 
     // Step 4 on the grid (validates gamma), then the offsets.
-    let mut e_grid = invert(grid_density, dmin, gamma)?;
+    let mut e_grid = invert(a_density, dmin, gamma)?;
     if ctx.film.is_some() {
         for px in e_grid.data_mut().as_chunks_mut::<3>().0 {
             for c in 0..3 {
@@ -260,9 +450,11 @@ pub fn estimate_frame(
     };
     apply_cast(&mut e_grid, &cast);
 
-    // Step 5: the exposure anchor and x_0.
-    let anchor = exposure_anchor(grid, &e_grid);
-    let x0 = solve_x0(anchor, &settings.print);
+    // Step 5: the exposure anchor and x_0, floored by the black point
+    // (ADR 0030).
+    let anchor = exposure_anchor(a_grid, &e_grid);
+    let solved = solve_exposure(anchor, &settings.print);
+    let x0 = solved.x0;
     if !x0.is_finite() {
         return Err(Error::Invalid(format!(
             "exposure anchor {anchor} cannot be printed at P = 0.75 with paper_dmin {} \
@@ -270,17 +462,89 @@ pub fn estimate_frame(
             settings.print.paper_dmin, settings.print.paper_dmax
         )));
     }
-    Ok(Estimates {
-        dmin,
-        dmin_source,
-        dmax,
-        gamma,
-        gamma_source,
-        neutral_offset,
-        anchor,
-        x0,
-        cast,
-        cast_source,
+    Ok((
+        Estimates {
+            dmin,
+            dmin_source,
+            dmax,
+            gamma,
+            gamma_source,
+            neutral_offset,
+            anchor,
+            x0,
+            cast,
+            cast_source,
+        },
+        solved.floor_active,
+    ))
+}
+
+/// Number of cells of the analysis grid of `grid` under `geometry`: the
+/// whole grid without a crop, else the buffered analysis grid (Ruling 90).
+fn analysis_cell_count(grid: &AnalysisGrid, geometry: &Geometry) -> usize {
+    if geometry.crop.is_none() {
+        return grid.cells();
+    }
+    let (cx0, cy0, cx1, cy1) = grid_cells_in(
+        grid,
+        geometry.analysis_pixels(grid.source_width, grid.source_height),
+    );
+    (cx1 - cx0) * (cy1 - cy0)
+}
+
+/// Everything steps 3 to 6 of `docs/MATHS.md` decide for one frame before
+/// any full-resolution pixel is touched: the estimates, the step 5 print
+/// coefficients built from them, the analysis cell count and the
+/// black-point floor flag. Made by [`plan_frame`] from the frame's analysis
+/// grid; [`render_full`] and [`crate::render_region`] render with it, so
+/// the export and every preview tile of the same frame and settings share
+/// one plan (Step 8 of docs/MATHS.md (preview), Ruling 73).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FramePlan {
+    /// Steps 3 to 6: what was estimated or fixed for this frame, as
+    /// [`estimate_frame`] returns it.
+    pub estimates: Estimates,
+    /// Step 5: [`PrintCoefficients::new`] of the print settings and
+    /// `estimates.x0`.
+    pub coefficients: PrintCoefficients,
+    /// Number of cells in the analysis grid of step 3: the whole grid
+    /// without a crop, else the buffered analysis grid (Ruling 90).
+    pub grid_cells: u32,
+    /// Step 5 (ADR 0030): true when the black-point floor raised `x_0`
+    /// above the anchor's. Taken from the same exposure solve that set
+    /// `estimates.x0`; not stored in the sidecar.
+    pub black_point_floor: bool,
+}
+
+/// Steps 3 to 6 of `docs/MATHS.md` for one frame on its analysis grid,
+/// plus the step 5 print coefficients: [`estimate_frame`] (with the same
+/// precedence, errors and analysis area of Ruling 90) followed by
+/// [`PrintCoefficients::new`] of `settings.print` and the `x_0` it found.
+///
+/// `grid` must be [`analysis_grid`] of the frame's linear image at
+/// [`ANALYSIS_GRID_LONG_SIDE`] and `grid_density` its density,
+/// `density_grid(&grid.median, ctx.density)`. Rendering the frame with the
+/// returned plan through [`render_full`] is exactly [`render_frame_with`].
+///
+/// # Errors
+///
+/// Every error of [`estimate_frame`] and of [`PrintCoefficients::new`].
+pub fn plan_frame(
+    grid: &AnalysisGrid,
+    grid_density: &Image,
+    settings: &Settings,
+    ctx: &RenderContext,
+) -> Result<FramePlan> {
+    let (estimates, black_point_floor) =
+        estimate_frame_and_floor(grid, grid_density, settings, ctx)?;
+    let grid_cells =
+        u32::try_from(analysis_cell_count(grid, &settings.geometry)).unwrap_or(u32::MAX);
+    let coefficients = PrintCoefficients::new(&settings.print, estimates.x0)?;
+    Ok(FramePlan {
+        estimates,
+        coefficients,
+        grid_cells,
+        black_point_floor,
     })
 }
 
@@ -296,14 +560,17 @@ pub fn estimate_frame(
 /// 2. Step 3: the analysis grid with [`analysis_grid`] at
 ///    [`ANALYSIS_GRID_LONG_SIDE`], and its density with [`density_grid`]
 ///    (the rig model `ctx.density` when given, R-density-use).
-/// 3. Steps 3 to 6: [`estimate_frame`] (Dmin, Dmax, gamma, neutral offset,
-///    cast, anchor and `x_0` by the R-lock precedence).
-/// 4. Step 5: [`PrintCoefficients::new`].
-/// 5. Steps 3 to 7 fused on the full frame: [`render_full`] on `linear`
+/// 3. Steps 3 to 6 and the step 5 coefficients: [`plan_frame`]
+///    ([`estimate_frame`]: Dmin, Dmax, gamma, neutral offset, cast, anchor
+///    and `x_0` by the R-lock precedence; then [`PrintCoefficients::new`]).
+/// 4. Steps 3 to 7 fused on the full frame: [`render_full`] on `linear`
 ///    with `ctx.density` (the density of step 3 taken per pixel) and
-///    `camera_to_working`, the camera-to-working-space matrix built by the
-///    caller with `negg-cms` (`None` skips step 7, leaving the output in
-///    camera RGB; a rig does not change it, R-step7).
+///    `camera_to_working`, the step 7 matrix into the working space chosen by
+///    the caller with `negg-cms`. Despite the name it is not a camera
+///    matrix for RAW input: it holds the BT.2087 Rec.709-to-Rec.2020 matrix
+///    there (ADR 0026) and the embedded profile's colorant matrix for a
+///    tagged TIFF. `None` skips step 7, leaving the output in the input's
+///    own RGB; a rig does not change it, R-step7.
 ///
 /// # Errors
 ///
@@ -328,12 +595,10 @@ pub fn render_frame_with(
 
     // Step 3: the block-median analysis grid and its density.
     let grid = analysis_grid(linear, ANALYSIS_GRID_LONG_SIDE);
-    let grid_cells = u32::try_from(grid.cells()).unwrap_or(u32::MAX);
     let grid_density = density_grid(&grid.median, ctx.density);
 
-    // Steps 3 to 6 on the grid.
-    let estimates = estimate_frame(&grid, &grid_density, settings, ctx)?;
-    let coefficients = PrintCoefficients::new(&settings.print, estimates.x0)?;
+    // Steps 3 to 6 on the grid, and the step 5 coefficients.
+    let plan = plan_frame(&grid, &grid_density, settings, ctx)?;
     drop(grid_density);
     drop(grid);
 
@@ -341,16 +606,17 @@ pub fn render_frame_with(
     // inside the kernel, so the output is the only full-size allocation.
     let image = render_full(
         linear,
-        &estimates,
-        &coefficients,
+        &plan.estimates,
+        &plan.coefficients,
         ctx.density,
         camera_to_working,
     )?;
 
     Ok(FrameRender {
         image,
-        estimates,
-        grid_cells,
+        estimates: plan.estimates,
+        grid_cells: plan.grid_cells,
+        black_point_floor: plan.black_point_floor,
     })
 }
 
@@ -378,7 +644,7 @@ pub fn render_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::print::ANCHOR_PRINT_DENSITY;
+    use crate::print::{ANCHOR_PRINT_DENSITY, black_print_density, solve_x0};
     use negg_types::settings::PrintSettings;
 
     const W: usize = 256;
@@ -461,13 +727,21 @@ mod tests {
                 "{px:?}"
             );
         }
-        // A pixel whose e equals the anchor prints at P = 0.75.
+        // With the anchor's own x0 (ADR 0008), a pixel whose e equals the
+        // anchor prints at P = 0.75; the x0 in use is that x0 floored by the
+        // black point (ADR 0030), so it prints there or darker.
         let est = r.estimates;
         let e = est.anchor;
+        let x0_anchor = solve_x0(e, &PrintSettings::default());
+        assert_eq!(
+            est.x0,
+            x0_anchor.max(crate::print::black_point_x0(&PrintSettings::default()))
+        );
+        assert_eq!(r.black_point_floor, est.x0 > x0_anchor);
         let d = est.dmin[1] - e * est.gamma[1];
         let mut one = Image::new(1, 1);
         one.set_pixel(0, 0, [10f32.powf(-d); 3]);
-        let c = PrintCoefficients::new(&PrintSettings::default(), est.x0).unwrap();
+        let c = PrintCoefficients::new(&PrintSettings::default(), x0_anchor).unwrap();
         let out = render_full(&one, &est, &c, None, None).unwrap();
         let want = 10f32.powf(-ANCHOR_PRINT_DENSITY);
         assert!(
@@ -475,6 +749,9 @@ mod tests {
             "{:?} want {want}",
             out.pixel(0, 0)
         );
+        let c = PrintCoefficients::new(&PrintSettings::default(), est.x0).unwrap();
+        let used = render_full(&one, &est, &c, None, None).unwrap();
+        assert!(used.pixel(0, 0)[1] <= want * (1.0 + 1e-3));
         // A denser negative (brighter scene) prints brighter: the border
         // (least dense) is the darkest part of the positive.
         let border = r.image.pixel(2, 2)[1];
@@ -543,8 +820,9 @@ mod tests {
     }
 
     /// The phase 1 `render_frame` body, verbatim apart from the
-    /// `render_full` call gaining its `None` density argument: the default
-    /// context must reproduce it bit for bit.
+    /// `render_full` call gaining its `None` density argument and `x0`
+    /// gaining the black-point floor of ADR 0030 (`max(x0, x_black)`): the
+    /// default context must reproduce it bit for bit.
     fn phase1_render_frame(
         linear: &Image,
         settings: &Settings,
@@ -578,7 +856,10 @@ mod tests {
         };
         apply_cast(&mut e_grid, &cast);
         let anchor = exposure_anchor(&grid, &e_grid);
-        let x0 = solve_x0(anchor, &settings.print);
+        let x0_anchor = solve_x0(anchor, &settings.print);
+        let x_black = crate::print::black_point_x0(&settings.print);
+        let black_point_floor = x_black > x0_anchor;
+        let x0 = x0_anchor.max(x_black);
         let estimates = Estimates {
             dmin,
             dmin_source,
@@ -601,6 +882,7 @@ mod tests {
             image,
             estimates,
             grid_cells,
+            black_point_floor,
         })
     }
 
@@ -735,6 +1017,74 @@ mod tests {
             gamma_ratio: ratio,
             offset_log_d: offset,
         }
+    }
+
+    #[test]
+    fn a_pooled_dmin_never_lifts_a_percentile_base() {
+        let pooled = Some([0.3, 0.6, 0.8]);
+        let est = |value, source| DminEstimate {
+            value,
+            source,
+            flat_border_cells: 0,
+        };
+        // No pool: the frame's own estimate and source.
+        let own = est([0.2, 0.5, 0.9], DminSource::Percentile);
+        assert_eq!(
+            dmin_with_pool(&own, None),
+            ([0.2, 0.5, 0.9], DminSource::Percentile)
+        );
+        // A Border frame takes the pool even when it is higher (Ruling 59).
+        let border = est([0.2, 0.5, 0.7], DminSource::Border);
+        assert_eq!(
+            dmin_with_pool(&border, pooled),
+            ([0.3, 0.6, 0.8], DminSource::Roll)
+        );
+        // A percentile frame takes the lower value per channel (Ruling 105).
+        let below = est([0.2, 0.5, 0.7], DminSource::Percentile);
+        assert_eq!(
+            dmin_with_pool(&below, pooled),
+            ([0.2, 0.5, 0.7], DminSource::Percentile)
+        );
+        let above = est([0.4, 0.6, 0.9], DminSource::Percentile);
+        assert_eq!(
+            dmin_with_pool(&above, pooled),
+            ([0.3, 0.6, 0.8], DminSource::Roll)
+        );
+        assert_eq!(
+            dmin_with_pool(&own, pooled),
+            ([0.2, 0.5, 0.8], DminSource::RollMin)
+        );
+    }
+
+    #[test]
+    fn a_percentile_frame_renders_below_a_higher_pool_with_its_own_base() {
+        let mut img = Image::new(W, H);
+        for y in 0..H {
+            for x in 0..W {
+                let t = x as f32 / (W - 1) as f32 * 0.9 + 0.08 * ((x / 3 + y / 3) % 2) as f32;
+                let d = [0.2 + 1.6 * t, 0.5 + 1.7 * t, 0.7 + 1.8 * t];
+                img.set_pixel(x, y, d.map(|d| 10f32.powf(-d)));
+            }
+        }
+        let own = estimate(&img, &Settings::default(), &RenderContext::default()).unwrap();
+        assert_eq!(own.dmin_source, DminSource::Percentile);
+        let lifted = own.dmin.map(|d| d + 0.3);
+        let pooled = PooledEstimates {
+            dmin: Some(lifted),
+            ..PooledEstimates::default()
+        };
+        let ctx = RenderContext {
+            pooled: Some(&pooled),
+            ..RenderContext::default()
+        };
+        let e = estimate(&img, &Settings::default(), &ctx).unwrap();
+        assert_eq!((e.dmin, e.dmin_source), (own.dmin, DminSource::Percentile));
+        assert_eq!(e.gamma, no_profile_gamma(own.dmin, own.dmax));
+        // Fixed still wins over everything.
+        let mut s = Settings::default();
+        s.film.film_base = ChannelEstimate::Fixed { value: lifted };
+        let e = estimate(&img, &s, &ctx).unwrap();
+        assert_eq!((e.dmin, e.dmin_source), (lifted, DminSource::Fixed));
     }
 
     #[test]
@@ -1021,6 +1371,132 @@ mod tests {
         ));
     }
 
+    /// `inner` placed at `(ox, oy)` on a `w` by `h` canvas whose surround
+    /// is linear 1e-6 (density at the 6.0 cap), like a film holder in shot.
+    fn in_surround(inner: &Image, w: usize, h: usize, ox: usize, oy: usize) -> Image {
+        let mut img = Image::from_vec(w, h, vec![1e-6; w * h * 3]).unwrap();
+        for y in 0..inner.height() {
+            for x in 0..inner.width() {
+                img.set_pixel(ox + x, oy + y, inner.pixel(x, y));
+            }
+        }
+        img
+    }
+
+    fn cropped(x: f32, y: f32, width: f32, height: f32, buffer: f32) -> Settings {
+        let mut s = Settings::default();
+        s.geometry.crop = Some(negg_types::CropRect {
+            x,
+            y,
+            width,
+            height,
+        });
+        s.geometry.analysis_buffer = buffer;
+        s
+    }
+
+    #[test]
+    fn a_crop_to_the_film_removes_the_surround_from_the_analysis() {
+        let a = synthetic_negative([0.2, 0.5, 0.7], [1.7, 1.7, 1.6]);
+        let b = in_surround(&a, 400, 300, 64, 48);
+        let own = render_frame(&a, &Settings::default(), None)
+            .unwrap()
+            .estimates;
+        // Without a crop the surround pins Dmax at the cap.
+        let wide = estimate(&b, &Settings::default(), &RenderContext::default()).unwrap();
+        assert!(wide.dmax.iter().all(|d| (d - 6.0).abs() < 1e-3), "{wide:?}");
+        let (x, y, w, h) = (64.0 / 400.0, 48.0 / 300.0, 256.0 / 400.0, 192.0 / 300.0);
+        for (buffer, tol) in [(0.0, 0.01), (ANALYSIS_BUFFER_DEFAULT_F, 0.02)] {
+            let s = cropped(x, y, w, h, buffer);
+            assert_eq!(s.geometry.crop_pixels(400, 300), (64, 48, 320, 240));
+            let e = estimate(&b, &s, &RenderContext::default()).unwrap();
+            for c in 0..3 {
+                assert!((e.dmin[c] - own.dmin[c]).abs() < tol, "{e:?} {own:?}");
+                assert!((e.dmax[c] - own.dmax[c]).abs() < tol, "{e:?} {own:?}");
+                assert!((e.gamma[c] - own.gamma[c]).abs() < tol, "{e:?} {own:?}");
+            }
+            assert_eq!(e.dmin_source, own.dmin_source);
+        }
+        // With no buffer the crop sees exactly A's grid.
+        let e = estimate(&b, &cropped(x, y, w, h, 0.0), &RenderContext::default()).unwrap();
+        assert_eq!(e, own);
+        let r = render_frame(&b, &cropped(x, y, w, h, 0.0), None).unwrap();
+        assert_eq!(r.grid_cells, (256 * 192) as u32);
+        assert_eq!(r.estimates, own);
+    }
+
+    const ANALYSIS_BUFFER_DEFAULT_F: f32 = negg_types::ANALYSIS_BUFFER_DEFAULT;
+
+    #[test]
+    fn the_border_search_runs_inside_the_crop_only() {
+        let a = synthetic_negative([0.2, 0.5, 0.7], [1.7, 1.7, 1.6]);
+        let b = in_surround(&a, 400, 300, 64, 48);
+        let ctx = RenderContext::default();
+        // A crop that keeps the rebate keeps the border source.
+        let keep = cropped(
+            64.0 / 400.0,
+            48.0 / 300.0,
+            256.0 / 400.0,
+            192.0 / 300.0,
+            0.05,
+        );
+        assert_eq!(
+            estimate(&b, &keep, &ctx).unwrap().dmin_source,
+            DminSource::Border
+        );
+        // A crop inside the image area loses it: the percentile path.
+        let tight = cropped(
+            (64.0 + 30.0) / 400.0,
+            (48.0 + 30.0) / 300.0,
+            196.0 / 400.0,
+            132.0 / 300.0,
+            0.05,
+        );
+        assert_eq!(
+            estimate(&b, &tight, &ctx).unwrap().dmin_source,
+            DminSource::Percentile
+        );
+    }
+
+    #[test]
+    fn a_crop_under_64_analysis_cells_is_an_error() {
+        let a = synthetic_negative([0.2, 0.5, 0.7], [1.7, 1.7, 1.6]);
+        // 0.03 of 256 x 192 is about 8 x 6 = 48 cells.
+        let s = cropped(0.5, 0.5, 0.03, 0.03, 0.0);
+        match estimate(&a, &s, &RenderContext::default()) {
+            Err(Error::Invalid(reason)) => assert_eq!(reason, "crop too small to analyse"),
+            other => panic!("expected crop too small, got {other:?}"),
+        }
+        assert!(render_frame(&a, &s, None).is_err());
+        assert!(crate::analyse_frame(&a, None, &s.geometry).is_err());
+        // A larger crop passes.
+        let ok = cropped(0.25, 0.25, 0.5, 0.5, 0.05);
+        estimate(&a, &ok, &RenderContext::default()).unwrap();
+    }
+
+    #[test]
+    fn analyse_frame_with_a_crop_matches_the_pipeline() {
+        let a = synthetic_negative([0.2, 0.5, 0.7], [1.7, 1.7, 1.6]);
+        let b = in_surround(&a, 400, 300, 64, 48);
+        let s = cropped(0.1, 0.1, 0.7, 0.75, 0.05);
+        let analysis = crate::analyse_frame(&b, None, &s.geometry).unwrap();
+        let e = estimate(&b, &s, &RenderContext::default()).unwrap();
+        assert_eq!(analysis.dmin.value, e.dmin);
+        assert_eq!(analysis.dmin.source, e.dmin_source);
+        assert_eq!(analysis.dmax, e.dmax);
+        let (x0, y0, x1, y1) = s.geometry.analysis_pixels(400, 300);
+        assert_eq!(
+            (
+                analysis.grid_density.width(),
+                analysis.grid_density.height()
+            ),
+            (x1 - x0, y1 - y0)
+        );
+        // No crop: the whole grid, as before.
+        let whole = crate::analyse_frame(&b, None, &Geometry::default()).unwrap();
+        assert_eq!(whole.grid_density.width(), 400);
+    }
+
     #[test]
     fn invalid_settings_empty_image_and_unreachable_anchor_are_errors() {
         let img = synthetic_negative([0.3; 3], [1.6; 3]);
@@ -1042,5 +1518,221 @@ mod tests {
             Err(Error::Invalid(reason)) => assert!(reason.contains("x0"), "{reason}"),
             other => panic!("expected Error::Invalid, got {other:?}"),
         }
+    }
+
+    /// A scene for the black-point floor (ADR 0030): an unexposed border of
+    /// density 0.3 (the film base, `e = 0`) around a flat, dense sky over
+    /// the top 70% of the interior (density `0.3 + 1.5 * 0.9`, which also
+    /// sets Dmax) and a textured foreground below it whose density ramps
+    /// from `0.3 + 1.5 * lo` to `0.3 + 1.5 * hi`, with a one-pixel checker
+    /// of 0.08 log-D so that every 2 by 2 analysis block is textured.
+    /// 1200 by 800, so the grid has real block medians. Neutral, so step 6
+    /// leaves `e = 0` where it is.
+    fn sky_scene(lo: f32, hi: f32) -> Image {
+        let (w, h) = (1200, 800);
+        let border = w / 10;
+        let mut img = Image::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let interior = x >= border && x < w - border && y >= border && y < h - border;
+                let t = if !interior {
+                    0.0
+                } else if y < border + (h - 2 * border) * 7 / 10 {
+                    0.9
+                } else {
+                    let ramp = (x - border) as f32 / (w - 2 * border) as f32;
+                    let texture = if (x + y) % 2 == 0 { 0.0 } else { 0.08 };
+                    lo + (hi - lo) * ramp + texture
+                };
+                img.set_pixel(x, y, [10f32.powf(-(0.3 + 1.5 * t)); 3]);
+            }
+        }
+        img
+    }
+
+    /// Print density of a rendered value: `P = -log10(out)`.
+    fn print_density(out: f32) -> f32 {
+        -out.log10()
+    }
+
+    #[test]
+    fn a_high_anchor_is_floored_so_the_base_prints_black() {
+        let img = sky_scene(0.05, 0.25);
+        let r = render_frame(&img, &Settings::default(), None).unwrap();
+        let est = r.estimates;
+        assert_eq!(est.dmin_source, DminSource::Border, "{est:?}");
+        // The textured foreground sits close to the base, so the anchor is
+        // high (near e = 0).
+        assert!(est.anchor > -0.4, "anchor {}", est.anchor);
+        let print = PrintSettings::default();
+        let p_black = black_print_density(&print);
+        // Before (ADR 0008 alone): the base prints well short of black.
+        let before = PrintCoefficients::new(&print, solve_x0(est.anchor, &print)).unwrap();
+        let p_before = print_density(crate::print_pixel([0.0; 3], &before)[1]);
+        assert!(p_before < p_black - 0.3, "before {p_before}");
+        // After: the floor is on and the base prints at P_black.
+        assert!(r.black_point_floor);
+        assert_eq!(est.x0, crate::print::black_point_x0(&print));
+        for (x, y) in [(2, 2), (600, 40), (1190, 790)] {
+            for ch in r.image.pixel(x, y) {
+                let p = print_density(ch);
+                assert!(
+                    (p - p_black).abs() < 2e-3,
+                    "base at ({x}, {y}) prints at P = {p}"
+                );
+            }
+        }
+        // The user's exposure still moves the base (it is added after the
+        // floor): a negative exposure lifts it below P_black on purpose.
+        let mut lighter = Settings::default();
+        lighter.print.exposure = -0.3;
+        let l = render_frame(&img, &lighter, None).unwrap();
+        assert_eq!(l.estimates.x0, est.x0);
+        assert!(print_density(l.image.pixel(2, 2)[1]) < p_black - 0.2);
+    }
+
+    #[test]
+    fn a_low_anchor_renders_byte_identical_to_the_anchor_alone() {
+        let img = sky_scene(0.55, 0.8);
+        let r = render_frame(&img, &Settings::default(), None).unwrap();
+        let est = r.estimates;
+        let print = PrintSettings::default();
+        let p_black = black_print_density(&print);
+        let x0_anchor = solve_x0(est.anchor, &print);
+        // The anchor already prints the base beyond P_black.
+        assert!(!r.black_point_floor, "{est:?}");
+        assert!(x0_anchor > crate::print::black_point_x0(&print));
+        assert_eq!(est.x0.to_bits(), x0_anchor.to_bits());
+        let c = PrintCoefficients::new(&print, x0_anchor).unwrap();
+        let before = render_full(&img, &est, &c, None, None).unwrap();
+        let bits = |i: &Image| -> Vec<u32> { i.data().iter().map(|v| v.to_bits()).collect() };
+        assert_eq!(bits(&r.image), bits(&before));
+        assert!(print_density(r.image.pixel(2, 2)[1]) > p_black);
+    }
+    #[test]
+    fn plan_frame_then_render_full_is_render_frame_with() {
+        let m = [[0.9, 0.1, 0.0], [0.05, 0.9, 0.05], [0.0, 0.2, 0.8]];
+        let model = DensityModel {
+            a: [0.02, -0.01, 0.03],
+            g: [[-1.02, 0.03, 0.0], [0.02, -0.98, 0.01], [0.0, 0.04, -1.05]],
+        };
+        let correction = film([1.05, 1.0, 0.93], [0.02, 0.0, -0.03]);
+        let pooled = PooledEstimates {
+            dmin: Some([0.22, 0.52, 0.71]),
+            gamma: Some([1.6, 1.7, 1.75]),
+            cast: None,
+        };
+        // Every context, crop and matrix on the small frame; the default
+        // context on two larger scenes, one either side of the black-point
+        // floor, to keep debug runs short.
+        let small = synthetic_negative([0.2, 0.5, 0.7], [1.7, 1.7, 1.6]);
+        let floored = sky_scene(0.05, 0.25);
+        let plain = sky_scene(0.55, 0.8);
+        let crop = cropped(0.1, 0.12, 0.8, 0.75, 0.05);
+        let default = Settings::default();
+        let contexts = [
+            RenderContext::default(),
+            RenderContext {
+                density: Some(&model),
+                ..RenderContext::default()
+            },
+            RenderContext {
+                film: Some(&correction),
+                pooled: Some(&pooled),
+                ..RenderContext::default()
+            },
+        ];
+        type Case<'a> = (
+            &'a Image,
+            &'a Settings,
+            &'a RenderContext<'a>,
+            Option<[[f32; 3]; 3]>,
+        );
+        let mut cases: Vec<Case> = Vec::new();
+        for settings in [&default, &crop] {
+            for ctx in &contexts {
+                for matrix in [None, Some(m)] {
+                    cases.push((&small, settings, ctx, matrix));
+                }
+            }
+        }
+        cases.push((&floored, &default, &contexts[0], Some(m)));
+        cases.push((&plain, &crop, &contexts[0], None));
+        let mut floors = Vec::new();
+        for (img, settings, ctx, matrix) in cases {
+            let want = render_frame_with(img, settings, ctx, matrix).unwrap();
+            let grid = analysis_grid(img, ANALYSIS_GRID_LONG_SIDE);
+            let d = density_grid(&grid.median, ctx.density);
+            let plan = plan_frame(&grid, &d, settings, ctx).unwrap();
+            assert_eq!(plan.estimates, want.estimates);
+            assert_eq!(
+                plan.estimates,
+                estimate_frame(&grid, &d, settings, ctx).unwrap()
+            );
+            assert_eq!(plan.grid_cells, want.grid_cells);
+            assert_eq!(plan.black_point_floor, want.black_point_floor);
+            // The flag is the one a second exposure solve gives.
+            assert_eq!(
+                plan.black_point_floor,
+                solve_exposure(plan.estimates.anchor, &settings.print).floor_active
+            );
+            assert_eq!(
+                plan.coefficients,
+                PrintCoefficients::new(&settings.print, plan.estimates.x0).unwrap()
+            );
+            let got = render_full(
+                img,
+                &plan.estimates,
+                &plan.coefficients,
+                ctx.density,
+                matrix,
+            )
+            .unwrap();
+            let bits = |i: &Image| -> Vec<u32> { i.data().iter().map(|v| v.to_bits()).collect() };
+            assert_eq!(bits(&got), bits(&want.image));
+            floors.push(plan.black_point_floor);
+        }
+        // Both sides of the black-point floor were exercised.
+        assert!(floors.contains(&true) && floors.contains(&false));
+    }
+
+    #[test]
+    fn level_0_tiles_assemble_to_render_frame_with() {
+        // Ruling 73: tiles of level 0 rendered with the frame plan are the
+        // export render, pixel for pixel, including the ragged last row and
+        // column of tiles.
+        let img = textured_negative(1100, 700, [0.25, 0.55, 0.8], [1.6, 1.8, 2.0]);
+        let m = [[0.9, 0.1, 0.0], [0.05, 0.9, 0.05], [0.0, 0.2, 0.8]];
+        let settings = cropped(0.05, 0.05, 0.9, 0.9, 0.05);
+        let ctx = RenderContext::default();
+        let want = render_frame_with(&img, &settings, &ctx, Some(m)).unwrap();
+        let grid = analysis_grid(&img, ANALYSIS_GRID_LONG_SIDE);
+        let d = density_grid(&grid.median, ctx.density);
+        let plan = plan_frame(&grid, &d, &settings, &ctx).unwrap();
+        let mut assembled = Image::new(img.width(), img.height());
+        for t in img.tiles(crate::TILE_SIZE) {
+            let region = crate::Region {
+                x: t.x,
+                y: t.y,
+                width: t.width,
+                height: t.height,
+            };
+            let tile = crate::render_region(
+                &img,
+                region,
+                &plan.estimates,
+                &plan.coefficients,
+                ctx.density,
+                Some(m),
+            )
+            .unwrap();
+            for y in 0..t.height {
+                for x in 0..t.width {
+                    assembled.set_pixel(t.x + x, t.y + y, tile.pixel(x, y));
+                }
+            }
+        }
+        let bits = |i: &Image| -> Vec<u32> { i.data().iter().map(|v| v.to_bits()).collect() };
+        assert_eq!(bits(&assembled), bits(&want.image));
     }
 }

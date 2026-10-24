@@ -62,7 +62,7 @@ fn batch_pools_the_roll_and_rejects_the_outlier() {
     assert!(se.contains("d.tif: rejected from the Dmin pool"), "{se}");
 
     let rs = read_json(&roll.join("roll.negg.json"));
-    assert_eq!(rs["schema_version"], 1);
+    assert_eq!(rs["schema_version"], 2);
     assert_eq!(
         rs["frames"],
         serde_json::json!(["a.tif", "b.tif", "c.tif", "d.tif"])
@@ -89,7 +89,7 @@ fn batch_pools_the_roll_and_rejects_the_outlier() {
         assert_eq!(s["estimates"]["gamma"], rs["pool"]["gamma"], "{name}");
         assert_eq!(s["estimates"]["cast_source"], "roll", "{name}");
         assert_eq!(s["roll"], "roll.negg.json", "{name}");
-        assert_eq!(s["schema_version"], 2);
+        assert_eq!(s["schema_version"], 3);
         assert!(s.get("overrides").is_none(), "{s}");
     }
     // The Rejected frame still renders with the pooled base (Ruling 59).
@@ -137,12 +137,20 @@ fn write_golden_input(path: &Path) {
     enc.write_image::<RGB16>(W as u32, H as u32, &data).unwrap();
 }
 
-/// The golden output of the phase 1 binary for [`write_golden_input`]:
-/// `negg convert golden.tif --out <dir>` with the default settings, built
-/// from the pre-phase-2 snapshot (`.superpowers/sdd/snap-p2w1`, `cargo
-/// build --release --locked`). To regenerate it, write the input with
-/// `cargo test -p negg-cli --test roll -- --ignored write_the_golden_input`
-/// (it goes to `$NEGG_GOLDEN_INPUT`) and convert it with that binary.
+/// The exact bytes of the default `--no-roll` render of
+/// [`write_golden_input`], re-baselined at ADR 0027 (step 6 two-stage cast
+/// selection), at ADR 0030 (step 5 black-point floor: the base of this
+/// input now prints at `P = 2.0` instead of 1.21) and at ADR 0031 (the floor
+/// moves to the knee of the toe: the base prints at `P = 2.1845`) from `negg convert
+/// golden.tif --no-roll --out <dir>` built from the tree at each change
+/// (`cargo build --release`). It began as the
+/// phase 1 binary's output; a deliberate engine change re-baselines it with
+/// an ADR. To regenerate it, write the input with `cargo test -p negg-cli
+/// --test roll -- --ignored write_the_golden_input` (it goes to
+/// `$NEGG_GOLDEN_INPUT`) and convert it with the current release binary.
+/// The embedded ICC profile now carries the fixed creation date of Ruling 77
+/// (2026-01-01 00:00:00) and a zero profile ID, so only the date masking of
+/// the comparison is still needed for older baselines.
 const PHASE1_GOLDEN: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/data/golden.phase1.negg.tif"
@@ -156,7 +164,7 @@ fn write_the_golden_input() {
 }
 
 #[test]
-fn no_roll_matches_the_phase_1_binary_byte_for_byte() {
+fn no_roll_matches_the_golden_render_byte_for_byte() {
     let dir = TempDir::new("no-roll");
     let roll = dir.path("roll");
     write_golden_input(&roll.join("golden.tif"));
@@ -381,7 +389,7 @@ fn a_raw_named_roll_is_refused_before_it_is_decoded() {
     assert!(se.contains("roll.dng: refusing"), "{se}");
     let rs = negg_io::read_roll_sidecar(&roll.join("roll.negg.json")).unwrap();
     assert_eq!(rs.frames, ["a.tif", "b.tif", "c.tif", "d.tif"]);
-    assert_eq!(rs.schema_version, 1);
+    assert_eq!(rs.schema_version, 2);
 }
 
 #[test]
@@ -536,4 +544,204 @@ fn convert_with_another_rig_does_not_use_a_stale_pool() {
         read_json(&roll.join("a.negg.json"))["estimates"]["dmin_source"],
         "roll"
     );
+}
+
+/// Writes a `w` by `h` synthetic negative with no unexposed border, as a
+/// frame cropped inside its image area: the whole frame is the textured
+/// ramp of [`write_negative_tiff`] from `dmin` to `dmin + gamma`, so its
+/// own Dmin comes from the percentile estimator.
+fn write_borderless_tiff(path: &Path, w: usize, h: usize, dmin: [f32; 3], gamma: [f32; 3]) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut data = Vec::with_capacity(w * h * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let ramp = x as f32 / (w - 1) as f32;
+            let texture = if (x / 2 + y / 2) % 2 == 0 { 0.0 } else { 0.08 };
+            let t = (ramp * 0.9 + texture).min(1.0);
+            for c in 0..3 {
+                let transmittance = 10f32.powf(-(dmin[c] + gamma[c] * t));
+                data.push((transmittance.powf(1.0 / 2.2) * 65535.0).round() as u16);
+            }
+        }
+    }
+    let mut enc = TiffEncoder::new(std::fs::File::create(path).unwrap()).unwrap();
+    enc.write_image::<RGB16>(w as u32, h as u32, &data).unwrap();
+}
+
+/// A roll of four frames in `dir/roll` whose film bases are the same
+/// except d's, which is 0.35 log-D lower (beyond the 0.3 log-D reject
+/// distance, so d is Rejected); with `border` each frame has an unexposed
+/// border, else none (percentile Dmin).
+fn write_low_base_roll(dir: &TempDir, border: bool) {
+    let bases = [
+        ("a.tif", [0.50, 0.80, 1.00]),
+        ("b.tif", [0.50, 0.80, 1.00]),
+        ("c.tif", [0.50, 0.80, 1.00]),
+        ("d.tif", [0.15, 0.45, 0.65]),
+    ];
+    for (name, dmin) in bases {
+        let path = dir.path(&format!("roll/{name}"));
+        if border {
+            write_negative_tiff(&path, 64, 48, dmin, [1.6, 1.7, 1.8]);
+        } else {
+            write_borderless_tiff(&path, 64, 48, dmin, [1.6, 1.7, 1.8]);
+        }
+    }
+}
+
+/// The largest number of pixels sharing one RGB value in a 16-bit TIFF
+/// render: pixels collapsed onto the `d >= 0` floor of step 4 all print
+/// the same value, so this counts them.
+fn largest_flat_count(path: &Path) -> usize {
+    let mut dec = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+    let tiff::decoder::DecodingResult::U16(data) = dec.read_image().unwrap() else {
+        panic!("not a 16-bit render: {}", path.display());
+    };
+    let mut counts = std::collections::HashMap::new();
+    for px in data.as_chunks::<3>().0 {
+        *counts.entry(*px).or_insert(0usize) += 1;
+    }
+    counts.into_values().max().unwrap_or(0)
+}
+
+/// Batches `dir/roll` into `dir/<out>`, with `--no-roll` when `no_roll`.
+fn batch_into(dir: &TempDir, out: &str, no_roll: bool) {
+    let roll = dir.path("roll");
+    let out = dir.path(out);
+    let mut args = vec![
+        "batch",
+        roll.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ];
+    if no_roll {
+        args.push("--no-roll");
+    }
+    let o = negg(&args);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+}
+
+#[test]
+fn a_percentile_frame_never_takes_a_pooled_base_above_its_own() {
+    let dir = TempDir::new("roll-percentile-base");
+    write_low_base_roll(&dir, false);
+    let roll = dir.path("roll");
+    batch_into(&dir, "plain", true);
+    let alone = read_json(&roll.join("d.negg.json"))["estimates"].clone();
+    assert_eq!(alone["dmin_source"], "percentile", "{alone}");
+    let alone_flat = largest_flat_count(&dir.path("plain/d.negg.tif"));
+
+    batch_into(&dir, "pooled", false);
+    let rs = read_json(&roll.join("roll.negg.json"));
+    let pooled = &rs["pool"]["dmin"];
+    assert!(pooled.is_array(), "{rs}");
+    for c in 0..3 {
+        // The pool sits on the three shared bases, above d's own.
+        let got = pooled[c].as_f64().unwrap();
+        let own = alone["dmin"][c].as_f64().unwrap();
+        assert!(got > own + 0.3, "{pooled} {alone}");
+    }
+    assert_eq!(rs["pool"]["frames"][3]["dmin_role"], "rejected", "{rs}");
+    // d renders with its own base and records it as such (Ruling 105).
+    let d = read_json(&roll.join("d.negg.json"));
+    assert_eq!(d["estimates"]["dmin"], alone["dmin"], "{d}");
+    assert_eq!(d["estimates"]["dmin_source"], "percentile", "{d}");
+    assert_eq!(d["roll"], "roll.negg.json");
+    // No more pixels collapse onto the floor than when d is rendered alone.
+    let flat = largest_flat_count(&dir.path("pooled/d.negg.tif"));
+    assert!(flat <= alone_flat * 2, "{flat} vs {alone_flat} alone");
+    // The frames whose own base is not below the pool still take it.
+    for name in ["a", "b", "c"] {
+        let s = read_json(&roll.join(format!("{name}.negg.json")));
+        assert_eq!(s["estimates"]["dmin"], *pooled, "{name}");
+        assert_eq!(s["estimates"]["dmin_source"], "roll", "{name}");
+    }
+    // The pooled gamma comes from the base each frame renders with.
+    let fd = &rs["pool"]["frames"][3];
+    for c in 0..3 {
+        let want = fd["dmax"][c].as_f64().unwrap() - alone["dmin"][c].as_f64().unwrap();
+        let got = fd["gamma"][c].as_f64().unwrap();
+        assert!((got - want).abs() < 1e-4, "{fd}");
+    }
+}
+
+#[test]
+fn a_bordered_roll_still_gives_every_frame_the_pooled_base() {
+    let dir = TempDir::new("roll-border-base");
+    write_low_base_roll(&dir, true);
+    let roll = dir.path("roll");
+    batch_into(&dir, "pooled", false);
+    let rs = read_json(&roll.join("roll.negg.json"));
+    let frames = rs["pool"]["frames"].as_array().unwrap();
+    for f in frames {
+        assert_eq!(f["dmin_source"], "border", "{f}");
+    }
+    assert_eq!(frames[3]["dmin_role"], "rejected", "{rs}");
+    let pooled = &rs["pool"]["dmin"];
+    // Ruling 59 is unchanged for Border frames: d, Rejected, takes the pool.
+    for name in ["a", "b", "c", "d"] {
+        let s = read_json(&roll.join(format!("{name}.negg.json")));
+        assert_eq!(s["estimates"]["dmin"], *pooled, "{name}");
+        assert_eq!(s["estimates"]["dmin_source"], "roll", "{name}");
+    }
+}
+
+/// A roll of four frames with the same film base and different red layer
+/// gammas, so that each frame's red exposure against green, inverted with
+/// the pooled gamma, carries its own cast.
+fn write_cast_roll(dir: &TempDir, border: bool) {
+    let reds = [
+        ("a.tif", 1.50),
+        ("b.tif", 1.60),
+        ("c.tif", 1.70),
+        ("d.tif", 1.80),
+    ];
+    for (name, red) in reds {
+        let path = dir.path(&format!("roll/{name}"));
+        let (dmin, gamma) = ([0.20, 0.50, 0.70], [red, 1.7, 1.8]);
+        if border {
+            write_negative_tiff(&path, 64, 48, dmin, gamma);
+        } else {
+            write_borderless_tiff(&path, 64, 48, dmin, gamma);
+        }
+    }
+}
+
+#[test]
+fn a_percentile_roll_fits_each_frame_its_own_cast() {
+    let dir = TempDir::new("roll-percentile-cast");
+    write_cast_roll(&dir, false);
+    let roll = dir.path("roll");
+    batch_into(&dir, "pooled", false);
+    let rs = read_json(&roll.join("roll.negg.json"));
+    assert!(rs["pool"]["dmin"].is_array(), "{rs}");
+    assert!(rs["pool"]["cast"].is_null(), "{rs}");
+    let mut slopes = Vec::new();
+    for (i, name) in ["a", "b", "c", "d"].iter().enumerate() {
+        let s = read_json(&roll.join(format!("{name}.negg.json")));
+        let f = &rs["pool"]["frames"][i];
+        assert_eq!(f["dmin_source"], "percentile", "{f}");
+        assert_eq!(f["cast_role"], "unused", "{f}");
+        assert_eq!(s["estimates"]["cast_source"], "fit", "{name}: {s}");
+        // The frame is corrected with its own fit, as recorded in the pool.
+        assert_eq!(s["estimates"]["cast"], f["cast"], "{name}");
+        slopes.push(s["estimates"]["cast"]["slope_r"].as_f64().unwrap());
+    }
+    assert!(slopes.windows(2).all(|w| w[0] != w[1]), "{slopes:?}");
+}
+
+#[test]
+fn a_bordered_roll_still_uses_the_pooled_cast() {
+    let dir = TempDir::new("roll-border-cast");
+    write_cast_roll(&dir, true);
+    let roll = dir.path("roll");
+    batch_into(&dir, "pooled", false);
+    let rs = read_json(&roll.join("roll.negg.json"));
+    let cast = &rs["pool"]["cast"];
+    assert!(cast.is_object(), "{rs}");
+    for name in ["a", "b", "c", "d"] {
+        let s = read_json(&roll.join(format!("{name}.negg.json")));
+        assert_eq!(s["estimates"]["cast_source"], "roll", "{name}");
+        assert_eq!(s["estimates"]["cast"], *cast, "{name}");
+    }
 }

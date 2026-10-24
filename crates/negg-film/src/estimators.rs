@@ -206,6 +206,8 @@ mod tests {
             median,
             cv: vec![cv; w * h],
             block: 1,
+            source_width: w,
+            source_height: h,
         }
     }
 
@@ -369,6 +371,8 @@ mod tests {
             median: Image::new(0, 0),
             cv: Vec::new(),
             block: 1,
+            source_width: 0,
+            source_height: 0,
         };
         let _ = estimate_dmin(&grid);
     }
