@@ -57,7 +57,8 @@ pub struct FrameRender {
     /// to the sidecar (step 8).
     pub estimates: Estimates,
     /// Number of cells in the analysis grid of step 3: the whole grid
-    /// without a crop, else the buffered analysis grid (Ruling 90).
+    /// without an analysis area or a crop, else the buffered analysis grid
+    /// (Rulings 90 and 134).
     pub grid_cells: u32,
     /// Step 5 (ADR 0030): true when the black-point floor raised `x_0`
     /// above the anchor's, so the frame prints darker than the anchor alone
@@ -130,12 +131,15 @@ fn model_grid<'a>(
 /// Controller choice.
 pub const MIN_ANALYSIS_CELLS: usize = 64;
 
-/// The analysis area of step 3 of `docs/MATHS.md` for a frame with a crop
-/// (Rulings 90 and 91): the crop grid (cells whose centres lie in the crop)
-/// and the analysis grid (cells whose centres lie in the crop shrunk by the
-/// analysis buffer), each with its part of the grid density.
+/// The analysis area of step 3 of `docs/MATHS.md` for a frame with an
+/// analysis rectangle, its analysis area or else its crop (Rulings 90, 91
+/// and 134): the crop grid (cells whose centres lie in the unbuffered
+/// rectangle) and the analysis grid (cells whose centres lie in the
+/// rectangle shrunk by the analysis buffer), each with its part of the grid
+/// density.
 pub(crate) struct AnalysisArea {
-    /// The crop grid: the step 3 Dmin border search and percentile.
+    /// The crop grid (the unbuffered analysis rectangle): the step 3 Dmin
+    /// border search and percentile.
     pub crop: AnalysisGrid,
     /// The grid density of the crop grid.
     pub crop_density: Image,
@@ -145,37 +149,48 @@ pub(crate) struct AnalysisArea {
     pub analysis_density: Image,
 }
 
-/// Cuts the cells `cells` out of `grid` and its density.
+/// Cuts the cells `cells` out of `grid` and its density; `too_small` is
+/// the error message for an empty cut.
 fn cut(
     grid: &AnalysisGrid,
     grid_density: &Image,
     cells: (usize, usize, usize, usize),
+    too_small: &str,
 ) -> Result<(AnalysisGrid, Image)> {
     let sub = sub_grid(grid, cells);
     if sub.cells() == 0 {
-        return Err(Error::Invalid("crop too small to analyse".to_string()));
+        return Err(Error::Invalid(too_small.to_string()));
     }
     let density = grid_density.crop(cells.0, cells.1, sub.width(), sub.height())?;
     Ok((sub, density))
 }
 
-/// The analysis area of `grid` under `geometry` (Rulings 90 and 91), or
-/// `None` when there is no crop: the whole grid is then used with no copy
-/// and the analysis buffer is ignored.
+/// The analysis area of `grid` under `geometry` (Rulings 90, 91 and 134),
+/// on [`Geometry::analysis_rect`] (the analysis area when set, else the
+/// crop), or `None` when there is neither: the whole grid is then used
+/// with no copy and the analysis buffer is ignored.
 ///
 /// # Errors
 ///
 /// [`Error::Invalid`] when the geometry fails validation, `grid_density`
 /// does not match the grid, or the analysis grid has fewer than
-/// [`MIN_ANALYSIS_CELLS`] cells ("crop too small to analyse").
+/// [`MIN_ANALYSIS_CELLS`] cells ("crop too small to analyse", which
+/// suggests an analysis area, or "analysis area too small to analyse" when
+/// an analysis area is set).
 pub(crate) fn analysis_area(
     grid: &AnalysisGrid,
     grid_density: &Image,
     geometry: &Geometry,
 ) -> Result<Option<AnalysisArea>> {
-    if geometry.crop.is_none() {
+    if geometry.analysis_rect().is_none() {
         return Ok(None);
     }
+    let too_small = if geometry.analysis_area.is_some() {
+        "analysis area too small to analyse"
+    } else {
+        "crop too small to analyse; set an analysis area (--analysis-area, or the app's \
+         analysis area tool) larger than the crop to analyse more of the film"
+    };
     geometry.validate()?;
     if grid_density.width() != grid.width() || grid_density.height() != grid.height() {
         return Err(Error::Invalid(format!(
@@ -190,11 +205,11 @@ pub(crate) fn analysis_area(
     let analysis_cells = grid_cells_in(grid, geometry.analysis_pixels(w, h));
     let count = (analysis_cells.2 - analysis_cells.0) * (analysis_cells.3 - analysis_cells.1);
     if count < MIN_ANALYSIS_CELLS {
-        return Err(Error::Invalid("crop too small to analyse".to_string()));
+        return Err(Error::Invalid(too_small.to_string()));
     }
-    let (analysis, analysis_density) = cut(grid, grid_density, analysis_cells)?;
-    let crop_cells = grid_cells_in(grid, geometry.crop_pixels(w, h));
-    let (crop, crop_density) = cut(grid, grid_density, crop_cells)?;
+    let (analysis, analysis_density) = cut(grid, grid_density, analysis_cells, too_small)?;
+    let crop_cells = grid_cells_in(grid, geometry.analysis_rect_pixels(w, h));
+    let (crop, crop_density) = cut(grid, grid_density, crop_cells, too_small)?;
     Ok(Some(AnalysisArea {
         crop,
         crop_density,
@@ -203,10 +218,10 @@ pub(crate) fn analysis_area(
     }))
 }
 
-/// Step 3 Dmin and Dmax of `grid` under `geometry` (Rulings 90 and 91):
-/// with no crop, [`estimate_dmin_dmax`] on the whole grid exactly as
-/// before; with a crop, Dmin on the crop grid and Dmax on the buffered
-/// analysis grid.
+/// Step 3 Dmin and Dmax of `grid` under `geometry` (Rulings 90, 91 and
+/// 134): with no analysis rectangle, [`estimate_dmin_dmax`] on the whole
+/// grid exactly as before; with one, Dmin on the unbuffered rectangle's
+/// grid and Dmax on the buffered analysis grid.
 pub(crate) fn area_dmin_dmax(
     grid: &AnalysisGrid,
     grid_density: &Image,
@@ -357,8 +372,9 @@ fn estimate_frame_and_floor(
     }
     let pooled = ctx.pooled.copied().unwrap_or_default();
 
-    // Step 3: the analysis area (Rulings 90 and 91). Without a crop the
-    // whole grid is used, with no copy, exactly as before.
+    // Step 3: the analysis area (Rulings 90, 91 and 134). Without an
+    // analysis area or a crop the whole grid is used, with no copy, exactly
+    // as before.
     let area = analysis_area(grid, grid_density, &settings.geometry)?;
     let (a_grid, a_density) = match &area {
         Some(a) => (&a.analysis, &a.analysis_density),
@@ -480,9 +496,10 @@ fn estimate_frame_and_floor(
 }
 
 /// Number of cells of the analysis grid of `grid` under `geometry`: the
-/// whole grid without a crop, else the buffered analysis grid (Ruling 90).
+/// whole grid without an analysis area or a crop, else the buffered
+/// analysis grid (Rulings 90 and 134).
 fn analysis_cell_count(grid: &AnalysisGrid, geometry: &Geometry) -> usize {
-    if geometry.crop.is_none() {
+    if geometry.analysis_rect().is_none() {
         return grid.cells();
     }
     let (cx0, cy0, cx1, cy1) = grid_cells_in(
@@ -508,7 +525,8 @@ pub struct FramePlan {
     /// `estimates.x0`.
     pub coefficients: PrintCoefficients,
     /// Number of cells in the analysis grid of step 3: the whole grid
-    /// without a crop, else the buffered analysis grid (Ruling 90).
+    /// without an analysis area or a crop, else the buffered analysis grid
+    /// (Rulings 90 and 134).
     pub grid_cells: u32,
     /// Step 5 (ADR 0030): true when the black-point floor raised `x_0`
     /// above the anchor's. Taken from the same exposure solve that set
@@ -1464,7 +1482,9 @@ mod tests {
         // 0.03 of 256 x 192 is about 8 x 6 = 48 cells.
         let s = cropped(0.5, 0.5, 0.03, 0.03, 0.0);
         match estimate(&a, &s, &RenderContext::default()) {
-            Err(Error::Invalid(reason)) => assert_eq!(reason, "crop too small to analyse"),
+            Err(Error::Invalid(reason)) => {
+                assert!(reason.starts_with("crop too small to analyse; set an analysis area"))
+            }
             other => panic!("expected crop too small, got {other:?}"),
         }
         assert!(render_frame(&a, &s, None).is_err());
@@ -1609,6 +1629,7 @@ mod tests {
         assert_eq!(bits(&r.image), bits(&before));
         assert!(print_density(r.image.pixel(2, 2)[1]) > p_black);
     }
+
     #[test]
     fn plan_frame_then_render_full_is_render_frame_with() {
         let m = [[0.9, 0.1, 0.0], [0.05, 0.9, 0.05], [0.0, 0.2, 0.8]];

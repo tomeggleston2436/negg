@@ -5,8 +5,13 @@
 //!
 //! Settings are plain serde structs. Every struct carries
 //! `#[serde(default)]`, so a sidecar that omits a field (or an empty `{}`)
-//! loads with the plan's defaults, and unknown fields are ignored so that
-//! sidecars written by a newer build still load. Settings are immutable once
+//! loads with the plan's defaults, and unknown fields are ignored so that a
+//! file of the same `schema_version` with fields this build does not know
+//! still loads. The structs themselves accept any `schema_version`; the
+//! readers check it: a sidecar, a roll sidecar or a `--settings` file whose
+//! `schema_version` is newer than [`SETTINGS_SCHEMA_VERSION`] (or the
+//! sidecar's own schema) is refused with a message to upgrade negg
+//! (Ruling 144), never loaded with its new fields dropped. Settings are immutable once
 //! written and are identified by their [`ContentHash`]; the settings history
 //! that backs undo is a list of such hashes.
 //!
@@ -19,8 +24,10 @@ use crate::error::{Error, Result};
 use crate::geometry::Geometry;
 use crate::hash::{ContentHash, hash_value};
 
-/// Version of the settings schema written into sidecars.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 3;
+/// Version of the settings schema written into sidecars. Version 3 added
+/// `geometry` (Ruling 71); version 4 adds `geometry.analysis_area`
+/// (Ruling 134), absent meaning none.
+pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
 
 /// A per-channel value that is either estimated from the frame (or roll) or
 /// fixed by the user.
@@ -219,9 +226,11 @@ pub struct Settings {
     pub colour: ColourSettings,
     /// Rig and film profiles to apply (phase 2). Default none.
     pub profiles: ProfileRefs,
-    /// Crop, analysis buffer, rotation and flip (phase 3, Rulings 70 and
-    /// 90). The crop restricts the step 3 to 6 estimators and frames the
-    /// export (step 8). Default: no crop, buffer 0.05, no rotation or flip.
+    /// Crop, analysis area, analysis buffer, rotation and flip (phase 3,
+    /// Rulings 70, 90 and 134). The analysis area (else the crop) restricts
+    /// the step 3 to 6 estimators; the crop frames the export (step 8).
+    /// Default: no crop, no analysis area, buffer 0.05, no rotation or
+    /// flip.
     pub geometry: Geometry,
 }
 
@@ -486,7 +495,7 @@ mod tests {
         // value here, and bump SETTINGS_SCHEMA_VERSION if sidecars change.
         assert_eq!(
             Settings::default().content_hash().to_hex(),
-            "fc953800a6c0a6896d5a9767ea22b0be64f6598346cacd0aa52a43e69de1d35e"
+            "b1d377e5b6b3aac003645c7f37332cf4735dc5b55de8ed342fe0517b97851a0c"
         );
     }
 
@@ -565,7 +574,7 @@ mod tests {
     #[test]
     fn phase2_defaults_are_identity() {
         let s = Settings::default();
-        assert_eq!(s.schema_version, 3);
+        assert_eq!(s.schema_version, 4);
         assert_eq!(s.colour.cast, CastEstimate::Auto);
         assert_eq!(s.profiles, ProfileRefs::default());
         assert!(s.profiles.rig.is_none() && s.profiles.film.is_none());

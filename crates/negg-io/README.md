@@ -21,7 +21,11 @@ phase 4 and is not here yet.
 
 - `RollSidecar`, `roll_sidecar_path`, `read_roll_sidecar`,
   `write_roll_sidecar`: `roll.negg.json` (`ROLL_SIDECAR_NAME`), roll
-  settings, hash, pooled estimates and frame list, own schema version 1.
+  settings, hash, pooled estimates and frame list, own schema version
+  (`ROLL_SIDECAR_SCHEMA_VERSION`, 3), read through `migrate_roll`: versions
+  1 and 2 are raised to 3 (which also sets the shared settings to version 4;
+  ADR 0021), a newer version is refused, and a missing `schema_version`
+  loads as the current one.
 - `read_rig_profile`, `write_rig_profile`, `read_film_profile`,
   `write_film_profile`: `*.negg.toml` profiles (docs/PROFILES.md); both
   directions call `validate`, so a `TODO(measure)` source is rejected.
@@ -38,7 +42,7 @@ converts floats. The buffer length must be exactly `width * height * 3`.
 
 ## Sidecar
 
-Fields: `schema_version` (2), `source` (file name only), `settings`,
+Fields: `schema_version` (`SIDECAR_SCHEMA_VERSION`, 4), `source` (file name only), `settings`,
 `settings_hash` (`Settings::content_hash`), `estimates`
 (`Option<Estimates>`), `overrides` (`FrameOverrides`, omitted when empty),
 `roll` (`Option<String>`, omitted when none), `negg_version` (filled by the caller from its
@@ -57,9 +61,12 @@ understands says so and asks for an upgrade. Migration is a ladder of
 `upgrade_vN_to_vN+1` steps on the raw `serde_json::Value` ending at the
 current version; `upgrade_v1_to_v2` (Ruling 51) sets both schema versions to 2 and, when
 `estimates` is present, adds `neutral_offset = [0, 0, 0]` and a
-`cast_source` of `fit` (cast `cells_used > 0`) or `identity`. Adding
-version 3 means bumping the constant, writing `upgrade_v2_to_v3`, and
-adding it to the ladder in `migrate`. Within one
+`cast_source` of `fit` (cast `cells_used > 0`) or `identity`;
+`upgrade_v2_to_v3` (Ruling 71, adds `geometry`) and `upgrade_v3_to_v4`
+(Ruling 134, adds `geometry.analysis_area`) set the two version fields and
+nothing else, because an absent field takes its default. Adding
+the next version means bumping the constant, writing the next
+`upgrade_vN_to_vN+1`, and adding it to the ladder in `migrate`. Within one
 version a missing field takes its default and an unknown field is ignored.
 
 ## Must not

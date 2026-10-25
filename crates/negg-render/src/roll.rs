@@ -15,6 +15,8 @@
 //! ([`dmin_candidates`], [`pool_channels`], [`pool_cast`]); this module only
 //! decides each frame's candidacy and role and feeds them in order.
 
+use std::borrow::Cow;
+
 use negg_film::{
     AnalysisGrid, DminEstimate, analysis_grid, dmin_candidates, no_profile_gamma, pool_cast,
     pool_channels,
@@ -22,8 +24,10 @@ use negg_film::{
 use negg_types::settings::ChannelEstimate;
 use negg_types::{
     CastCorrection, CastEstimate, DensityModel, DminSource, Error, FilmCorrection, Geometry, Image,
-    PoolFrame, PoolRole, Result, RollPool, RollSettings, Settings,
+    PoolFrame, PoolRole, Result, RollPool, RollSettings, Settings, dmax_pinned,
 };
+
+use rayon::prelude::*;
 
 use crate::cast::fit_cast;
 use crate::invert::invert;
@@ -36,8 +40,9 @@ use crate::rig::density_grid;
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameAnalysis {
     /// The density of the analysis grid (step 3), with the rig density
-    /// model when one was given: the whole grid without a crop, else the
-    /// buffered analysis grid (Ruling 90), as the cast pool uses it.
+    /// model when one was given: the whole grid without an analysis area or
+    /// a crop, else the buffered analysis grid (Rulings 90 and 134), as the
+    /// cast pool uses it.
     pub grid_density: Image,
     /// The frame's own Dmin estimate and its source (Border or Percentile).
     pub dmin: DminEstimate,
@@ -48,33 +53,29 @@ pub struct FrameAnalysis {
 /// Step 3 of `docs/MATHS.md` for one frame of a roll from its cached
 /// whole-frame analysis grid and grid density (Rulings 90 and 91): the
 /// frame's own Dmin and Dmax estimated exactly as
-/// [`crate::estimate_frame`] does under `geometry` (Dmin on the crop grid,
-/// Dmax on the buffered analysis grid, a rig density model honoured), and
-/// the grid density the cast pool fits on (the analysis grid's part). With
-/// no crop the whole grid is used and the analysis buffer is ignored.
+/// [`crate::estimate_frame`] does under `geometry` (Dmin on the unbuffered
+/// analysis rectangle's grid, Dmax on the buffered analysis grid, a rig
+/// density model honoured), and the grid density the cast pool fits on
+/// (the analysis grid's part). The analysis rectangle is the analysis area
+/// when set, else the crop (Ruling 134); with neither the whole grid is
+/// used and the analysis buffer is ignored.
 ///
 /// # Errors
 ///
 /// [`Error::Invalid`] when the grid has no cells, `grid_density` does not
 /// match it, the geometry fails validation, or a crop leaves fewer than
 /// [`crate::MIN_ANALYSIS_CELLS`] analysis cells.
-pub fn analyse_grid(
+///
+/// `grid_density` may be borrowed or owned: the analysis rectangle is
+/// worked out first, and the density is copied only when there is none
+/// and it was borrowed (the result keeps the whole grid density then).
+pub fn analyse_grid<'a>(
     grid: &AnalysisGrid,
-    grid_density: &Image,
+    grid_density: impl Into<Cow<'a, Image>>,
     geometry: &Geometry,
     density: Option<&DensityModel>,
 ) -> Result<FrameAnalysis> {
-    analyse_owned(grid, grid_density.clone(), geometry, density)
-}
-
-/// [`analyse_grid`] taking the grid density by value, so that the no-crop
-/// path keeps it without a copy.
-fn analyse_owned(
-    grid: &AnalysisGrid,
-    grid_density: Image,
-    geometry: &Geometry,
-    density: Option<&DensityModel>,
-) -> Result<FrameAnalysis> {
+    let grid_density = grid_density.into();
     if grid.cells() == 0 {
         return Err(Error::Invalid(
             "analysis grid has no cells: nothing to analyse".to_string(),
@@ -93,7 +94,7 @@ fn analyse_owned(
     let (dmin, dmax) = area_dmin_dmax(grid, &grid_density, area.as_ref(), density);
     let grid_density = match area {
         Some(a) => a.analysis_density,
-        None => grid_density,
+        None => grid_density.into_owned(),
     };
     Ok(FrameAnalysis {
         grid_density,
@@ -117,7 +118,7 @@ pub fn analyse_frame(
 ) -> Result<FrameAnalysis> {
     let grid = analysis_grid(linear, ANALYSIS_GRID_LONG_SIDE);
     let grid_density = density_grid(&grid.median, density);
-    analyse_owned(&grid, grid_density, geometry, density)
+    analyse_grid(&grid, Cow::Owned(grid_density), geometry, density)
 }
 
 /// One frame as [`pool_roll`] sees it: its file name, its pass 1 analysis
@@ -180,6 +181,21 @@ fn mark_excluded(mut roles: Vec<PoolRole>, excluded: &[bool]) -> Vec<PoolRole> {
 ///   with its own fit.
 /// - A `pool_*` flag of `roll` that is off gives that pool `None` with
 ///   every role Unused.
+/// - Ruling 133: a frame whose Dmax in effect is pinned at the density cap
+///   ([`negg_types::dmax_pinned`]: the film holder or another opaque area
+///   is in its analysed rectangle) is not a candidate for the gamma pool
+///   nor the cast pool: its role there is Unused (Excluded when the user
+///   fixed the value), and its record has `needs_analysis_area` set
+///   whatever the pool flags. Its Dmin still pools as any other frame's
+///   (the film base is unaffected by an opaque surround). When every frame
+///   is pinned there is no pooled gamma (and no pooled cast), so each frame
+///   keeps its own. Pass 2 renders a pinned frame like any other frame,
+///   with the pooled values when there are some: the pooled gamma and cast
+///   come from the good frames of the same film, a better estimate for it
+///   than its own pinned range. Its exposure anchor and `x_0` (step 5), and
+///   its own cast fit when there is no cast pool, still come from its
+///   grid, holder cells included, so it may still print off: the
+///   `needs_analysis_area` flag (the app's badge) is the remedy.
 ///
 /// [`PoolFrame`] records each frame's own values: Dmin (its Fixed value
 /// with source Fixed when Excluded), Dmax in effect, `gamma_f` (or its
@@ -243,6 +259,9 @@ pub fn pool_roll(
         .iter()
         .map(|f| fixed(f.settings.film.dmax).unwrap_or(f.analysis.dmax))
         .collect();
+    // Ruling 133: a Dmax pinned at the density cap keeps the frame out of
+    // the gamma and cast pools.
+    let pinned: Vec<bool> = dmax_in_effect.iter().map(dmax_pinned).collect();
 
     // Step 3: gamma.
     let gamma_fixed: Vec<Option<[f32; 3]>> = frames
@@ -256,7 +275,7 @@ pub fn pool_roll(
         })
         .collect();
     let (pooled_gamma, gamma_roles) = if roll.pool_gamma {
-        let candidates: Vec<bool> = gamma_excluded.iter().map(|e| !e).collect();
+        let candidates: Vec<bool> = (0..n).map(|i| !gamma_excluded[i] && !pinned[i]).collect();
         let pool = pool_channels(&own_gamma, &candidates);
         (pool.value, mark_excluded(pool.roles, &gamma_excluded))
     } else {
@@ -271,32 +290,40 @@ pub fn pool_roll(
                 || !f.settings.colour.auto_colour
         })
         .collect();
-    let mut casts = Vec::with_capacity(n);
-    for (i, f) in frames.iter().enumerate() {
-        let cast = match f.settings.colour.cast {
-            CastEstimate::Fixed {
-                slope_r,
-                offset_r,
-                slope_b,
-                offset_b,
-            } => CastCorrection {
-                slope_r,
-                offset_r,
-                slope_b,
-                offset_b,
-                cells_used: 0,
-            },
-            CastEstimate::Auto if cast_excluded[i] || film.is_some() => CastCorrection::IDENTITY,
-            CastEstimate::Auto => {
-                let gamma = gamma_fixed[i]
-                    .or(pooled_gamma)
-                    .unwrap_or_else(|| no_profile_gamma(dmin_in_effect[i], dmax_in_effect[i]));
-                let e = invert(&f.analysis.grid_density, dmin_in_effect[i], gamma)?;
-                fit_cast(&e)
-            }
-        };
-        casts.push(cast);
-    }
+    // Each frame's own fit is independent of the others, so the fits run in
+    // parallel; the results are collected in input order and the first
+    // error in input order is returned, exactly as a serial loop would.
+    let fits: Vec<Result<CastCorrection>> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let f = &frames[i];
+            Ok(match f.settings.colour.cast {
+                CastEstimate::Fixed {
+                    slope_r,
+                    offset_r,
+                    slope_b,
+                    offset_b,
+                } => CastCorrection {
+                    slope_r,
+                    offset_r,
+                    slope_b,
+                    offset_b,
+                    cells_used: 0,
+                },
+                CastEstimate::Auto if cast_excluded[i] || film.is_some() => {
+                    CastCorrection::IDENTITY
+                }
+                CastEstimate::Auto => {
+                    let gamma = gamma_fixed[i]
+                        .or(pooled_gamma)
+                        .unwrap_or_else(|| no_profile_gamma(dmin_in_effect[i], dmax_in_effect[i]));
+                    let e = invert(&f.analysis.grid_density, dmin_in_effect[i], gamma)?;
+                    fit_cast(&e)
+                }
+            })
+        })
+        .collect();
+    let casts: Vec<CastCorrection> = fits.into_iter().collect::<Result<_>>()?;
     let (pooled_cast, cast_roles) = if !roll.pool_colour {
         (None, vec![PoolRole::Unused; n])
     } else if film.is_some() || !border_pool {
@@ -308,11 +335,15 @@ pub fn pool_roll(
         let rejected: Vec<bool> = (0..n)
             .map(|i| dmin_roles[i] == PoolRole::Rejected || gamma_roles[i] == PoolRole::Rejected)
             .collect();
-        let candidates: Vec<bool> = (0..n).map(|i| !cast_excluded[i] && !rejected[i]).collect();
+        let candidates: Vec<bool> = (0..n)
+            .map(|i| !cast_excluded[i] && !rejected[i] && !pinned[i])
+            .collect();
         let (value, mut roles) = pool_cast(&casts, &candidates);
         for i in 0..n {
             if cast_excluded[i] {
                 roles[i] = PoolRole::Excluded;
+            } else if pinned[i] {
+                roles[i] = PoolRole::Unused;
             } else if rejected[i] {
                 roles[i] = PoolRole::Rejected;
             }
@@ -335,6 +366,7 @@ pub fn pool_roll(
             dmin_role: dmin_roles[i],
             gamma_role: gamma_roles[i],
             cast_role: cast_roles[i],
+            needs_analysis_area: pinned[i],
         })
         .collect();
     Ok(RollPool {
@@ -699,5 +731,147 @@ mod tests {
         assert!(pool.dmin.is_some());
         assert_eq!(pool.cast, None);
         assert!(est.iter().all(|e| e.cast_source == CastSource::Fit));
+    }
+
+    /// `film` inside an opaque surround `margin` pixels wide on every side
+    /// (transmittance 0: a film holder in the shot).
+    fn in_holder(film: &Image, margin: usize) -> Image {
+        let (w, h) = (film.width() + 2 * margin, film.height() + 2 * margin);
+        let mut img = Image::new(w, h);
+        for y in 0..film.height() {
+            for x in 0..film.width() {
+                img.set_pixel(x + margin, y + margin, film.pixel(x, y));
+            }
+        }
+        img
+    }
+
+    /// The analysis area of a `film_w` by `film_h` film inside a surround
+    /// `margin` pixels wide, with no analysis buffer.
+    fn film_area(film_w: usize, film_h: usize, margin: usize) -> Geometry {
+        let (w, h) = ((film_w + 2 * margin) as f32, (film_h + 2 * margin) as f32);
+        Geometry {
+            analysis_area: Some(negg_types::CropRect {
+                x: margin as f32 / w,
+                y: margin as f32 / h,
+                width: film_w as f32 / w,
+                height: film_h as f32 / h,
+            }),
+            analysis_buffer: 0.0,
+            ..Geometry::default()
+        }
+    }
+
+    #[test]
+    fn an_analysis_area_on_the_film_gives_the_clean_estimates_at_full_size() {
+        let clean = negative([0.2, 0.5, 0.7], [1.6, 1.7, 1.8]);
+        let held = in_holder(&clean, 24);
+        // Without an analysis area the holder pins Dmax at the cap.
+        let pinned = render_frame(&held, &Settings::default(), None).unwrap();
+        assert!(
+            negg_types::dmax_pinned(&pinned.estimates.dmax),
+            "{:?}",
+            pinned.estimates
+        );
+        // With the area on the film, the estimates are the clean frame's,
+        // and the output keeps the whole frame (no crop).
+        let mut s = Settings {
+            geometry: film_area(W, H, 24),
+            ..Settings::default()
+        };
+        let r = render_frame(&held, &s, None).unwrap();
+        let want = render_frame(&clean, &Settings::default(), None).unwrap();
+        assert_eq!(r.estimates, want.estimates);
+        assert_eq!(r.grid_cells, want.grid_cells);
+        assert_eq!((r.image.width(), r.image.height()), (W + 48, H + 48));
+        assert!(!negg_types::dmax_pinned(&r.estimates.dmax));
+        // Pass 1 of roll mode sees the same.
+        let a = analyse_frame(&held, None, &s.geometry).unwrap();
+        let b = analyse_frame(&clean, None, &Geometry::default()).unwrap();
+        assert_eq!(a, b);
+        // A crop elsewhere does not move the analysis while the area is set.
+        s.geometry.crop = Some(negg_types::CropRect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.5,
+            height: 0.5,
+        });
+        let cropped = render_frame(&held, &s, None).unwrap();
+        assert_eq!(cropped.estimates, want.estimates);
+    }
+
+    #[test]
+    fn holder_pinned_frames_are_left_out_of_the_gamma_and_cast_pools() {
+        let good = [
+            negative([0.20, 0.50, 0.70], [1.60, 1.70, 1.80]),
+            negative([0.21, 0.51, 0.71], [1.55, 1.65, 1.80]),
+            negative([0.22, 0.52, 0.72], [1.60, 1.70, 1.75]),
+        ];
+        let held: Vec<Image> = (0..5)
+            .map(|i| {
+                let d = 0.2 + 0.01 * i as f32;
+                in_holder(&negative([d, d + 0.3, d + 0.5], [1.6, 1.7, 1.8]), 20)
+            })
+            .collect();
+        let imgs: Vec<Image> = good.iter().chain(&held).cloned().collect();
+        let (pool, est) = pool_and_render(&imgs);
+        let (good_pool, _) = pool_and_render(&good);
+        // The pool is the three good frames' alone.
+        assert!(pool.gamma.is_some());
+        assert_eq!(pool.dmin, good_pool.dmin);
+        assert_eq!(pool.gamma, good_pool.gamma);
+        assert_eq!(pool.cast, good_pool.cast);
+        for (i, f) in pool.frames.iter().enumerate() {
+            if i < 3 {
+                assert!(!f.needs_analysis_area, "{f:?}");
+                assert_eq!(f.gamma_role, PoolRole::Inlier, "{f:?}");
+                assert_eq!(f.cast_role, PoolRole::Inlier, "{f:?}");
+            } else {
+                assert!(f.needs_analysis_area, "{f:?}");
+                assert!(negg_types::dmax_pinned(&f.dmax));
+                assert_eq!(f.gamma_role, PoolRole::Unused, "{f:?}");
+                assert_eq!(f.cast_role, PoolRole::Unused, "{f:?}");
+            }
+        }
+        // Every frame, the pinned ones too, renders with the good pool.
+        for e in &est {
+            assert_eq!(Some(e.gamma), pool.gamma);
+            assert_eq!(e.gamma_source, negg_types::GammaSource::Roll);
+        }
+    }
+
+    #[test]
+    fn an_all_pinned_roll_has_no_gamma_pool() {
+        let held: Vec<Image> = (0..3)
+            .map(|i| {
+                let d = 0.2 + 0.01 * i as f32;
+                in_holder(&negative([d, d + 0.3, d + 0.5], [1.6, 1.7, 1.8]), 20)
+            })
+            .collect();
+        let (pool, est) = pool_and_render(&held);
+        assert_eq!(pool.gamma, None);
+        assert_eq!(pool.cast, None);
+        for (f, e) in pool.frames.iter().zip(&est) {
+            assert!(f.needs_analysis_area);
+            assert_eq!(f.gamma_role, PoolRole::Unused);
+            assert_eq!(f.cast_role, PoolRole::Unused);
+            // Each keeps its own gamma.
+            assert_eq!(e.gamma_source, negg_types::GammaSource::Range);
+        }
+        // A fixed Dmax below the cap takes the frame back into the pool.
+        let a: Vec<FrameAnalysis> = held
+            .iter()
+            .map(|i| analyse_frame(i, None, &Geometry::default()).unwrap())
+            .collect();
+        let mut s = vec![Settings::default(); 3];
+        s[0].film.dmax = ChannelEstimate::Fixed {
+            value: [2.0, 2.3, 2.6],
+        };
+        let nm = names(3);
+        let pool = pool_roll(&frames(&nm, &a, &s), &RollSettings::default(), None).unwrap();
+        assert!(!pool.frames[0].needs_analysis_area);
+        assert_eq!(pool.frames[0].gamma_role, PoolRole::Inlier);
+        assert!(pool.gamma.is_some());
+        assert!(pool.frames[1].needs_analysis_area && pool.frames[2].needs_analysis_area);
     }
 }

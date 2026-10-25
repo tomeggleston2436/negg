@@ -3,8 +3,9 @@
 //! The `negg` command-line tool: convert, batch (roll mode), eval,
 //! profile rig, profile film and lock.
 //!
-//! Owns argument parsing and orchestration only. Must not contain
-//! image maths; that lives in the engine crates.
+//! Owns argument parsing and exit statuses only. The rendering maths
+//! lives in the engine crates and the flows in `negg-session`; the eval's
+//! own scoring maths lives in the library's `eval` module (ADR 0028).
 //!
 //! Exit status: 0 on success, 1 for a conversion, measurement or I/O
 //! failure (for `batch`, when any frame failed), 2 for a usage, settings,

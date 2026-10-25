@@ -148,21 +148,33 @@ impl Cell {
     }
 }
 
-/// Nearest-rank percentile of `sorted` (ascending), `p` in `[0, 100]`.
-/// `sorted` must not be empty.
-fn percentile_sorted(sorted: &[f32], p: f32) -> f32 {
-    let n = sorted.len();
+/// Nearest-rank percentile of `values` in `f32::total_cmp` order, `p` in
+/// `[0, 100]`: the value a full ascending sort would hold at rank
+/// `ceil(p / 100 * n)` (at least 1). Found by selection, which reorders
+/// `values` but costs linear time instead of a sort. `values` must not be
+/// empty.
+fn percentile_nearest_rank(values: &mut [f32], p: f32) -> f32 {
+    let n = values.len();
     let rank = ((f64::from(p) / 100.0) * n as f64).ceil() as usize;
-    sorted[rank.clamp(1, n) - 1]
+    *values
+        .select_nth_unstable_by(rank.clamp(1, n) - 1, f32::total_cmp)
+        .1
 }
 
-/// Sorts `(index, chroma)` pairs by chroma (stable, so ties keep index
-/// order) and returns the indices of the lowest [`LOW_CHROMA_FRACTION`],
-/// rounded up so a non-empty set keeps at least one.
+/// The indices of the lowest [`LOW_CHROMA_FRACTION`] of `(index, chroma)`
+/// pairs by chroma, rounded up so a non-empty set keeps at least one; ties
+/// are broken by the lower index, which is the set a stable sort by chroma
+/// truncated to that count keeps. Found by selection; the indices come back
+/// in no particular order.
 fn keep_lowest_chroma(mut cells: Vec<(usize, f32)>) -> Vec<usize> {
-    cells.sort_by(|a, b| a.1.total_cmp(&b.1));
     let keep = (cells.len() as f64 * LOW_CHROMA_FRACTION).ceil() as usize;
-    cells.truncate(keep);
+    if keep == 0 {
+        return Vec::new();
+    }
+    if keep < cells.len() {
+        cells.select_nth_unstable_by(keep - 1, |a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        cells.truncate(keep);
+    }
     cells.into_iter().map(|(i, _)| i).collect()
 }
 
@@ -187,9 +199,8 @@ fn refined_selection(es: &[[f32; 3]], cast: &CastCorrection) -> Vec<usize> {
         .map(|&e| Cell::from_e(apply_cast_pixel(e, cast)))
         .collect();
     let mut lumas: Vec<f32> = cells.iter().map(|c| c.luma).collect();
-    lumas.sort_by(f32::total_cmp);
-    let p20 = percentile_sorted(&lumas, SHADOW_PERCENTILE);
-    let p80 = percentile_sorted(&lumas, HIGHLIGHT_PERCENTILE);
+    let p20 = percentile_nearest_rank(&mut lumas, SHADOW_PERCENTILE);
+    let p80 = percentile_nearest_rank(&mut lumas, HIGHLIGHT_PERCENTILE);
 
     let mut bands: [Vec<(usize, f32)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
     for (i, cell) in cells.iter().enumerate() {
@@ -421,12 +432,47 @@ mod tests {
 
     #[test]
     fn nearest_rank_percentile() {
-        let v = [1.0, 2.0, 3.0, 4.0, 5.0];
-        assert_eq!(percentile_sorted(&v, 0.0), 1.0);
-        assert_eq!(percentile_sorted(&v, 20.0), 1.0);
-        assert_eq!(percentile_sorted(&v, 50.0), 3.0);
-        assert_eq!(percentile_sorted(&v, 80.0), 4.0);
-        assert_eq!(percentile_sorted(&v, 100.0), 5.0);
+        for (p, want) in [
+            (0.0, 1.0),
+            (20.0, 1.0),
+            (50.0, 3.0),
+            (80.0, 4.0),
+            (100.0, 5.0),
+        ] {
+            let mut v = [4.0, 1.0, 5.0, 3.0, 2.0];
+            assert_eq!(percentile_nearest_rank(&mut v, p), want, "p = {p}");
+        }
+        // Selection gives what a full sort gives, also after a first
+        // selection has reordered the values.
+        let values: Vec<f32> = (0..1001)
+            .map(|i| ((i * 7919) % 1001) as f32 * 0.5)
+            .collect();
+        let mut sorted = values.clone();
+        sorted.sort_by(f32::total_cmp);
+        let mut v = values;
+        for p in [20.0f32, 80.0, 0.0, 33.3, 100.0] {
+            let rank = ((f64::from(p) / 100.0) * 1001.0).ceil() as usize;
+            assert_eq!(
+                percentile_nearest_rank(&mut v, p),
+                sorted[rank.clamp(1, 1001) - 1]
+            );
+        }
+    }
+
+    #[test]
+    fn lowest_chroma_selection_equals_a_stable_sort() {
+        // Many ties, so the index tie-break decides which cells are kept.
+        let cells: Vec<(usize, f32)> = (0..997).map(|i| (i, ((i * 31) % 17) as f32)).collect();
+        let mut sorted = cells.clone();
+        sorted.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let keep = (cells.len() as f64 * LOW_CHROMA_FRACTION).ceil() as usize;
+        let mut want: Vec<usize> = sorted[..keep].iter().map(|c| c.0).collect();
+        want.sort_unstable();
+        let mut got = keep_lowest_chroma(cells);
+        got.sort_unstable();
+        assert_eq!(got, want);
+        assert!(keep_lowest_chroma(Vec::new()).is_empty());
+        assert_eq!(keep_lowest_chroma(vec![(3, 1.0)]), vec![3]);
     }
 
     #[test]

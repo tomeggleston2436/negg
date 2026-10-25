@@ -10,12 +10,13 @@
 //!
 //! Reading always goes through [`migrate`], which inspects `schema_version`
 //! before deserialising anything else. Writing is atomic: the JSON goes to
-//! `<path>.tmp` and is renamed into place, so a crash never leaves a
-//! half-written sidecar.
+//! a temporary file of a unique name beside it and is renamed into place,
+//! so a crash never leaves a half-written sidecar.
 
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use negg_types::{ContentHash, Estimates, FrameOverrides, Settings};
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,7 @@ use serde_json::Value;
 use crate::error::{IoError, io_at};
 
 /// The sidecar schema version this build writes and the newest it reads.
-pub const SIDECAR_SCHEMA_VERSION: u32 = 3;
+pub const SIDECAR_SCHEMA_VERSION: u32 = 4;
 
 /// Extension chain appended to the source's stem to name its sidecar.
 pub const SIDECAR_SUFFIX: &str = ".negg.json";
@@ -139,11 +140,11 @@ pub fn read_sidecar(path: &Path) -> Result<Sidecar, IoError> {
 
 /// Writes a sidecar as pretty JSON with a trailing newline.
 ///
-/// The JSON is written to `<path>.tmp` (same directory, so the rename is
-/// within one file system), flushed to disk with `sync_all`, and only then
-/// renamed over `path`, so a crash cannot leave `path` naming a file whose
-/// contents never reached the disk. On any failure the
-/// temporary file is removed and `path` is left as it was.
+/// The JSON is written to a temporary file of a unique name in the same
+/// directory (so the rename is within one file system), flushed to disk
+/// with `sync_all`, and only then renamed over `path`, so a crash cannot
+/// leave `path` naming a file whose contents never reached the disk. On any
+/// failure the temporary file is removed and `path` is left as it was.
 ///
 /// # Errors
 ///
@@ -153,6 +154,18 @@ pub fn read_sidecar(path: &Path) -> Result<Sidecar, IoError> {
 /// `source` contains a directory separator, [`IoError::Json`] when
 /// serialisation fails and [`IoError::Io`] for file errors.
 pub fn write_sidecar(path: &Path, sidecar: &Sidecar) -> Result<(), IoError> {
+    write_atomic(path, &sidecar_bytes(sidecar)?).map(|_| ())
+}
+
+/// The bytes [`write_sidecar`] writes for `sidecar`: pretty JSON with a
+/// trailing newline. A caller that writes them itself with
+/// [`write_file_atomic`] (to know the stamp of what it wrote) gets the
+/// very same file.
+///
+/// # Errors
+///
+/// As [`write_sidecar`], without the file errors.
+pub fn sidecar_bytes(sidecar: &Sidecar) -> Result<Vec<u8>, IoError> {
     if sidecar.schema_version != SIDECAR_SCHEMA_VERSION {
         return Err(IoError::Schema(format!(
             "cannot write schema_version {}; this build writes version {SIDECAR_SCHEMA_VERSION}",
@@ -167,37 +180,67 @@ pub fn write_sidecar(path: &Path, sidecar: &Sidecar) -> Result<(), IoError> {
     }
     let mut text = serde_json::to_string_pretty(sidecar)?;
     text.push('\n');
-    write_atomic(path, text.as_bytes())
+    Ok(text.into_bytes())
 }
 
-/// Writes `bytes` to `<path>.tmp`, syncs, and renames over `path`; the
-/// temporary file is removed on any failure. Shared by every atomic write
-/// in this crate (sidecars and profiles).
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), IoError> {
+/// Writes `bytes` to `path` atomically: to a temporary file of a unique
+/// name in the same directory, synced to disk, then renamed over `path`.
+/// Returns the metadata of the file as written, taken from the open file
+/// before the rename (a rename keeps the modification time and the
+/// length), so a caller learns the stamp of its own write even when
+/// another program replaces the file right after.
+///
+/// # Errors
+///
+/// [`IoError::Io`] for file errors; the temporary file is removed and
+/// `path` is left as it was.
+pub fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<fs::Metadata, IoError> {
+    write_atomic(path, bytes)
+}
+
+/// Writes `bytes` atomically (see [`write_file_atomic`]). Shared by every
+/// atomic write in this crate (sidecars, profiles and JPEGs).
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<fs::Metadata, IoError> {
+    write_atomic_with(path, |file| file.write_all(bytes))
+}
+
+/// Creates a temporary file of a unique name beside `path`, lets `write`
+/// fill it, syncs it to disk and renames it over `path`. The temporary
+/// file is removed on any failure, and `path` is then left as it was; the
+/// error names `path`. Returns the metadata of the synced file.
+pub(crate) fn write_atomic_with(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> std::io::Result<()>,
+) -> Result<fs::Metadata, IoError> {
     let tmp = temp_path(path);
-    let result = write_synced(&tmp, bytes)
-        .map_err(io_at(&tmp))
-        .and_then(|()| fs::rename(&tmp, path).map_err(io_at(path)));
+    let result = (|| {
+        let mut file = fs::File::options()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        write(&mut file)?;
+        file.sync_all()?;
+        file.metadata()
+    })()
+    .map_err(io_at(path))
+    .and_then(|meta| fs::rename(&tmp, path).map(|()| meta).map_err(io_at(path)));
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     result
 }
 
-/// Creates `path`, writes `bytes` and syncs the file to disk before it is
-/// closed.
-fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut file = fs::File::create(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()
-}
-
+/// A temporary name beside `path` that no other writer uses: the file
+/// name, this process's id and a counter, so that two programs (the app
+/// and the CLI) or two threads writing the same file never share one.
 fn temp_path(path: &Path) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
     let mut name = path
         .file_name()
         .map(|n| n.to_os_string())
         .unwrap_or_default();
-    name.push(".tmp");
+    name.push(format!(".{}.{n}.tmp", std::process::id()));
     path.with_file_name(name)
 }
 
@@ -208,9 +251,10 @@ fn temp_path(path: &Path) -> PathBuf {
 /// value interpreted. Migration is a ladder: a version `n` file is upgraded
 /// to `n + 1` by a function that edits the raw `Value`, and so on until the
 /// current version, which is deserialised. Version 3 (Ruling 71) adds the
-/// settings' `geometry`, which takes its default; adding version 4 means
-/// bumping [`SIDECAR_SCHEMA_VERSION`], writing `upgrade_v3_to_v4`, and
-/// adding it to the ladder below.
+/// settings' `geometry`, which takes its default; version 4 (Ruling 134)
+/// adds `geometry.analysis_area`, absent meaning none. Adding version 5
+/// means bumping [`SIDECAR_SCHEMA_VERSION`], writing `upgrade_v4_to_v5`,
+/// and adding it to the ladder below.
 ///
 /// # Errors
 ///
@@ -226,9 +270,10 @@ pub fn migrate(value: Value) -> Result<Sidecar, IoError> {
         )));
     }
     let value = match version {
-        1 => upgrade_v2_to_v3(upgrade_v1_to_v2(value)),
-        2 => upgrade_v2_to_v3(value),
-        3 => value,
+        1 => upgrade_v3_to_v4(upgrade_v2_to_v3(upgrade_v1_to_v2(value))),
+        2 => upgrade_v3_to_v4(upgrade_v2_to_v3(value)),
+        3 => upgrade_v3_to_v4(value),
+        4 => value,
         other => {
             return Err(IoError::Schema(format!(
                 "schema_version {other} is not a sidecar version negg has ever written"
@@ -274,6 +319,20 @@ fn upgrade_v2_to_v3(mut value: Value) -> Value {
         object.insert("schema_version".into(), Value::from(3));
         if let Some(settings) = object.get_mut("settings").and_then(Value::as_object_mut) {
             settings.insert("schema_version".into(), Value::from(3));
+        }
+    }
+    value
+}
+
+/// Upgrades a version 3 sidecar value to version 4 (Ruling 134): sets
+/// `schema_version` and `settings.schema_version` to 4 and nothing else.
+/// Version 3 has no `geometry.analysis_area`, and an absent one means none,
+/// so every frame analyses exactly as it did.
+fn upgrade_v3_to_v4(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("schema_version".into(), Value::from(4));
+        if let Some(settings) = object.get_mut("settings").and_then(Value::as_object_mut) {
+            settings.insert("schema_version".into(), Value::from(4));
         }
     }
     value
@@ -406,7 +465,7 @@ mod tests {
 
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.ends_with('\n'), "trailing newline");
-        assert!(text.contains("\n  \"schema_version\": 3"), "pretty printed");
+        assert!(text.contains("\n  \"schema_version\": 4"), "pretty printed");
         assert!(text.contains(&sidecar.settings_hash.to_hex()));
         assert!(!dir.path("roll.01.frame.negg.json.tmp").exists());
 
@@ -454,7 +513,7 @@ mod tests {
             Err(IoError::InvalidSidecar(_))
         ));
         let mut future = sample_sidecar();
-        future.schema_version = 4;
+        future.schema_version = 5;
         assert!(matches!(
             write_sidecar(&path, &future),
             Err(IoError::Schema(_))
@@ -463,8 +522,8 @@ mod tests {
     }
 
     #[test]
-    fn migrate_accepts_versions_1_to_3_and_fills_defaults() {
-        for version in 1..=3 {
+    fn migrate_accepts_versions_1_to_4_and_fills_defaults() {
+        for version in 1..=4 {
             let sidecar = migrate(json!({ "schema_version": version })).unwrap();
             assert_eq!(sidecar, Sidecar::default(), "{version}");
         }
@@ -511,7 +570,7 @@ mod tests {
     fn migrate_v1_adds_zero_offsets_and_fit_cast_source() {
         let s = migrate(v1_fixture(123)).unwrap();
         assert_eq!(s.schema_version, SIDECAR_SCHEMA_VERSION);
-        assert_eq!(s.settings.schema_version, 3);
+        assert_eq!(s.settings.schema_version, 4);
         assert!(s.settings.geometry.is_identity());
         assert_eq!(s.settings.print.exposure, 0.35);
         assert!(s.overrides.is_empty());
@@ -534,7 +593,7 @@ mod tests {
     fn migrate_v1_without_estimates_or_settings_still_loads() {
         let s = migrate(json!({ "schema_version": 1, "source": "f.dng" })).unwrap();
         assert_eq!(s.estimates, None);
-        assert_eq!(s.settings.schema_version, 3);
+        assert_eq!(s.settings.schema_version, 4);
     }
 
     #[test]
@@ -561,7 +620,7 @@ mod tests {
     #[test]
     fn migrate_rejects_unknown_and_missing_versions() {
         for (value, needle) in [
-            (json!({ "schema_version": 4 }), "newer"),
+            (json!({ "schema_version": 5 }), "newer"),
             (json!({ "schema_version": 0 }), "ever written"),
             (json!({ "source": "frame.dng" }), "missing"),
             (json!({ "schema_version": "1" }), "non-negative integer"),
@@ -614,5 +673,33 @@ mod tests {
             ]
         );
         assert_eq!(object["estimates"]["dmin_source"], json!("border"));
+    }
+
+    #[test]
+    fn concurrent_atomic_writes_use_their_own_temporary_files() {
+        let dir = TempDir::new("concurrent");
+        let path = dir.path("shared.negg.json");
+        std::thread::scope(|scope| {
+            for t in 0..8u8 {
+                let path = &path;
+                scope.spawn(move || {
+                    for _ in 0..20 {
+                        let meta = write_file_atomic(path, &[t; 64]).unwrap();
+                        assert_eq!(meta.len(), 64);
+                    }
+                });
+            }
+        });
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(bytes.len(), 64);
+        assert!(bytes.iter().all(|&b| b == bytes[0]), "one whole write");
+        let names: Vec<String> = fs::read_dir(&dir.0)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["shared.negg.json"], "no temporary file is left");
+        let bytes = sidecar_bytes(&sample_sidecar()).unwrap();
+        write_sidecar(&path, &sample_sidecar()).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes, "the same bytes");
     }
 }

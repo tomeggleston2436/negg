@@ -29,7 +29,7 @@ pub enum EvalError {
         /// What went wrong.
         message: String,
     },
-    /// Linearising a frame or building its camera matrix failed.
+    /// Linearising a frame or building its step 7 matrix failed.
     Cms(CmsError),
     /// The engine refused to render a frame.
     Render(negg_types::Error),

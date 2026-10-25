@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-10-24 (Rulings 73, 74, 75, 76 and 77).
+Accepted, 2026-10-24 (Rulings 73, 74, 75, 76 and 77; implemented in Waves 0 to 2 and amended by Rulings 117, 118, 124 and 134 to 135, below).
 
 ## Context
 
@@ -10,7 +10,7 @@ The app shows a live preview of a 24 MP frame while sliders move. Export remains
 
 ## Decision
 
-**Pyramid (Ruling 73).** The open frame keeps its full linear image (after decode, prepare and rig) as level 0, and a pyramid of levels 1 to L built by `negg_render::downscale_half`: a 2 x 2 box mean in linear light, where an odd edge row or column averages the pixels that exist, giving size `ceil(w/2) x ceil(h/2)`. L is the smallest n with `max(w_n, h_n) <= TILE_SIZE`, with `TILE_SIZE = 512`.
+**Pyramid (Ruling 73).** The open frame keeps its full linear image (after decode, prepare and rig) as level 0, and a pyramid of levels 1 to L built by `negg_render::downscale_half`: a 2 x 2 box mean in linear light, where an odd edge row or column averages the pixels that exist, giving size `ceil(w/2) x ceil(h/2)`. L is the smallest n with `max(w_n, h_n) <= TILE_SIZE`, with `TILE_SIZE = 512`. The constant is defined once, in `negg-render` (`negg_render::TILE_SIZE`, next to the pyramid and the tiles, which are render concerns); `negg-session`'s wire module re-exports it as a `u32` and the tile format uses it, and neither it nor the app defines its own (Ruling 118).
 
 **Tiles.** A tile (level `l`, column `tx`, row `ty`) covers `[tx*512, min((tx+1)*512, w_l)) x [ty*512, ...)` of level `l`. It is `render_region` of that level with the frame's `FramePlan` (estimates and print coefficients from the analysis grid restricted per ADR 0021, exactly as export), the rig density model and the camera matrix, then `working_to_output(Srgb, Perceptual).apply_u8`, with alpha 255. Display is always sRGB in phase 3 (monitor profiles are deferred).
 
@@ -25,7 +25,9 @@ The app shows a live preview of a 24 MP frame while sliders move. Export remains
 - Vectorscope: BT.709 `Y' = 0.2126 R' + 0.7152 G' + 0.0722 B'`, `Cb = (B' - Y') / 1.8556`, `Cr = (R' - Y') / 1.5748` on codes divided by 255; `col = min(255, floor((Cb + 0.5) * 256))`, `row = min(255, floor((0.5 - Cr) * 256))`; u16 counts, saturating.
 - Sent in a binary layout, never JSON: magic `NEGGSCOP`, version u16 = 1, reserved u16 = 0, frame u32, generation u32, byte_offset u32 = 32, width u32 and height u32 of the measured image, then histogram 4 x 256 u32, parade 3 x 256 x 256 u16 and vectorscope 256 x 256 u16; 528416 bytes in all.
 
-**Thumbnails (Ruling 76).** `render_full` of the frame's cached `AnalysisGrid::median` (about 1024 px long side) with its current `FramePlan`, geometry applied, `working_to_output(Srgb, Perceptual).apply_u8`, encoded by `negg_io::encode_jpeg8` at quality 85 with the sRGB ICC. Raw JPEG bytes, no header, in memory only (no disk cache in phase 3).
+**Thumbnails (Ruling 76).** `render_full` of the frame's cached `AnalysisGrid::median` (about 1024 px long side) with its current `FramePlan`, geometry applied, `working_to_output(Srgb, Perceptual).apply_u8`, encoded by `negg_io::encode_jpeg8` at quality 85 with the sRGB ICC. Raw JPEG bytes, no header, in memory only (no disk cache in phase 3). The session keeps the last thumbnail of a frame under the pooled values and the settings hash it was made with (Ruling 124), so a re-pool that changes nothing keeps it.
+
+**The negative before analysis (Ruling 134).** So that the app can show a roll and let the user draw its analysis area before pass 1 (ADR 0021), the session also serves the decoded negative as it is, not inverted: `Session::negative_view`, `negative_tile` and `negative_thumbnail_jpeg`. A negative tile uses the same pyramid, tile grid and 48-byte header as a positive tile (there is no field saying which it is, so the app keeps separate caches for the two), in source orientation and uncropped. Each sample is `clip(M (s v), 0, 1)`, made by `negg_render::negative_display` (step 8 of `docs/MATHS.md`): `v` is the linear camera RGB after the rig, `M` the step 7 entry matrix when the decode gives one, and one scale `s = 1 / P` per frame for all three channels, where `P` is the 99.5th percentile of the analysis grid's block medians (`NEGATIVE_WHITE_PERCENTILE`, an implementer choice for a preview, `TODO(measure)`, accepted as a Controller choice by Ruling 135). One scale keeps the mask colour and the holder as they are. The negative thumbnail is the same display of the grid's block medians, JPEG at quality 85 with the sRGB ICC, kept in memory until the roll's profiles change.
 
 **Deterministic ICC bytes (Ruling 77).** `negg_cms::profile_bytes` is deterministic: after serialisation it overwrites the ICC header creation date (bytes 24 to 35, six big-endian u16) with 2026-01-01 00:00:00 and zeroes the profile ID (bytes 84 to 99, the "not computed" value).
 
@@ -33,7 +35,7 @@ The app shows a live preview of a 24 MP frame while sliders move. Export remains
 
 - **Preview only.** A level above 0 can differ from the export; the cost of that approximation is paid in the preview, never the export.
 - **Tile versioning.** A format change is a version 2 header; readers refuse unknown versions.
-- **Memory.** Only the open frame keeps level 0 and its pyramid (ADR 0024).
+- **Memory.** Only the open frame keeps level 0 and its pyramid (ADR 0024); opening a frame for its negative closes the open one in the same way.
 - **Thumbnails cost CPU on open.** A disk cache can be added later without changing any byte format.
 - **Byte-equal exports (Ruling 77).** The creation date was the only varying byte range in an export. The profile ID was already all zero in the old file, so zeroing it changed nothing. Pixel data is unchanged. The phase 1 golden `crates/negg-cli/tests/data/golden.phase1.negg.tif` is re-baselined once (Ruling 117) because of the fixed date: the difference is 5 bytes at ICC-relative offsets 27, 29, 31, 33 and 35 (the creation-date field), pixels are identical and the file size is unchanged. The golden test still masks the creation date (ADR 0027's rule: a deliberate engine change re-baselines the golden with an ADR; this is one).
 - **Cost of choosing wrongly:** one constant (the date), or a scopes version 2.

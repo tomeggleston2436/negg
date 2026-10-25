@@ -1,0 +1,50 @@
+{
+  "film": {
+    "film_base": {
+      "mode": "fixed",
+      "value": [
+        0.21,
+        0.55,
+        0.78
+      ]
+    },
+    "dmax": null,
+    "gamma": null
+  },
+  "print": {
+    "grade": 120.0,
+    "exposure": 0.25,
+    "cmy": [
+      0.0,
+      0.01,
+      -0.02
+    ],
+    "paper_dmin": null,
+    "paper_dmax": null,
+    "shoulder": null,
+    "toe": null,
+    "black_point_compensation": true
+  },
+  "colour": {
+    "auto_colour": null,
+    "cast": null,
+    "output_space": null
+  },
+  "geometry": {
+    "crop": {
+      "x": 0.05,
+      "y": 0.04,
+      "width": 0.9,
+      "height": 0.92
+    },
+    "analysis_area": {
+      "x": 0.02,
+      "y": 0.03,
+      "width": 0.96,
+      "height": 0.94
+    },
+    "analysis_buffer": 0.05,
+    "rotate_degrees": 90,
+    "flip_horizontal": true
+  }
+}

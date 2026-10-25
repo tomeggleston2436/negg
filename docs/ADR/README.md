@@ -20,18 +20,19 @@ Files are `NNNN-short-title.md`, four digits, zero-padded, allocated in order. `
 
 The directory listing is the index. Notable entries:
 
-- 0020: the app links the engine through `negg-session`; `negg-ffi` is a separate C ABI; the app is its own cargo workspace.
-- 0021: one geometry field (crop, analysis buffer, quarter turn, flip) serves analysis and export; the Dmin border search runs inside the crop; schema version 3 (amends 0007).
-- 0022: preview pyramid, tile and scopes wire formats, thumbnails, and a deterministic ICC header.
-- 0023: slider mapping, edits and linear history, sidecar writes with data safety, and pool refresh.
-- 0024: app exports are the CLI's own functions; the automated Gate 3 parity test; packaging; memory budget.
-- 0025: frontend state and tests, and the npm licence check.
+- 0020: the app links the engine through `negg-session`; `negg-ffi` is a separate C ABI; the app is its own cargo workspace; the app's `negg://error` event and the refuse-once `unsaved` kind (Accepted).
+- 0021: one geometry field (crop, analysis buffer, quarter turn, flip) serves analysis and export; the Dmin border search runs inside the crop; schema version 3 (amends 0007). Amended by Ruling 134: an optional analysis area limits the analysis without cropping the export; schema version 4.
+- 0022: preview pyramid (`TILE_SIZE` in `negg-render`), tile and scopes wire formats, thumbnails, the negative shown before analysis, and a deterministic ICC header (Accepted).
+- 0023: slider mapping, edits and linear history, sidecar writes with data safety, and pool refresh, deferred to `analyse_next` with `pool_pending` (Accepted).
+- 0024: app exports are the CLI's own functions; the automated Gate 3 parity test (Gate 3 itself stays open); packaging; memory budget (Accepted).
+- 0025: frontend state and tests, and the npm licence check (Accepted).
 - 0026: print output is read as Rec.709 primaries for RAW input (supersedes the step 7 matrix part of 0012).
 - 0027: step 6 cast fit classifies cells after a provisional correction, slopes bounded to [0.5, 2] (supersedes the cell selection and slope clamp of 0009).
 - 0028: `negg eval` registers hand-cropped, mirrored or turned references (Negative Lab Pro) onto the render, takes a per-frame geometry from the manifest and reports tone and colour descriptors.
 - 0029: roll mode never lifts a percentile film base above the frame's own estimate and pools the cast only from a Border base (amends Ruling 59, supersedes in part 0017).
 - 0030: the print stage floors `x_0` so that the film base prints at least at `P = 2.0`, a black point (reopens and supersedes in part 0008).
 - 0031: the black point of 0030 moves to the knee of the toe, `P_black = Dmax_p - ln(2) / a_sh` (2.1845 with the defaults), derived from the paper constants; narrows the shadow and midtone gap to reference renders (reopens and supersedes in part 0030).
+- 0032: a frame whose Dmax is pinned at the density cap (a holder in the analysed area) is left out of the gamma and cast pools and flagged "needs analysis area"; an all-pinned roll has no gamma pool (amends 0017 and 0029).
 
 ## Status values
 

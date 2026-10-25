@@ -1,0 +1,34 @@
+{
+  "schema_version": 2,
+  "settings": {
+    "schema_version": 3,
+    "shared": {
+      "schema_version": 3,
+      "film": {"film_base": {"mode": "auto"}, "dmax": {"mode": "auto"}, "gamma": {"mode": "auto"}},
+      "print": {"grade": 115.0, "exposure": 0.0, "cmy": [0.0, 0.0, 0.0],
+                "paper_dmin": 0.06, "paper_dmax": 2.3, "shoulder": 3.0, "toe": 6.0,
+                "black_point_compensation": false},
+      "colour": {"auto_colour": true, "cast": {"mode": "auto"}, "output_space": "srgb"},
+      "profiles": {"rig": null, "film": null},
+      "geometry": {"crop": {"x": 0.05, "y": 0.04, "width": 0.9, "height": 0.92},
+                   "analysis_buffer": 0.05, "rotate_degrees": 0, "flip_horizontal": false}
+    },
+    "pool_film_base": true,
+    "pool_gamma": true,
+    "pool_colour": true
+  },
+  "settings_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "pool": {
+    "dmin": [0.25, 0.5, 0.75],
+    "gamma": [1.6, 1.7, 1.8],
+    "cast": null,
+    "frames": [
+      {"source": "a.tif", "dmin": [0.25, 0.5, 0.75], "dmin_source": "border",
+       "dmax": [2.0, 2.0, 2.0], "gamma": [1.5, 1.5, 1.5],
+       "cast": {"slope_r": 1.0, "offset_r": 0.0, "slope_b": 1.0, "offset_b": 0.0, "cells_used": 10},
+       "dmin_role": "inlier", "gamma_role": "inlier", "cast_role": "unused"}
+    ]
+  },
+  "frames": ["a.tif"],
+  "negg_version": "0.3.0"
+}

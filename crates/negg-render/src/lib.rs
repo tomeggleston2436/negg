@@ -26,6 +26,8 @@
 //!   are rendered tile by tile with [`render_region`] and a [`FramePlan`].
 //! - [`mod@scopes`]: step 8 preview, the histogram, parade and vectorscope of
 //!   an 8-bit sRGB render.
+//! - [`negative`]: step 8 preview, the decoded negative shown before
+//!   analysis (scaled and clipped, not inverted).
 //!
 //! Every function here is pure: it reads an image and a settings value and
 //! writes an image, with rayon splitting the work over row bands.
@@ -34,6 +36,7 @@ pub mod cast;
 pub mod full;
 pub mod invert;
 pub mod matrix;
+pub mod negative;
 mod par;
 pub mod pipeline;
 pub mod print;
@@ -46,6 +49,9 @@ pub use cast::{apply_cast, apply_cast_pixel, fit_cast};
 pub use full::{Region, render_full, render_region};
 pub use invert::{invert, invert_in_place, invert_pixel};
 pub use matrix::{apply_matrix, apply_matrix_pixel};
+pub use negative::{
+    NEGATIVE_WHITE_PERCENTILE, negative_display, negative_display_pixel, negative_display_scale,
+};
 pub use pipeline::{
     ANALYSIS_GRID_LONG_SIDE, FramePlan, FrameRender, MIN_ANALYSIS_CELLS, RenderContext,
     estimate_frame, plan_frame, render_frame, render_frame_with,

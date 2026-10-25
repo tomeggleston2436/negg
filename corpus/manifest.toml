@@ -61,7 +61,10 @@
 #                 example to remove the film holder. `negg eval` renders the
 #                 frame with it as a frame override (the roll still pools)
 #                 and scores the references against the cropped, turned
-#                 render; the grey_card rect stays on the whole scan.
+#                 render; the grey_card rect stays on the whole scan. The
+#                 manifest geometry has no analysis_area yet (deferred; an
+#                 unknown key is an error), so use a crop to keep the holder
+#                 out of the analysis.
 #
 schema_version = 1
 

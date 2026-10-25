@@ -51,15 +51,20 @@ fn luma_code(px: [u8; 3]) -> usize {
 }
 
 /// Vectorscope cell `(row, col)` of Ruling 75 for one pixel: BT.709
-/// `Y'`, `Cb` and `Cr` on `code / 255`, then
-/// `col = floor((Cb + 0.5) * 256)` and `row = floor((0.5 - Cr) * 256)`,
+/// `Cb = (B' - Y') / 1.8556` and `Cr = (R' - Y') / 1.5748` on `code / 255`,
+/// then `col = floor((Cb + 0.5) * 256)` and `row = floor((0.5 - Cr) * 256)`,
 /// each clamped to `[0, 255]` (the clamp at 0 only absorbs rounding at
 /// `Cb = -0.5` or `Cr = 0.5`).
+///
+/// Because the luma weights sum to 1, `B' - Y'` is computed as
+/// `0.2126 (B' - R') + 0.7152 (B' - G')` and `R' - Y'` as
+/// `0.7152 (R' - G') + 0.0722 (R' - B')`: algebraically the same, but
+/// exactly 0 for a grey, so every grey lands in the centre cell
+/// `(128, 128)` instead of rounding into a neighbour.
 fn vectorscope_cell(px: [u8; 3]) -> (usize, usize) {
     let [r, g, b] = px.map(|v| f64::from(v) / 255.0);
-    let y = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
-    let cb = (b - y) / CB_DIVISOR;
-    let cr = (r - y) / CR_DIVISOR;
+    let cb = (LUMA[0] * (b - r) + LUMA[1] * (b - g)) / CB_DIVISOR;
+    let cr = (LUMA[1] * (r - g) + LUMA[2] * (r - b)) / CR_DIVISOR;
     let bin = |v: f64| ((v * SCOPE_BINS as f64).floor().max(0.0) as usize).min(SCOPE_BINS - 1);
     (bin(0.5 - cr), bin(cb + 0.5))
 }
@@ -181,13 +186,12 @@ mod tests {
             }
         }
         assert_eq!(s.parade.iter().map(|&v| u32::from(v)).sum::<u32>(), 3 * 256);
-        // Greys have Cb = Cr = 0 (up to rounding of the weights), so they
-        // land at or next to the centre (128, 128).
-        let near_centre: u32 = (127..=128)
-            .flat_map(|r| (127..=128).map(move |c| (r, c)))
-            .map(|(r, c)| u32::from(s.vectorscope[r * SCOPE_BINS + c]))
-            .sum();
-        assert_eq!(near_centre, 256);
+        // Greys have Cb = Cr = 0 exactly, so every grey code lands in the
+        // centre cell (128, 128) and nowhere else.
+        assert_eq!(s.vectorscope[128 * SCOPE_BINS + 128], 256);
+        for v in 0..=255u8 {
+            assert_eq!(vectorscope_cell([v, v, v]), (128, 128), "grey {v}");
+        }
     }
 
     #[test]
@@ -234,6 +238,7 @@ mod tests {
             let (r, c) = vectorscope_cell(px);
             assert!(r < 256 && c < 256, "{px:?}");
         }
+        assert_eq!(vectorscope_cell([255, 0, 0]), (0, 98));
         assert_eq!(vectorscope_cell([0, 0, 255]).1, 255);
         assert_eq!(vectorscope_cell([0, 255, 255]).0, 255);
         assert_eq!(luma_code([255, 255, 255]), 255);

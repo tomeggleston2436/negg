@@ -1,0 +1,43 @@
+[package]
+name = "negg-app"
+version = "0.1.0"
+edition = "2024"
+# Tauri 2.12 needs Rust 1.90; the engine crates keep the root workspace's
+# 1.89. The tauri and plugin minors match the npm packages' (the Tauri CLI
+# refuses a build when they differ).
+rust-version = "1.90"
+license = "Apache-2.0"
+description = "The negg desktop app: the Tauri backend over negg-session"
+publish = false
+
+# Its own workspace (Ruling 69): `cargo test --workspace` at the repository
+# root never builds Tauri, Node or the system GUI libraries.
+[workspace]
+
+# The library name differs from the binary's (negg-app) so their build
+# outputs never collide on Windows.
+[lib]
+name = "negg_app_lib"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# Every third-party crate is pinned here and nowhere else (Ruling 69).
+[dependencies]
+# negg-io only for the roll sidecar's path (whether a roll was opened
+# before, Ruling 136); the session reads and writes every sidecar.
+negg-io = { path = "../../crates/negg-io", version = "0.0.0" }
+negg-session = { path = "../../crates/negg-session", version = "0.0.0" }
+negg-types = { path = "../../crates/negg-types", version = "0.0.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.12", features = [] }
+tauri-plugin-dialog = "2.8"
+
+[lints.rust]
+missing_docs = "warn"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

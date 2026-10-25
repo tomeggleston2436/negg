@@ -29,8 +29,8 @@ RAW and TIFF decoding into linear camera RGB f32 buffers.
   warning "no ICC profile and integer samples: assuming gamma 2.2". The
   values are returned as read; the caller linearises through `negg-cms`.
 - `Decoded`: the image, its `Transfer`, rawler's XYZ-to-camera matrix for
-  D65 when known (`xyz_to_camera`, recorded for phase 2 and never applied
-  here), the camera name, the per-channel white and black levels that were
+  D65 when known (`xyz_to_camera`, recorded and never applied here; since
+  ADR 0026 no step of the pipeline applies it), the camera name, the per-channel white and black levels that were
   mapped to 1.0 and 0.0, and a list of warnings.
 - `demosaic`: `BayerPattern` and the pure `bilinear` function, documented
   and tested on synthetic mosaics (flat scenes and linear ramps are exact

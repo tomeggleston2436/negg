@@ -45,7 +45,7 @@ pub fn write_rig_profile(path: &Path, profile: &RigProfile) -> Result<(), IoErro
         .validate()
         .map_err(|e| IoError::Profile(e.to_string()))?;
     let text = toml::to_string_pretty(profile).map_err(|e| IoError::Profile(e.to_string()))?;
-    write_atomic(path, text.as_bytes())
+    write_atomic(path, text.as_bytes()).map(|_| ())
 }
 
 /// Reads a film profile from TOML and validates it (docs/PROFILES.md, film
@@ -75,7 +75,7 @@ pub fn write_film_profile(path: &Path, profile: &FilmProfile) -> Result<(), IoEr
         .validate()
         .map_err(|e| IoError::Profile(e.to_string()))?;
     let text = toml::to_string_pretty(profile).map_err(|e| IoError::Profile(e.to_string()))?;
-    write_atomic(path, text.as_bytes())
+    write_atomic(path, text.as_bytes()).map(|_| ())
 }
 
 #[cfg(test)]

@@ -64,10 +64,14 @@ pub fn downscale_half(image: &Image) -> Image {
 /// levels 1 to L of `level0`, each [`downscale_half`] of the one before,
 /// where L is the smallest `n` with `max(w_n, h_n) <= tile`. Level 0 is
 /// the caller's own image and is not copied; the result is empty when
-/// `level0` already fits one tile. A `tile` of 0 is treated as 1, so the
-/// loop always ends.
+/// `level0` already fits one tile. An empty `level0` (zero width or
+/// height) has nothing to preview and gives no levels, whatever its other
+/// side. A `tile` of 0 is treated as 1, so the loop always ends.
 pub fn pyramid(level0: &Image, tile: usize) -> Vec<Image> {
     let tile = tile.max(1);
+    if level0.width() == 0 || level0.height() == 0 {
+        return Vec::new();
+    }
     let mut levels: Vec<Image> = Vec::new();
     loop {
         let current = levels.last().unwrap_or(level0);
@@ -162,6 +166,9 @@ mod tests {
         let odd = pyramid(&Image::new(1025, 3), TILE_SIZE);
         let sizes: Vec<_> = odd.iter().map(|l| (l.width(), l.height())).collect();
         assert_eq!(sizes, vec![(513, 2), (257, 1)]);
+        // Empty images give no levels.
+        assert!(pyramid(&Image::new(0, 5000), TILE_SIZE).is_empty());
+        assert!(pyramid(&Image::new(0, 0), TILE_SIZE).is_empty());
         // A zero tile is treated as one and still terminates.
         assert_eq!(pyramid(&Image::new(5, 3), 0).len(), 3);
     }

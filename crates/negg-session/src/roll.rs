@@ -344,18 +344,60 @@ pub fn read_overrides(input: &Path) -> Result<FrameOverrides, ConvertError> {
         .map_err(|source| ConvertError::FrameSidecar { path, source })
 }
 
+/// The overrides of a frame sidecar the caller has read already: `bytes`
+/// are the contents of `path` (`None` when it does not exist). Errors as
+/// [`read_overrides`].
+pub(crate) fn overrides_from_bytes(
+    path: &Path,
+    bytes: Option<&[u8]>,
+) -> Result<FrameOverrides, ConvertError> {
+    let Some(bytes) = bytes else {
+        return Ok(FrameOverrides::default());
+    };
+    serde_json::from_slice(bytes)
+        .map_err(negg_io::IoError::from)
+        .and_then(negg_io::migrate)
+        .map(|sidecar| sidecar.overrides)
+        .map_err(|source| ConvertError::FrameSidecar {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
+/// The roll sidecar the caller has read already: `bytes` are the contents
+/// of `path` (`None` when it does not exist). Errors as [`read_roll`].
+pub(crate) fn roll_from_bytes(
+    path: &Path,
+    bytes: Option<&[u8]>,
+) -> Result<Option<RollSidecar>, ConvertError> {
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    serde_json::from_slice(bytes)
+        .map_err(negg_io::IoError::from)
+        .and_then(negg_io::migrate_roll)
+        .map(Some)
+        .map_err(|source| ConvertError::RollSidecar {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
 /// Whether a roll sidecar's stored pool may be used with the roll settings
 /// `effective` of this run: only when the profiles, the `pool_*` flags and
-/// the shared crop and analysis buffer equal those the pool was computed
-/// with (`stored`). The pooled Dmin and gamma are in the density space of
-/// the stored rig, so another rig or film profile makes them meaningless
-/// (Ruling 63); another crop or buffer changes what every frame's analysis
-/// saw (Ruling 90). Rotation and flip do not touch the analysis, so they
-/// leave the pool current.
+/// the shared analysis rectangle (the analysis area, else the crop) and
+/// analysis buffer equal those the pool was computed with (`stored`). The
+/// pooled Dmin and gamma are in the density space of the stored rig, so
+/// another rig or film profile makes them meaningless (Ruling 63); another
+/// analysis area, crop or buffer changes what every frame's analysis saw
+/// (Rulings 90 and 134, [`negg_types::Geometry::same_analysis`]). Rotation
+/// and flip do not touch the analysis, so they leave the pool current, as
+/// does a crop that an analysis area overrides.
 pub fn pool_is_current(stored: &RollSettings, effective: &RollSettings) -> bool {
-    let (a, b) = (&stored.shared.geometry, &effective.shared.geometry);
-    let same_area =
-        a.crop == b.crop && (a.crop.is_none() || a.analysis_buffer == b.analysis_buffer);
+    let same_area = stored
+        .shared
+        .geometry
+        .same_analysis(&effective.shared.geometry);
     stored.shared.profiles == effective.shared.profiles
         && same_area
         && stored.pool_film_base == effective.pool_film_base
@@ -442,6 +484,12 @@ pub struct Locked {
     pub sidecar: PathBuf,
     /// The estimates locked.
     pub locked: Vec<&'static str>,
+    /// The frame's Dmax in its sidecar is pinned at the density cap
+    /// (Ruling 133): its analysed area held the film holder, so the values
+    /// just locked come from that analysis, and a locked gamma keeps the
+    /// frame out of the gamma pool for good. `negg lock` warns; it does
+    /// not refuse, since the user may mean it.
+    pub dmax_pinned: bool,
 }
 
 /// `negg lock`: writes the frame's current Dmin, gamma and cast estimates
@@ -493,6 +541,7 @@ pub fn lock_frame(frame: &Path, which: LockWhich) -> Result<Locked, ConvertError
     Ok(Locked {
         sidecar: path,
         locked,
+        dmax_pinned: negg_types::dmax_pinned(&est.dmax),
     })
 }
 
@@ -615,5 +664,35 @@ mod tests {
         );
         assert_eq!(o.film.gamma, before.film.gamma);
         assert_eq!(o.colour.cast, None);
+    }
+
+    #[test]
+    fn an_analysis_area_change_makes_the_pool_stale_like_a_crop_change() {
+        let rect = |x: f32| negg_types::CropRect {
+            x,
+            y: 0.1,
+            width: 0.8,
+            height: 0.8,
+        };
+        let stored = RollSettings::default();
+        let mut area = stored.clone();
+        area.shared.geometry.analysis_area = Some(rect(0.1));
+        assert!(!pool_is_current(&stored, &area));
+        let mut cropped = stored.clone();
+        cropped.shared.geometry.crop = Some(rect(0.1));
+        assert!(!pool_is_current(&stored, &cropped));
+        // The same analysed rectangle as a crop or as an area is current.
+        assert!(pool_is_current(&cropped, &area));
+        let mut moved = area.clone();
+        moved.shared.geometry.analysis_area = Some(rect(0.05));
+        assert!(!pool_is_current(&area, &moved));
+        let mut buffered = area.clone();
+        buffered.shared.geometry.analysis_buffer = 0.1;
+        assert!(!pool_is_current(&area, &buffered));
+        // A crop the area overrides, a rotation or a flip keeps it current.
+        let mut framed = area.clone();
+        framed.shared.geometry.crop = Some(rect(0.0));
+        framed.shared.geometry.rotate_degrees = 180;
+        assert!(pool_is_current(&area, &framed));
     }
 }

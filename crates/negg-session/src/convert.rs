@@ -5,7 +5,7 @@
 //! `negg batch` share.
 //!
 //! This module orchestrates and does I/O only. The maths is in the engine
-//! crates: linearisation and the camera matrix in `negg-cms`, the
+//! crates: linearisation and the step 7 matrix in `negg-cms`, the
 //! analysis and render in `negg-render` (one pipeline, ground rule 3),
 //! the export transform in `negg-cms` and the writers in `negg-io`. The
 //! pixels stay `f32` until [`negg_cms::OutputTransform`] quantises them
@@ -202,7 +202,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// Per-stage wall-clock times of one conversion, in milliseconds.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Timing {
-    /// Decode, including linearisation and the camera matrix.
+    /// Decode, including linearisation and the step 7 matrix.
     pub decode_ms: f64,
     /// Analysis (steps 3 to 6 on the grid) and the fused render.
     pub render_ms: f64,

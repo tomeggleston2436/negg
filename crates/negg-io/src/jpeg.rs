@@ -106,7 +106,7 @@ pub fn write_jpeg8(
     opts: &JpegOptions,
 ) -> Result<(), IoError> {
     let bytes = encode_jpeg8(width, height, rgb8, opts)?;
-    write_atomic(path, &bytes)
+    write_atomic(path, &bytes).map(|_| ())
 }
 
 fn unsupported_to_io(e: UnsupportedError) -> IoError {

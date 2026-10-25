@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Settings schema migrations (Ruling 71): hand-written phase 1 and phase 2
-//! fixtures migrate to the current schema with identity geometry and every
-//! other field unchanged, round-trip through a file, and newer versions
-//! are rejected.
+//! Settings schema migrations (Rulings 71 and 134): hand-written phase 1
+//! and phase 2 fixtures migrate to the current schema with identity
+//! geometry, phase 3 (schema 3) fixtures keep their geometry with no
+//! analysis area, every other field unchanged; they round-trip through a
+//! file, and newer versions are rejected.
 
 use std::path::{Path, PathBuf};
 
@@ -13,7 +14,7 @@ use negg_io::{
     read_sidecar, write_roll_sidecar, write_sidecar,
 };
 use negg_types::settings::{ChannelEstimate, OutputSpace, SETTINGS_SCHEMA_VERSION};
-use negg_types::{Geometry, Settings};
+use negg_types::{CropRect, Geometry, Settings};
 use serde_json::{Value, json};
 
 fn fixture(name: &str) -> Value {
@@ -93,13 +94,14 @@ fn sidecar_v2_migrates_and_keeps_its_overrides() {
 #[test]
 fn a_migrated_sidecar_round_trips_through_a_file() {
     let dir = TempDir::new("sidecar");
-    for name in ["sidecar-v1.json", "sidecar-v2.json"] {
+    for name in ["sidecar-v1.json", "sidecar-v2.json", "sidecar-v3.json"] {
         let s = migrate(fixture(name)).unwrap();
         let path = dir.0.join("frame.negg.json");
         write_sidecar(&path, &s).unwrap();
         assert_eq!(read_sidecar(&path).unwrap(), s, "{name}");
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("\"schema_version\": 3"), "{text}");
+        let version = format!("\"schema_version\": {SIDECAR_SCHEMA_VERSION}");
+        assert!(text.contains(&version), "{text}");
         assert!(text.contains("\"geometry\""), "{text}");
     }
 }
@@ -108,6 +110,7 @@ fn a_migrated_sidecar_round_trips_through_a_file() {
 fn roll_v1_migrates_to_current() {
     let r = migrate_roll(fixture("roll-v1.json")).unwrap();
     assert_eq!(r.schema_version, ROLL_SIDECAR_SCHEMA_VERSION);
+    assert_eq!(r.settings.schema_version, SETTINGS_SCHEMA_VERSION);
     assert_eq!(r.settings.shared.schema_version, SETTINGS_SCHEMA_VERSION);
     assert_eq!(r.settings.shared.geometry, Geometry::default());
     assert_eq!(r.settings.shared.print.grade, 110.0);
@@ -124,6 +127,68 @@ fn roll_v1_migrates_to_current() {
     assert_eq!(read_roll_sidecar(&path).unwrap(), r);
     // Reading the v1 file itself goes through the same ladder.
     std::fs::write(&path, fixture("roll-v1.json").to_string()).unwrap();
+    assert_eq!(read_roll_sidecar(&path).unwrap(), r);
+}
+
+#[test]
+fn sidecar_v3_migrates_to_v4_with_no_analysis_area() {
+    let s = migrate(fixture("sidecar-v3.json")).unwrap();
+    assert_eq!(s.schema_version, SIDECAR_SCHEMA_VERSION);
+    assert_eq!(SIDECAR_SCHEMA_VERSION, 4);
+    assert_eq!(s.settings.schema_version, SETTINGS_SCHEMA_VERSION);
+    assert_eq!(SETTINGS_SCHEMA_VERSION, 4);
+    let crop = CropRect {
+        x: 0.05,
+        y: 0.04,
+        width: 0.9,
+        height: 0.92,
+    };
+    let want = Geometry {
+        crop: Some(crop),
+        analysis_area: None,
+        analysis_buffer: 0.03,
+        rotate_degrees: 90,
+        flip_horizontal: false,
+    };
+    assert_eq!(s.settings.geometry, want);
+    assert_eq!(s.overrides.geometry, Some(want));
+    assert_eq!(s.settings.print.grade, 115.0);
+    assert_eq!(s.overrides.print.exposure, Some(0.2));
+    assert_eq!(s.estimates.unwrap().gamma, [1.69, 1.65, 1.62]);
+    // Written back, the file is version 4 with no analysis_area key.
+    let dir = TempDir::new("sidecar-v3");
+    let path = dir.0.join("frame.negg.json");
+    write_sidecar(&path, &s).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\"schema_version\": 4"), "{text}");
+    assert!(!text.contains("analysis_area"), "{text}");
+    assert_eq!(read_sidecar(&path).unwrap(), s);
+}
+
+#[test]
+fn roll_v2_migrates_to_v3_with_no_analysis_area_and_no_flag() {
+    let r = migrate_roll(fixture("roll-v2.json")).unwrap();
+    assert_eq!(r.schema_version, ROLL_SIDECAR_SCHEMA_VERSION);
+    assert_eq!(ROLL_SIDECAR_SCHEMA_VERSION, 3);
+    assert_eq!(r.settings.schema_version, SETTINGS_SCHEMA_VERSION);
+    assert_eq!(r.settings.shared.schema_version, SETTINGS_SCHEMA_VERSION);
+    let g = r.settings.shared.geometry;
+    assert!(g.crop.is_some());
+    assert_eq!(g.analysis_area, None);
+    assert_eq!(g.analysis_rect(), g.crop);
+    let pool = r.pool.as_ref().unwrap();
+    assert_eq!(pool.gamma, Some([1.6, 1.7, 1.8]));
+    assert!(!pool.frames[0].needs_analysis_area);
+
+    let dir = TempDir::new("roll-v2");
+    let path = dir.0.join("roll.negg.json");
+    write_roll_sidecar(&path, &r).unwrap();
+    assert_eq!(read_roll_sidecar(&path).unwrap(), r);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\n  \"schema_version\": 3"), "{text}");
+    assert!(!text.contains("analysis_area"), "{text}");
+    assert!(!text.contains("needs_analysis_area"), "{text}");
+    std::fs::write(&path, fixture("roll-v2.json").to_string()).unwrap();
     assert_eq!(read_roll_sidecar(&path).unwrap(), r);
 }
 
@@ -149,11 +214,11 @@ fn settings_v2_loads_with_identity_geometry() {
 #[test]
 fn newer_versions_are_rejected() {
     assert!(matches!(
-        migrate(json!({ "schema_version": 4 })),
+        migrate(json!({ "schema_version": 5 })),
         Err(IoError::Schema(_))
     ));
     assert!(matches!(
-        migrate_roll(json!({ "schema_version": 3 })),
+        migrate_roll(json!({ "schema_version": 4 })),
         Err(IoError::Schema(_))
     ));
 }

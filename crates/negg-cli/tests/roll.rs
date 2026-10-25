@@ -62,7 +62,7 @@ fn batch_pools_the_roll_and_rejects_the_outlier() {
     assert!(se.contains("d.tif: rejected from the Dmin pool"), "{se}");
 
     let rs = read_json(&roll.join("roll.negg.json"));
-    assert_eq!(rs["schema_version"], 2);
+    assert_eq!(rs["schema_version"], 3);
     assert_eq!(
         rs["frames"],
         serde_json::json!(["a.tif", "b.tif", "c.tif", "d.tif"])
@@ -89,7 +89,7 @@ fn batch_pools_the_roll_and_rejects_the_outlier() {
         assert_eq!(s["estimates"]["gamma"], rs["pool"]["gamma"], "{name}");
         assert_eq!(s["estimates"]["cast_source"], "roll", "{name}");
         assert_eq!(s["roll"], "roll.negg.json", "{name}");
-        assert_eq!(s["schema_version"], 3);
+        assert_eq!(s["schema_version"], 4);
         assert!(s.get("overrides").is_none(), "{s}");
     }
     // The Rejected frame still renders with the pooled base (Ruling 59).
@@ -389,7 +389,7 @@ fn a_raw_named_roll_is_refused_before_it_is_decoded() {
     assert!(se.contains("roll.dng: refusing"), "{se}");
     let rs = negg_io::read_roll_sidecar(&roll.join("roll.negg.json")).unwrap();
     assert_eq!(rs.frames, ["a.tif", "b.tif", "c.tif", "d.tif"]);
-    assert_eq!(rs.schema_version, 2);
+    assert_eq!(rs.schema_version, 3);
 }
 
 #[test]
@@ -744,4 +744,109 @@ fn a_bordered_roll_still_uses_the_pooled_cast() {
         assert_eq!(s["estimates"]["cast_source"], "roll", "{name}");
         assert_eq!(s["estimates"]["cast"], *cast, "{name}");
     }
+}
+
+/// Rulings 142 to 144: `--settings` takes a roll sidecar's shared
+/// settings, refuses an unrecognised file and a newer schema (exit 2),
+/// and in roll mode keeps the stored geometry unless the file has its own,
+/// warning about what it replaced.
+#[test]
+fn settings_files_in_roll_mode() {
+    let tmp = TempDir::new("settings-roll");
+    write_roll(&tmp);
+    let roll = tmp.path("roll");
+    let r = |s: &str| s.to_string();
+    let area = "0.05,0.05,0.9,0.9";
+    let o = negg(&[
+        "batch",
+        &r(roll.to_str().unwrap()),
+        "--analysis-area",
+        area,
+        "--out",
+        tmp.path("out1").to_str().unwrap(),
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let stored = read_json(&roll.join("roll.negg.json"));
+    let stored_area = stored["settings"]["shared"]["geometry"]["analysis_area"].clone();
+    assert!(stored_area.is_object(), "{stored}");
+
+    // A plain settings file without geometry: the look is replaced, the
+    // stored analysis area survives, and the batch says what it replaced.
+    tmp.write("look.json", br#"{"print": {"grade": 80}}"#);
+    let o = negg(&[
+        "batch",
+        roll.to_str().unwrap(),
+        "--settings",
+        tmp.path("look.json").to_str().unwrap(),
+        "--out",
+        tmp.path("out2").to_str().unwrap(),
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let e = stderr(&o);
+    assert!(
+        e.contains("warning: --settings replaces the print settings stored in"),
+        "{e}"
+    );
+    let now = read_json(&roll.join("roll.negg.json"));
+    assert_eq!(
+        now["settings"]["shared"]["geometry"]["analysis_area"],
+        stored_area
+    );
+    assert_eq!(now["settings"]["shared"]["print"]["grade"], 80.0);
+
+    // The roll sidecar itself as --settings: its shared settings are used
+    // (not the defaults), into another roll.
+    let other = tmp.path("other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::copy(roll.join("a.tif"), other.join("a.tif")).unwrap();
+    std::fs::copy(roll.join("b.tif"), other.join("b.tif")).unwrap();
+    let o = negg(&[
+        "batch",
+        other.to_str().unwrap(),
+        "--settings",
+        roll.join("roll.negg.json").to_str().unwrap(),
+        "--out",
+        tmp.path("out3").to_str().unwrap(),
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let copied = read_json(&other.join("roll.negg.json"));
+    assert_eq!(copied["settings"]["shared"]["print"]["grade"], 80.0);
+    assert_eq!(
+        copied["settings"]["shared"]["geometry"]["analysis_area"],
+        stored_area
+    );
+
+    // Junk and a newer schema are usage errors; nothing is written.
+    tmp.write("junk.json", br#"{"settings": {"pool_gamma": false}}"#);
+    let v = negg_types::settings::SETTINGS_SCHEMA_VERSION + 1;
+    tmp.write(
+        "newer.json",
+        format!(r#"{{"schema_version": {v}, "print": {{"grade": 90}}}}"#).as_bytes(),
+    );
+    let before = std::fs::read(roll.join("roll.negg.json")).unwrap();
+    for (file, says) in [
+        ("junk.json", "not a settings file"),
+        ("newer.json", "upgrade negg"),
+    ] {
+        for cmd in ["batch", "convert"] {
+            let target = if cmd == "batch" {
+                roll.clone()
+            } else {
+                roll.join("a.tif")
+            };
+            let o = negg(&[
+                cmd,
+                target.to_str().unwrap(),
+                "--settings",
+                tmp.path(file).to_str().unwrap(),
+                "--out",
+                tmp.path("out4").to_str().unwrap(),
+            ]);
+            assert_eq!(o.status.code(), Some(2), "{cmd} {file}: {}", stderr(&o));
+            assert!(stderr(&o).contains(says), "{cmd} {file}: {}", stderr(&o));
+        }
+    }
+    assert_eq!(std::fs::read(roll.join("roll.negg.json")).unwrap(), before);
+    let outputs = std::fs::read_dir(tmp.path("out4")).map_or(0, |d| d.count());
+    assert_eq!(outputs, 0, "no output is written");
 }

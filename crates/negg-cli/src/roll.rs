@@ -58,6 +58,7 @@ pub fn output_request(output: &OutputArgs, roll: &RollArgs) -> OutputRequest {
         settings_file: output.settings.clone(),
         space: output.space.map(Into::into),
         crop: output.crop,
+        analysis_area: output.analysis_area,
         rig: roll.rig.clone(),
         film: roll.film.clone(),
         no_roll: roll.no_roll,
@@ -69,7 +70,9 @@ fn role_name(role: PoolRole) -> String {
 }
 
 /// The extra `--dump-stats` lines of a frame rendered in roll mode: its
-/// roles in the three pools and where its cast came from.
+/// roles in the three pools and where its cast came from. (A frame that
+/// needs an analysis area, Ruling 133, says so in [`format_stats`]: its
+/// Dmax is its own in roll mode too.)
 pub fn format_roll_stats(record: Option<&PoolFrame>, converted: &Converted) -> String {
     let mut s = String::new();
     if let Some(f) = record {
@@ -109,6 +112,16 @@ fn print_common(who: &str, event: FlowEvent) -> Option<FlowEvent> {
         }
         FlowEvent::PoolRejected { frame, pool } => {
             eprintln!("{who}: {frame}: rejected from the {pool} pool");
+        }
+        FlowEvent::NeedsAnalysisArea { frame } => {
+            eprintln!(
+                "{who}: warning: {frame}: Dmax is at the density cap (the film holder or \
+                 another opaque area is in the analysed area), so the frame is left out of the \
+                 gamma and cast pools; set an analysis area on the film, covering its clear edge \
+                 and leaving out only the holder (--analysis-area sets the roll's; a frame whose \
+                 sidecar has its own geometry keeps that, so give it the area there, for \
+                 example in the app)"
+            );
         }
         other @ FlowEvent::Converted { .. } => return Some(other),
     }
@@ -221,6 +234,15 @@ pub fn run_lock(args: &LockArgs) -> Result<(), ConvertError> {
         done.locked.join(", "),
         done.sidecar.display()
     );
+    if done.dmax_pinned {
+        eprintln!(
+            "negg lock: warning: {}: Dmax is at the density cap (the film holder or another \
+             opaque area is in the analysed area), so the locked values come from that analysis \
+             and a locked gamma keeps the frame out of the gamma pool; set an analysis area on \
+             the film, convert again and lock again",
+            file_name(&args.frame)
+        );
+    }
     Ok(())
 }
 
@@ -237,6 +259,7 @@ mod tests {
             format: crate::cli::Format::Jpeg,
             space: Some(crate::cli::Space::Rec2020),
             crop: None,
+            analysis_area: None,
             dump_stats: true,
         };
         let roll = RollArgs {

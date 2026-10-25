@@ -23,7 +23,7 @@ Use the border path only when both of the following hold, otherwise use the perc
 
 ## Phase 3 amendment
 
-Ruling 91 (ADR 0021, Accepted): when `geometry.crop` is set, the border search above runs only inside the crop rect, unbuffered. The outer 15% band is the outer 15% of the crop grid, not of the whole frame. A tight crop therefore usually loses the border source, and Dmin falls back to the 0.5th percentile of the crop grid (`dmin_source = percentile`); a crop that keeps some rebate keeps the border source. The thresholds (20 cells, 5%, 0.05 log-D) and the guard are unchanged. With no crop the behaviour is exactly as above.
+Ruling 91 (ADR 0021, Accepted): when `geometry.crop` is set, the border search above runs only inside the crop rect, unbuffered. The outer 15% band is the outer 15% of the crop grid, not of the whole frame. A tight crop therefore usually loses the border source, and Dmin falls back to the 0.5th percentile of the crop grid (`dmin_source = percentile`); a crop that keeps some rebate keeps the border source. The thresholds (20 cells, 5%, 0.05 log-D) and the guard are unchanged. With an analysis area (Ruling 134, ADR 0021 amendment) the search runs inside the unbuffered analysis area instead, which takes precedence over the crop for the analysis. With neither the behaviour is exactly as above.
 
 ## Eval delta
 

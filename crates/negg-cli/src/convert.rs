@@ -80,7 +80,9 @@ pub fn convert_frame_with(
     Ok(converted)
 }
 
-/// The `--dump-stats` block for one frame: the estimates of steps 3 to 6,
+/// The `--dump-stats` block for one frame: the estimates of steps 3 to 6
+/// (with a `needs analysis area` line when Dmax is pinned at the density
+/// cap, Ruling 133),
 /// whether the step 5 black-point floor raised `x0` (ADR 0030), the grid
 /// and image sizes, and whether the step 7 matrix was applied.
 pub fn format_stats(input: &Path, converted: &Converted) -> String {
@@ -101,6 +103,9 @@ pub fn format_stats(input: &Path, converted: &Converted) -> String {
         source_name(&e.dmin_source)
     ));
     s.push_str(&format!("dmax: {}\n", three(e.dmax)));
+    if negg_types::dmax_pinned(&e.dmax) {
+        s.push_str("needs analysis area: Dmax at the density cap\n");
+    }
     s.push_str(&format!(
         "gamma: {} ({})\n",
         three(e.gamma),

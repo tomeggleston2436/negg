@@ -93,8 +93,15 @@ pub struct OutputArgs {
     #[arg(long, value_name = "DIR")]
     pub out: Option<PathBuf>,
     /// A JSON settings file (the `Settings` schema; omitted fields take
-    /// their defaults) or a sidecar (its `settings` are used). Defaults to
-    /// the built-in defaults.
+    /// their defaults), a frame sidecar (its `settings` are used) or a roll
+    /// sidecar `roll.negg.json` (its shared settings are used); anything
+    /// else, or a file of a newer schema than this negg, is refused. Without
+    /// it the settings are the built-in defaults, or in roll mode the roll
+    /// settings stored in `roll.negg.json`. In roll mode the file replaces
+    /// the stored look (film, print, colour, profiles) and keeps the stored
+    /// geometry (crop, analysis area, buffer, rotation, flip) unless it has
+    /// a `geometry` key; `negg batch` warns when it replaces stored
+    /// settings and stores the result in `roll.negg.json`.
     #[arg(long, value_name = "FILE")]
     pub settings: Option<PathBuf>,
     /// Output file format.
@@ -105,19 +112,33 @@ pub struct OutputArgs {
     #[arg(long, value_enum)]
     pub space: Option<Space>,
     /// Crop as `x,y,w,h`: four fractions of the frame in its source
-    /// orientation (before any rotation). The crop is the area the
-    /// analysis sees and the exported framing. In roll mode it is stored in
-    /// `roll.negg.json` and shared by every frame.
+    /// orientation (before any rotation). The crop frames the export, and
+    /// it also limits what the analysis sees unless an analysis area is set
+    /// (`--analysis-area`, or one stored for the roll). In roll mode it is
+    /// the roll's shared crop for the run; `negg batch` stores it in
+    /// `roll.negg.json` (`negg convert` never writes the roll sidecar).
     #[arg(long, value_name = "X,Y,W,H", value_parser = parse_crop)]
     pub crop: Option<CropRect>,
+    /// Analysis area as `x,y,w,h`: four fractions of the frame in its
+    /// source orientation, like `--crop`. When given, only this area is
+    /// analysed instead of the crop, and the crop, if any, frames the export
+    /// alone. Cover the whole film including its clear edge (rebate) and
+    /// leave out only the film holder: the clear edge is where the film
+    /// base is measured. In roll mode it is the roll's shared analysis area
+    /// for the run; `negg batch` stores it in `roll.negg.json` (`negg
+    /// convert` never writes the roll sidecar). A frame whose sidecar has
+    /// its own geometry keeps its own.
+    #[arg(long, value_name = "X,Y,W,H", value_parser = parse_crop)]
+    pub analysis_area: Option<CropRect>,
     /// Print the estimates (Dmin, Dmax, gamma, anchor, x0, cast) and the
     /// grid and image sizes to stdout after each frame.
     #[arg(long)]
     pub dump_stats: bool,
 }
 
-/// Parses `--crop x,y,w,h` (Ruling 92): four comma-separated numbers that
-/// form a valid [`CropRect`].
+/// Parses `--crop x,y,w,h` (Ruling 92) and `--analysis-area x,y,w,h`
+/// (Ruling 134): four comma-separated numbers that form a valid
+/// [`CropRect`].
 ///
 /// # Errors
 ///
@@ -567,6 +588,51 @@ mod tests {
         ] {
             assert!(
                 Cli::try_parse_from(["negg", "convert", "f.dng", "--crop", bad]).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn analysis_area_parses_like_the_crop() {
+        let cli = Cli::try_parse_from([
+            "negg",
+            "batch",
+            "roll",
+            "--analysis-area",
+            "0.1,0.2,0.5,0.6",
+        ])
+        .unwrap();
+        let Command::Batch(args) = cli.command else {
+            panic!("expected batch");
+        };
+        assert_eq!(
+            args.output.analysis_area,
+            Some(CropRect {
+                x: 0.1,
+                y: 0.2,
+                width: 0.5,
+                height: 0.6
+            })
+        );
+        assert_eq!(args.output.crop, None);
+        let cli = Cli::try_parse_from([
+            "negg",
+            "convert",
+            "f.dng",
+            "--crop",
+            "0,0,1,1",
+            "--analysis-area",
+            "0.1,0.1,0.8,0.8",
+        ])
+        .unwrap();
+        let Command::Convert(args) = cli.command else {
+            panic!("expected convert");
+        };
+        assert!(args.output.crop.is_some() && args.output.analysis_area.is_some());
+        for bad in ["0.5,0.5,0.6,0.1", "1,2,3", "a,b,c,d", "0,0,0,1"] {
+            assert!(
+                Cli::try_parse_from(["negg", "convert", "f.dng", "--analysis-area", bad]).is_err(),
                 "{bad}"
             );
         }

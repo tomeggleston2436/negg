@@ -159,3 +159,131 @@ jobs:
           name: eval-results
           path: eval-results.json
           if-no-files-found: error
+
+  # The desktop app (Ruling 69): its own cargo workspace in app/src-tauri
+  # and the React frontend in app/. Everything P3-T verifies locally except
+  # the bundle, which package.yml builds. Tauri 2 needs the WebKitGTK
+  # development packages on Linux.
+  app:
+    name: app
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install the Tauri Linux packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # pnpm through Corepack (bundled with Node 22), at the version that
+      # wrote pnpm-lock.yaml.
+      - name: Install pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@12.14.0 --activate
+          pnpm --version
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Install npm packages
+        run: pnpm install --frozen-lockfile
+
+      - name: npm licences
+        run: node scripts/check-licences.mjs
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+
+      - name: Frontend tests
+        run: pnpm exec vitest run
+
+      # Also the frontend the Tauri context embeds (app/dist).
+      - name: Build the frontend
+        run: pnpm build
+
+      - name: Format
+        working-directory: app/src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: app/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: app/src-tauri
+        run: cargo test
+
+      # The repository's deny.toml: one licence allow list and one advisory
+      # ignore list for both workspaces (`--config` goes before `check`).
+      - name: cargo deny check (app)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: app/src-tauri/Cargo.toml
+          arguments: --config deny.toml
+          command: check
+          rust-version: "1.90"
+
+  # The app's macOS-only code (its own menu with Quit, Undo and Redo) is
+  # compiled on macOS only, so the Linux job above never sees it. The
+  # frontend is built first because the Tauri context embeds app/dist.
+  app-macos:
+    name: app (macOS check)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@12.14.0 --activate
+          pnpm --version
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Install npm packages
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the frontend
+        run: pnpm build
+
+      - name: Check
+        working-directory: app/src-tauri
+        run: cargo check --all-targets
+
+      - name: Clippy
+        working-directory: app/src-tauri
+        run: cargo clippy --all-targets -- -D warnings

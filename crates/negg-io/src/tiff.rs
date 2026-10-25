@@ -15,7 +15,6 @@
 //! the compressed strips are then written in order through the crate's
 //! low-level directory encoder, which also writes the tags.
 
-use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
@@ -26,6 +25,7 @@ use tiff::encoder::{Rational, TiffEncoder};
 use tiff::tags::{CompressionMethod, PhotometricInterpretation, ResolutionUnit, Tag, Type};
 
 use crate::error::{IoError, check_rgb_dimensions, io_at};
+use crate::sidecar::write_atomic_with;
 
 /// Rows per TIFF strip: about 2.3 MB of samples for a 6000-pixel-wide
 /// frame, so a 24 MP image gives about 60 strips to compress in parallel.
@@ -116,8 +116,9 @@ impl Default for TiffOptions {
 /// file header records.
 ///
 /// The strips are compressed in parallel (see the module documentation).
-/// The file is written in place (no temporary file); a failure part way
-/// through leaves a truncated file at `path`.
+/// The file is written atomically: to a temporary file of a unique name
+/// beside `path`, synced, then renamed over it, so a failure part way
+/// leaves `path` as it was.
 ///
 /// # Errors
 ///
@@ -159,61 +160,76 @@ pub fn write_tiff16(
         .collect::<std::io::Result<_>>()
         .map_err(io_at(path))?;
 
-    let file = File::create(path).map_err(io_at(path))?;
-    let mut writer = BufWriter::new(file);
-    {
-        let mut encoder = TiffEncoder::new(&mut writer)?;
-        let mut directory = encoder.image_directory()?;
-        let mut offsets = Vec::with_capacity(strips.len());
-        let mut byte_counts = Vec::with_capacity(strips.len());
-        for strip in &strips {
-            let offset = directory.write_data(&strip[..])?;
-            offsets.push(u32::try_from(offset).map_err(|_| too_large(path))?);
-            byte_counts.push(u32::try_from(strip.len()).map_err(|_| too_large(path))?);
-        }
-        drop(strips);
-        let resolution = Rational {
-            n: opts.resolution_ppi,
-            d: 1,
-        };
-        directory.write_tag(Tag::ImageWidth, w)?;
-        directory.write_tag(Tag::ImageLength, h)?;
-        directory.write_tag(Tag::BitsPerSample, &[16u16, 16, 16][..])?;
-        directory.write_tag(Tag::Compression, opts.compression.method().to_u16())?;
-        directory.write_tag(
-            Tag::PhotometricInterpretation,
-            PhotometricInterpretation::RGB.to_u16(),
-        )?;
-        directory.write_tag(Tag::StripOffsets, &offsets[..])?;
-        directory.write_tag(Tag::Orientation, 1u16)?;
-        directory.write_tag(Tag::SamplesPerPixel, 3u16)?;
-        directory.write_tag(
-            Tag::RowsPerStrip,
-            u32::try_from(rows_per_strip).map_err(|_| too_large(path))?,
-        )?;
-        directory.write_tag(Tag::StripByteCounts, &byte_counts[..])?;
-        directory.write_tag(Tag::XResolution, resolution.clone())?;
-        directory.write_tag(Tag::YResolution, resolution)?;
-        directory.write_tag(Tag::PlanarConfiguration, 1u16)?;
-        directory.write_tag(Tag::ResolutionUnit, ResolutionUnit::Inch.to_u16())?;
-        directory.write_tag(Tag::SampleFormat, &[1u16, 1, 1][..])?;
-        if let Some(icc) = &opts.icc {
-            // The ICC tag is typed UNDEFINED by the ICC specification. The
-            // encoder's typed `write_tag` has no UNDEFINED value type, so the
-            // entry is written raw and inserted through a one-entry
-            // directory.
-            let entry = directory.write_entry_bytes(Type::UNDEFINED, icc)?;
-            let mut extra = Directory::empty();
-            extra.extend([(Tag::IccProfile, entry)]);
-            directory.extend_from(&extra);
-        }
-        directory.finish()?;
+    // Written atomically, as every other file negg writes: to a temporary
+    // file beside `path`, synced, then renamed over it. A failure part way
+    // leaves `path` as it was.
+    let mut failure: Option<IoError> = None;
+    let written = write_atomic_with(path, |file| {
+        let result = (|| -> Result<(), IoError> {
+            let mut writer = BufWriter::new(file);
+            {
+                let mut encoder = TiffEncoder::new(&mut writer)?;
+                let mut directory = encoder.image_directory()?;
+                let mut offsets = Vec::with_capacity(strips.len());
+                let mut byte_counts = Vec::with_capacity(strips.len());
+                for strip in &strips {
+                    let offset = directory.write_data(&strip[..])?;
+                    offsets.push(u32::try_from(offset).map_err(|_| too_large(path))?);
+                    byte_counts.push(u32::try_from(strip.len()).map_err(|_| too_large(path))?);
+                }
+                let resolution = Rational {
+                    n: opts.resolution_ppi,
+                    d: 1,
+                };
+                directory.write_tag(Tag::ImageWidth, w)?;
+                directory.write_tag(Tag::ImageLength, h)?;
+                directory.write_tag(Tag::BitsPerSample, &[16u16, 16, 16][..])?;
+                directory.write_tag(Tag::Compression, opts.compression.method().to_u16())?;
+                directory.write_tag(
+                    Tag::PhotometricInterpretation,
+                    PhotometricInterpretation::RGB.to_u16(),
+                )?;
+                directory.write_tag(Tag::StripOffsets, &offsets[..])?;
+                directory.write_tag(Tag::Orientation, 1u16)?;
+                directory.write_tag(Tag::SamplesPerPixel, 3u16)?;
+                directory.write_tag(
+                    Tag::RowsPerStrip,
+                    u32::try_from(rows_per_strip).map_err(|_| too_large(path))?,
+                )?;
+                directory.write_tag(Tag::StripByteCounts, &byte_counts[..])?;
+                directory.write_tag(Tag::XResolution, resolution.clone())?;
+                directory.write_tag(Tag::YResolution, resolution)?;
+                directory.write_tag(Tag::PlanarConfiguration, 1u16)?;
+                directory.write_tag(Tag::ResolutionUnit, ResolutionUnit::Inch.to_u16())?;
+                directory.write_tag(Tag::SampleFormat, &[1u16, 1, 1][..])?;
+                if let Some(icc) = &opts.icc {
+                    // The ICC tag is typed UNDEFINED by the ICC
+                    // specification. The encoder's typed `write_tag` has no
+                    // UNDEFINED value type, so the entry is written raw and
+                    // inserted through a one-entry directory.
+                    let entry = directory.write_entry_bytes(Type::UNDEFINED, icc)?;
+                    let mut extra = Directory::empty();
+                    extra.extend([(Tag::IccProfile, entry)]);
+                    directory.extend_from(&extra);
+                }
+                directory.finish()?;
+            }
+            writer
+                .into_inner()
+                .map_err(|e| io_at(path)(e.into_error()))?;
+            Ok(())
+        })();
+        result.map_err(|e| {
+            let io = std::io::Error::other(e.to_string());
+            failure = Some(e);
+            io
+        })
+    });
+    match (written, failure) {
+        (Ok(_), _) => Ok(()),
+        (Err(_), Some(e)) => Err(e),
+        (Err(e), None) => Err(e),
     }
-    let file = writer
-        .into_inner()
-        .map_err(|e| io_at(path)(e.into_error()))?;
-    file.sync_all().map_err(io_at(path))?;
-    Ok(())
 }
 
 /// The error for an image whose compressed data does not fit the 4 GiB

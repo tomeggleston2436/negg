@@ -1,0 +1,96 @@
+{
+  "dir": "/rolls/roll-01",
+  "frames": [
+    {
+      "index": 0,
+      "source": "frame-01.tif",
+      "status": "ready",
+      "message": null,
+      "needs_analysis_area": true
+    },
+    {
+      "index": 1,
+      "source": "frame-02.tif",
+      "status": "failed",
+      "message": "decode: could not decode frame-02.tif",
+      "needs_analysis_area": false
+    },
+    {
+      "index": 2,
+      "source": "frame-03.tif",
+      "status": "read_only",
+      "message": "sidecar frame-03.tif.negg.json could not be read",
+      "needs_analysis_area": false
+    },
+    {
+      "index": 3,
+      "source": "frame-04.tif",
+      "status": "pending",
+      "message": null,
+      "needs_analysis_area": false
+    }
+  ],
+  "roll": {
+    "schema_version": 4,
+    "shared": {
+      "schema_version": 4,
+      "film": {
+        "film_base": {
+          "mode": "auto"
+        },
+        "dmax": {
+          "mode": "auto"
+        },
+        "gamma": {
+          "mode": "auto"
+        }
+      },
+      "print": {
+        "grade": 115.0,
+        "exposure": 0.0,
+        "cmy": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "paper_dmin": 0.06,
+        "paper_dmax": 2.3,
+        "shoulder": 3.0,
+        "toe": 6.0,
+        "black_point_compensation": false
+      },
+      "colour": {
+        "auto_colour": true,
+        "cast": {
+          "mode": "auto"
+        },
+        "output_space": "srgb"
+      },
+      "profiles": {
+        "rig": null,
+        "film": null
+      },
+      "geometry": {
+        "crop": null,
+        "analysis_buffer": 0.05,
+        "rotate_degrees": 0,
+        "flip_horizontal": false
+      }
+    },
+    "pool_film_base": true,
+    "pool_gamma": true,
+    "pool_colour": true
+  },
+  "analysed": false,
+  "generation": 7,
+  "history": {
+    "can_undo": true,
+    "can_redo": false,
+    "len": 2,
+    "cursor": 2,
+    "pool_pending": false
+  },
+  "pool_pending": false,
+  "pool_warning": "the analysis area (or crop) leaves out the clear film edge (rebate), so the film base is no longer measured on it but estimated from the image; make the analysis area cover the whole film including its clear edge and leave out only the holder",
+  "awaiting_analysis": true
+}

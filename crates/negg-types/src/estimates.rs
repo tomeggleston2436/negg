@@ -103,6 +103,30 @@ impl Default for CastCorrection {
     }
 }
 
+/// The density cap of step 3 of `docs/MATHS.md`: the density of the
+/// transmittance floor, `-log10(1e-6) = 6`. No grid density exceeds it (a
+/// rig density model reads back at most this too), so a frame whose Dmax
+/// reaches it saw something opaque (a film holder, an unexposed surround)
+/// rather than film.
+pub const DENSITY_CAP: f32 = 6.0;
+
+/// How close to [`DENSITY_CAP`] a Dmax channel may come before the frame
+/// counts as pinned at the cap (Ruling 133): 0.05 in density, that is a
+/// transmittance at most about 1.12 times the `1e-6` floor. Controller
+/// choice, TODO(measure).
+pub const DMAX_PINNED_TOLERANCE: f32 = 0.05;
+
+/// Whether a Dmax is pinned at the density cap (Ruling 133, step 3 of
+/// `docs/MATHS.md`): any channel at or above
+/// `DENSITY_CAP - DMAX_PINNED_TOLERANCE`. Such a frame has the holder or
+/// another opaque area in its analysed rectangle and needs an analysis
+/// area; the roll pool leaves it out of the gamma and cast pools. A
+/// non-finite channel does not count.
+pub fn dmax_pinned(dmax: &[f32; 3]) -> bool {
+    dmax.iter()
+        .any(|d| *d >= DENSITY_CAP - DMAX_PINNED_TOLERANCE)
+}
+
 /// Everything the analysis pass estimated for one frame.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Estimates {
@@ -228,5 +252,19 @@ mod tests {
     fn estimates_require_every_field() {
         let err = serde_json::from_str::<Estimates>("{}");
         assert!(err.is_err(), "an incomplete estimate must not load");
+    }
+
+    #[test]
+    fn dmax_pinned_at_the_cap() {
+        assert!(dmax_pinned(&[DENSITY_CAP, 1.0, 1.0]));
+        assert!(dmax_pinned(&[
+            1.0,
+            1.0,
+            DENSITY_CAP - DMAX_PINNED_TOLERANCE
+        ]));
+        assert!(dmax_pinned(&[1.0, 7.0, 1.0]));
+        assert!(!dmax_pinned(&[2.5, 2.8, 3.0]));
+        assert!(!dmax_pinned(&[5.9, 5.9, 5.9]));
+        assert!(!dmax_pinned(&[f32::NAN, 1.0, 1.0]));
     }
 }

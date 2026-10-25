@@ -180,6 +180,14 @@ pub struct PoolFrame {
     pub gamma_role: PoolRole,
     /// Role in the cast pool.
     pub cast_role: PoolRole,
+    /// The frame's Dmax in effect is pinned at the density cap
+    /// ([`crate::estimates::dmax_pinned`], Ruling 133): its analysed area
+    /// holds the film holder or another opaque area, so it was left out of
+    /// the gamma and cast pools (its roles there are `Unused` unless the
+    /// user fixed the value) and needs an analysis area. Omitted from the
+    /// file when false; absent in older files, read as false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_analysis_area: bool,
 }
 
 /// The roll estimator's output: the pooled estimates and the per-frame
@@ -210,6 +218,23 @@ pub struct PooledEstimates {
 }
 
 impl RollPool {
+    /// Whether the pooled Dmin is measured on the clear film edge (rebate):
+    /// at least two frames whose own Dmin came from the border are Dmin
+    /// candidates (inliers or rejected), so the pool takes only those
+    /// (step 3 of `docs/MATHS.md`, "Roll pooling"). False for a pool of
+    /// percentile estimates, which an analysis area or a crop that leaves
+    /// the rebate out makes (Ruling 138).
+    pub fn dmin_from_border(&self) -> bool {
+        self.frames
+            .iter()
+            .filter(|f| {
+                matches!(f.dmin_role, PoolRole::Inlier | PoolRole::Rejected)
+                    && f.dmin_source == DminSource::Border
+            })
+            .count()
+            >= 2
+    }
+
     /// The pooled estimates, each `None` when its `pool_*` flag in `roll` is
     /// off.
     pub fn pooled(&self, roll: &RollSettings) -> PooledEstimates {
@@ -237,6 +262,7 @@ mod tests {
                 width: 0.8,
                 height: 0.7,
             }),
+            analysis_area: None,
             analysis_buffer: 0.0,
             rotate_degrees: 90,
             flip_horizontal: true,
@@ -523,13 +549,20 @@ mod tests {
                 dmin_role: PoolRole::Inlier,
                 gamma_role: PoolRole::Rejected,
                 cast_role: PoolRole::Excluded,
+                needs_analysis_area: false,
             }],
         };
         let json = serde_json::to_string(&pool).unwrap();
         assert!(json.contains("\"dmin_role\":\"inlier\""));
         assert!(json.contains("\"cast_role\":\"excluded\""));
+        assert!(!json.contains("needs_analysis_area"), "omitted when false");
         let back: RollPool = serde_json::from_str(&json).unwrap();
         assert_eq!(back, pool);
+        let mut pinned = pool.clone();
+        pinned.frames[0].needs_analysis_area = true;
+        let json = serde_json::to_string(&pinned).unwrap();
+        assert!(json.contains("\"needs_analysis_area\":true"), "{json}");
+        assert_eq!(serde_json::from_str::<RollPool>(&json).unwrap(), pinned);
         assert_eq!(
             serde_json::to_string(&PoolRole::Unused).unwrap(),
             "\"unused\""
@@ -547,5 +580,35 @@ mod tests {
         r.pool_gamma = true;
         let g = pool.pooled(&r);
         assert!(g.dmin.is_none() && g.cast.is_none() && g.gamma.is_some());
+    }
+
+    #[test]
+    fn a_pool_is_border_sourced_with_two_border_candidates() {
+        let frame = |source, role| PoolFrame {
+            source: "f.dng".into(),
+            dmin: [0.2, 0.5, 0.7],
+            dmin_source: source,
+            dmax: [1.9, 2.2, 2.4],
+            gamma: [1.7; 3],
+            cast: CastCorrection::IDENTITY,
+            dmin_role: role,
+            gamma_role: PoolRole::Inlier,
+            cast_role: PoolRole::Inlier,
+            needs_analysis_area: false,
+        };
+        let pool = |frames| RollPool {
+            dmin: Some([0.2, 0.5, 0.7]),
+            gamma: None,
+            cast: None,
+            frames,
+        };
+        use DminSource::{Border, Percentile};
+        use PoolRole::{Excluded, Inlier, Rejected};
+        assert!(pool(vec![frame(Border, Inlier), frame(Border, Rejected)]).dmin_from_border());
+        assert!(!pool(vec![frame(Border, Inlier), frame(Percentile, Inlier)]).dmin_from_border());
+        assert!(!pool(vec![frame(Border, Inlier), frame(Border, Excluded)]).dmin_from_border());
+        assert!(
+            !pool(vec![frame(Percentile, Inlier), frame(Percentile, Inlier)]).dmin_from_border()
+        );
     }
 }

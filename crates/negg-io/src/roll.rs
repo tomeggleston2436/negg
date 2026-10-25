@@ -22,8 +22,10 @@ pub const ROLL_SIDECAR_NAME: &str = "roll.negg.json";
 
 /// Schema version of the roll sidecar. It started at 1, independent of the
 /// frame sidecar's version (Ruling 51); version 2 holds settings of schema
-/// 3, with `geometry` (Ruling 71).
-pub const ROLL_SIDECAR_SCHEMA_VERSION: u32 = 2;
+/// 3, with `geometry` (Ruling 71); version 3 holds settings of schema 4,
+/// with `geometry.analysis_area`, and pool records that may carry
+/// `needs_analysis_area` (Rulings 133 and 134).
+pub const ROLL_SIDECAR_SCHEMA_VERSION: u32 = 3;
 
 /// Everything negg records about one roll.
 ///
@@ -79,8 +81,11 @@ pub fn read_roll_sidecar(path: &Path) -> Result<RollSidecar, IoError> {
 
 /// Turns a parsed roll sidecar JSON value into the current [`RollSidecar`]
 /// (Ruling 71), a ladder like [`crate::migrate`]: version 1 becomes 2 by
-/// setting `schema_version = 2` and `settings.shared.schema_version = 3`,
-/// nothing else (the shared `geometry` takes its default). A missing
+/// setting `schema_version = 2` and both `settings.schema_version` and
+/// `settings.shared.schema_version` to 3, nothing else (the shared
+/// `geometry` takes its default); version 2 becomes 3 by setting
+/// `schema_version = 3` and both settings versions to 4, nothing else (no
+/// analysis area, no frame flagged, Ruling 134). A missing
 /// `schema_version` is read as the current version, so `{}` loads as the
 /// default, as it always has.
 ///
@@ -96,7 +101,8 @@ pub fn migrate_roll(value: Value) -> Result<RollSidecar, IoError> {
         _ => schema_version_of(&value)?,
     };
     let value = match version {
-        1 => upgrade_roll_v1_to_v2(value),
+        1 => upgrade_roll_v2_to_v3(upgrade_roll_v1_to_v2(value)),
+        2 => upgrade_roll_v2_to_v3(value),
         ROLL_SIDECAR_SCHEMA_VERSION => value,
         v if v > ROLL_SIDECAR_SCHEMA_VERSION => {
             return Err(IoError::Schema(format!(
@@ -116,16 +122,30 @@ pub fn migrate_roll(value: Value) -> Result<RollSidecar, IoError> {
 }
 
 /// Upgrades a version 1 roll sidecar value to version 2 (Ruling 71).
-fn upgrade_roll_v1_to_v2(mut value: Value) -> Value {
+fn upgrade_roll_v1_to_v2(value: Value) -> Value {
+    set_roll_versions(value, 2, 3)
+}
+
+/// Upgrades a version 2 roll sidecar value to version 3 (Ruling 134).
+fn upgrade_roll_v2_to_v3(value: Value) -> Value {
+    set_roll_versions(value, 3, 4)
+}
+
+/// Sets a roll sidecar value's `schema_version` to `roll`, and both its
+/// `settings.schema_version` (the roll settings) and its
+/// `settings.shared.schema_version` to `settings`: the roll settings and
+/// the shared settings follow the one settings schema.
+fn set_roll_versions(mut value: Value, roll: u32, settings: u32) -> Value {
     if let Some(object) = value.as_object_mut() {
-        object.insert("schema_version".into(), Value::from(2));
-        if let Some(shared) = object
-            .get_mut("settings")
-            .and_then(Value::as_object_mut)
-            .and_then(|settings| settings.get_mut("shared"))
-            .and_then(Value::as_object_mut)
-        {
-            shared.insert("schema_version".into(), Value::from(3));
+        object.insert("schema_version".into(), Value::from(roll));
+        if let Some(roll_settings) = object.get_mut("settings").and_then(Value::as_object_mut) {
+            roll_settings.insert("schema_version".into(), Value::from(settings));
+            if let Some(shared) = roll_settings
+                .get_mut("shared")
+                .and_then(Value::as_object_mut)
+            {
+                shared.insert("schema_version".into(), Value::from(settings));
+            }
         }
     }
     value
@@ -141,6 +161,17 @@ fn upgrade_roll_v1_to_v2(mut value: Value) -> Value {
 /// name contains a directory separator, [`IoError::Json`] and
 /// [`IoError::Io`] otherwise.
 pub fn write_roll_sidecar(path: &Path, s: &RollSidecar) -> Result<(), IoError> {
+    write_atomic(path, &roll_sidecar_bytes(s)?).map(|_| ())
+}
+
+/// The bytes [`write_roll_sidecar`] writes for `s`: pretty JSON with a
+/// trailing newline, for a caller that writes them itself with
+/// [`crate::write_file_atomic`].
+///
+/// # Errors
+///
+/// As [`write_roll_sidecar`], without the file errors.
+pub fn roll_sidecar_bytes(s: &RollSidecar) -> Result<Vec<u8>, IoError> {
     if s.schema_version != ROLL_SIDECAR_SCHEMA_VERSION {
         return Err(IoError::Schema(format!(
             "cannot write roll schema_version {}; this build writes version \
@@ -155,7 +186,7 @@ pub fn write_roll_sidecar(path: &Path, s: &RollSidecar) -> Result<(), IoError> {
     }
     let mut text = serde_json::to_string_pretty(s)?;
     text.push('\n');
-    write_atomic(path, text.as_bytes())
+    Ok(text.into_bytes())
 }
 
 #[cfg(test)]
@@ -215,6 +246,7 @@ mod tests {
                     dmin_role: PoolRole::Inlier,
                     gamma_role: PoolRole::Unused,
                     cast_role: PoolRole::Rejected,
+                    needs_analysis_area: true,
                 }],
             }),
             frames: vec!["a.dng".into(), "b.dng".into()],
@@ -237,7 +269,7 @@ mod tests {
         write_roll_sidecar(&path, &sample()).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.ends_with('\n'));
-        assert!(text.contains("\n  \"schema_version\": 2"));
+        assert!(text.contains("\n  \"schema_version\": 3"));
         assert_eq!(read_roll_sidecar(&path).unwrap(), sample());
         assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1, "no temp file");
     }
@@ -255,12 +287,12 @@ mod tests {
         let dir = TempDir::new("reject");
         let path = roll_sidecar_path(&dir.0);
         let mut s = sample();
-        s.schema_version = 3;
+        s.schema_version = 4;
         assert!(matches!(
             write_roll_sidecar(&path, &s),
             Err(IoError::Schema(_))
         ));
-        for bad in [r#"{"schema_version": 3}"#, r#"{"schema_version": 0}"#] {
+        for bad in [r#"{"schema_version": 4}"#, r#"{"schema_version": 0}"#] {
             fs::write(&path, bad).unwrap();
             assert!(
                 matches!(read_roll_sidecar(&path), Err(IoError::Schema(_))),

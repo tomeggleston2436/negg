@@ -1,0 +1,38 @@
+{
+  "schema_version": 3,
+  "source": "frame.tif",
+  "settings": {
+    "schema_version": 3,
+    "film": {"film_base": {"mode": "auto"}, "dmax": {"mode": "auto"}, "gamma": {"mode": "auto"}},
+    "print": {"grade": 115.0, "exposure": 0.2, "cmy": [0.0, 0.0, 0.0],
+              "paper_dmin": 0.06, "paper_dmax": 2.3, "shoulder": 3.0, "toe": 6.0,
+              "black_point_compensation": false},
+    "colour": {"auto_colour": true, "cast": {"mode": "auto"}, "output_space": "srgb"},
+    "profiles": {"rig": null, "film": null},
+    "geometry": {"crop": {"x": 0.05, "y": 0.04, "width": 0.9, "height": 0.92},
+                 "analysis_buffer": 0.03, "rotate_degrees": 90, "flip_horizontal": false}
+  },
+  "settings_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "estimates": {
+    "dmin": [0.21, 0.55, 0.78],
+    "dmin_source": "border",
+    "dmax": [1.9, 2.2, 2.4],
+    "gamma": [1.69, 1.65, 1.62],
+    "gamma_source": "roll",
+    "neutral_offset": [0.0, 0.0, 0.0],
+    "anchor": -0.42,
+    "x0": 1.25,
+    "cast": {"slope_r": 1.05, "offset_r": -0.01, "slope_b": 0.97, "offset_b": 0.02, "cells_used": 123},
+    "cast_source": "roll"
+  },
+  "overrides": {
+    "film": {"film_base": null, "dmax": null, "gamma": null},
+    "print": {"grade": null, "exposure": 0.2, "cmy": null, "paper_dmin": null, "paper_dmax": null,
+              "shoulder": null, "toe": null, "black_point_compensation": null},
+    "colour": {"auto_colour": null, "cast": null, "output_space": null},
+    "geometry": {"crop": {"x": 0.05, "y": 0.04, "width": 0.9, "height": 0.92},
+                 "analysis_buffer": 0.03, "rotate_degrees": 90, "flip_horizontal": false}
+  },
+  "roll": "roll.negg.json",
+  "negg_version": "0.3.0"
+}

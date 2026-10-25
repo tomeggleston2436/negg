@@ -27,7 +27,7 @@ pub enum ConvertError {
     NotADirectory(PathBuf),
     /// The input could not be decoded.
     Decode(DecodeError),
-    /// Linearisation, the camera matrix or the export transform failed.
+    /// Linearisation, the step 7 matrix or the export transform failed.
     Cms(CmsError),
     /// The render failed (invalid settings for this frame, or an empty
     /// image).
@@ -210,6 +210,86 @@ impl From<negg_calib::CalibError> for ConvertError {
 impl From<IoError> for ConvertError {
     fn from(e: IoError) -> Self {
         ConvertError::Write(e)
+    }
+}
+
+/// Why a [`crate::Session`] call failed (Ruling 68).
+#[derive(Debug)]
+pub enum SessionError {
+    /// A flow, decode, render, colour management or I/O error.
+    Convert(ConvertError),
+    /// The roll has no frame with this index.
+    NoFrame(u32),
+    /// The frame is read-only: its sidecar could not be read when the roll
+    /// was opened, it changed on disk behind the session, or the frame can
+    /// never be converted (a duplicate output or the roll sidecar's name).
+    /// Its sidecar is never written (Ruling 80). Holds the 0-based index;
+    /// the message names the 1-based frame number the app shows.
+    ReadOnly(u32),
+    /// Pass 1 has not finished for the roll, so edits and exports wait
+    /// (Ruling 81).
+    Busy,
+    /// A sidecar changed on disk since the session last read or wrote it,
+    /// so it was not overwritten (Ruling 80).
+    Stale(PathBuf),
+    /// An argument the session cannot use (invalid settings, a tile or
+    /// level out of range, a frame that could not be analysed).
+    Invalid(String),
+}
+
+impl fmt::Display for SessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SessionError::Convert(e) => write!(f, "{e}"),
+            SessionError::NoFrame(i) => write!(f, "the roll has no frame {i}"),
+            SessionError::ReadOnly(i) => write!(
+                f,
+                "frame {} is read-only, so this session never writes its sidecar; open the \
+                 folder again to edit it",
+                u64::from(*i) + 1
+            ),
+            SessionError::Busy => write!(f, "the roll is still being analysed"),
+            SessionError::Stale(path) => write!(
+                f,
+                "{} changed on disk since negg last read it, so it was not overwritten; open the \
+                 folder again to see and edit what is on disk",
+                path.display()
+            ),
+            SessionError::Invalid(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl std::error::Error for SessionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SessionError::Convert(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<ConvertError> for SessionError {
+    fn from(e: ConvertError) -> Self {
+        SessionError::Convert(e)
+    }
+}
+
+impl From<negg_types::Error> for SessionError {
+    fn from(e: negg_types::Error) -> Self {
+        SessionError::Convert(ConvertError::Render(e))
+    }
+}
+
+impl From<CmsError> for SessionError {
+    fn from(e: CmsError) -> Self {
+        SessionError::Convert(ConvertError::Cms(e))
+    }
+}
+
+impl From<IoError> for SessionError {
+    fn from(e: IoError) -> Self {
+        SessionError::Convert(ConvertError::Write(e))
     }
 }
 

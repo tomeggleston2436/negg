@@ -25,7 +25,8 @@ use crate::roll::{
     absolute_string, analyse_roll_frames, build_context, file_name, parent_dir, pool_is_current,
     read_overrides, read_roll,
 };
-use crate::settings_file::read_settings_file;
+use crate::session::BORDER_LOST_WARNING;
+use crate::settings_file::{SettingsFile, read_settings_file_parts};
 
 /// What a conversion is asked for: the output and roll options of
 /// `negg convert` and `negg batch`.
@@ -37,13 +38,15 @@ pub struct OutputRequest {
     /// Output file format (`--format`).
     pub format: Format,
     /// Settings already parsed (`--settings`); in roll mode they replace
-    /// the roll's shared settings for the run. Takes precedence over
-    /// `settings_file`.
+    /// the roll's shared settings for the run, geometry included. Takes
+    /// precedence over `settings_file`.
     pub settings: Option<Settings>,
-    /// A settings file or sidecar (`--settings`) to read with
-    /// [`crate::parse_settings`] at the point the flow needs it, so that its
-    /// errors come in the same order as before. Used only when `settings`
-    /// is `None`.
+    /// A settings file, sidecar or roll sidecar (`--settings`) to read with
+    /// [`crate::parse_settings_file`] at the point the flow needs it, so
+    /// that its errors come in the same order as before. In roll mode it
+    /// replaces the roll's shared look and keeps the stored geometry unless
+    /// it has a `geometry` key (Ruling 143). Used only when `settings` is
+    /// `None`.
     pub settings_file: Option<PathBuf>,
     /// Output colour space override (`--space`), written to
     /// `colour.output_space`.
@@ -51,6 +54,10 @@ pub struct OutputRequest {
     /// Crop override (`--crop`, Ruling 92), written to `geometry.crop`; in
     /// roll mode it is the shared crop.
     pub crop: Option<CropRect>,
+    /// Analysis area override (`--analysis-area`, Ruling 134), written to
+    /// `geometry.analysis_area`; in roll mode it is the shared analysis
+    /// area.
+    pub analysis_area: Option<CropRect>,
     /// A rig profile (`--rig`), stored in the settings as an absolute path.
     pub rig: Option<PathBuf>,
     /// A film profile (`--film`), stored in the settings as an absolute
@@ -108,35 +115,51 @@ pub enum FlowEvent {
         /// Which pool: `Dmin`, `gamma` or `cast`.
         pool: &'static str,
     },
+    /// A frame's Dmax is pinned at the density cap, so it was left out of
+    /// the gamma and cast pools and needs an analysis area (Ruling 133; the
+    /// CLI prints a warning naming the frame).
+    NeedsAnalysisArea {
+        /// The frame's file name, as the pool records it.
+        frame: String,
+    },
+}
+
+/// The `--settings` of `req`: `settings` (whole settings, geometry
+/// included), else `settings_file` read and parsed, else `None`.
+fn settings_of(req: &OutputRequest) -> Result<Option<SettingsFile>, ConvertError> {
+    Ok(match (&req.settings, &req.settings_file) {
+        (Some(settings), _) => Some(SettingsFile {
+            settings: settings.clone(),
+            has_geometry: true,
+        }),
+        (None, Some(path)) => Some(read_settings_file_parts(path)?),
+        (None, None) => None,
+    })
 }
 
 /// The settings of `req` alone: `settings`, else `settings_file` read and
-/// parsed, else the defaults; then `--space` and `--crop` applied
+/// parsed, else the defaults; then `--space`, `--crop` and
+/// `--analysis-area` applied
 /// ([`apply_output_flags`]) so that the sidecar records the space that was
 /// actually written.
 fn load_settings(req: &OutputRequest) -> Result<Settings, ConvertError> {
-    let mut settings = match (&req.settings, &req.settings_file) {
-        (Some(settings), _) => settings.clone(),
-        (None, Some(path)) => read_settings_file(path)?,
-        (None, None) => Settings::default(),
-    };
+    let mut settings = settings_of(req)?.map_or_else(Settings::default, |f| f.settings);
     apply_output_flags(&mut settings, req);
     Ok(settings)
 }
 
-/// Whether `req` carries settings (`--settings`).
-fn has_settings(req: &OutputRequest) -> bool {
-    req.settings.is_some() || req.settings_file.is_some()
-}
-
-/// Applies `--space` to `colour.output_space` and `--crop` to
-/// `geometry.crop` (Ruling 92), after any `--settings`.
+/// Applies `--space` to `colour.output_space`, `--crop` to
+/// `geometry.crop` (Ruling 92) and `--analysis-area` to
+/// `geometry.analysis_area` (Ruling 134), after any `--settings`.
 fn apply_output_flags(settings: &mut Settings, req: &OutputRequest) {
     if let Some(space) = req.space {
         settings.colour.output_space = space;
     }
     if let Some(crop) = req.crop {
         settings.geometry.crop = Some(crop);
+    }
+    if let Some(area) = req.analysis_area {
+        settings.geometry.analysis_area = Some(area);
     }
 }
 
@@ -152,21 +175,47 @@ fn apply_profile_flags(settings: &mut Settings, req: &OutputRequest) -> Result<(
 }
 
 /// The roll settings for a run: `base` (an existing roll's settings, or
-/// the defaults), with `--settings` replacing `shared`, `--space` setting
-/// the output space, `--crop` the shared crop (Ruling 92), and `--rig` and
-/// `--film` stored as absolute paths.
+/// the defaults), with `--settings` replacing the shared look (film,
+/// print, colour, profiles) and, only when the settings file has a
+/// `geometry` key, the shared geometry (Ruling 143: the stored crop,
+/// analysis area, buffer, rotation and flip are kept otherwise);
+/// `--space` setting the output space, `--crop` the shared crop (Ruling
+/// 92), `--analysis-area` the shared analysis area (Ruling 134), and
+/// `--rig` and `--film` stored as absolute paths. Returns with them the
+/// parts of the shared settings `--settings` changed (`film`, `print`,
+/// `colour`, `profiles`, `geometry`), for the warning of a batch that
+/// replaces stored roll settings.
 fn run_roll_settings(
     base: RollSettings,
     req: &OutputRequest,
-) -> Result<RollSettings, ConvertError> {
+) -> Result<(RollSettings, Vec<String>), ConvertError> {
     let mut roll = base;
-    if has_settings(req) {
-        roll.shared = load_settings(req)?;
-    } else {
-        apply_output_flags(&mut roll.shared, req);
+    let mut changed = Vec::new();
+    if let Some(file) = settings_of(req)? {
+        let mut shared = file.settings;
+        if !file.has_geometry {
+            shared.geometry = roll.shared.geometry;
+        }
+        changed = changed_parts(&roll.shared, &shared);
+        roll.shared = shared;
     }
+    apply_output_flags(&mut roll.shared, req);
     apply_profile_flags(&mut roll.shared, req)?;
-    Ok(roll)
+    Ok((roll, changed))
+}
+
+/// The top-level parts of the settings (`film`, `print`, `colour`,
+/// `profiles`, `geometry`) that differ between `a` and `b`.
+fn changed_parts(a: &Settings, b: &Settings) -> Vec<String> {
+    let (Ok(serde_json::Value::Object(a)), Ok(serde_json::Value::Object(b))) =
+        (serde_json::to_value(a), serde_json::to_value(b))
+    else {
+        return Vec::new();
+    };
+    a.iter()
+        .filter(|(k, v)| k.as_str() != "schema_version" && b.get(k.as_str()) != Some(*v))
+        .map(|(k, _)| k.clone())
+        .collect()
 }
 
 /// Builds the roll context and reports its warnings.
@@ -185,11 +234,13 @@ fn context_with_warnings(
 /// `negg convert` for one frame. When `req.no_roll` is not set and the
 /// frame's directory holds a roll sidecar listing the frame, the roll's
 /// settings and pool are used (R-roll) and the roll sidecar is left as it
-/// is. `--settings` replaces the shared settings for this run and `--crop`
-/// sets the shared crop; the frame's sidecar overrides are applied in every
-/// mode (R-lock). When `--rig` or `--film` make the profiles differ from
-/// those the roll was pooled with, or `--crop` or `--settings` change the
-/// shared crop or analysis buffer, the pool is not used: a warning says the
+/// is. `--settings` replaces the shared look for this run (and the shared
+/// geometry only when it has a `geometry` key, Ruling 143), `--crop` sets
+/// the shared crop and `--analysis-area` the shared analysis area; the
+/// frame's sidecar overrides are applied in every mode (R-lock). When
+/// `--rig` or `--film` make the profiles differ from those the roll was
+/// pooled with, or `--crop`, `--analysis-area` or `--settings` change what
+/// the shared analysis sees, the pool is not used: a warning says the
 /// roll must be batched again and the frame is rendered with the roll
 /// settings but without the pool, and its sidecar records no `roll`
 /// (Ruling 63).
@@ -226,7 +277,7 @@ pub fn convert_one(
         },
     };
     let roll = if roll_sidecar.is_some() {
-        run_roll_settings(base, req)?
+        run_roll_settings(base, req)?.0
     } else {
         let mut roll = base;
         apply_profile_flags(&mut roll.shared, req)?;
@@ -241,9 +292,9 @@ pub fn convert_one(
             events(FlowEvent::UsingRoll(roll_path));
         } else {
             events(FlowEvent::Warning(format!(
-                "the rig or film profile or the crop differs from the one {} was pooled with, so \
-                 its pool is not used and this frame is rendered on its own; batch the roll again \
-                 to pool it with the new profiles or crop",
+                "the rig or film profile or the crop or analysis area differs from the one {} was \
+                 pooled with, so its pool is not used and this frame is rendered on its own; batch \
+                 the roll again to pool it with the new profiles, crop or analysis area",
                 roll_path.display()
             )));
         }
@@ -295,8 +346,11 @@ struct BatchFrame {
 /// `negg batch`: every frame in `dir` in name order. Roll mode unless
 /// `req.no_roll` (R-roll): the roll settings come from an existing
 /// `roll.negg.json` (else the defaults), `--settings` replaces their
-/// `shared` settings for the run and `--rig` and `--film` set the
-/// profiles; each frame resolves the roll settings with its sidecar
+/// shared look and keeps their geometry unless the settings file has a
+/// `geometry` key (Ruling 143; a warning names what it replaced), and
+/// `--rig` and `--film` set the profiles; when an analysis area or crop
+/// change takes the roll's Dmin pool off the clear film edge, a warning
+/// says so (Ruling 138); each frame resolves the roll settings with its sidecar
 /// overrides (R-lock); pass 1 analyses and pools the roll, pass 2 renders
 /// each frame with the pool and writes its output and sidecar (with
 /// `roll = "roll.negg.json"`); last the roll sidecar is written with the
@@ -332,6 +386,14 @@ pub fn batch_dir(
     } else {
         read_roll(&roll_path)?
     };
+    // The stored roll's analysis rectangle and whether its Dmin pool was
+    // on the clear film edge (Ruling 138).
+    let stored = existing.as_ref().map(|r| {
+        (
+            r.settings.shared.geometry,
+            r.pool.as_ref().is_some_and(RollPool::dmin_from_border),
+        )
+    });
     let roll = if req.no_roll {
         let mut roll = RollSettings {
             shared: load_settings(req)?,
@@ -340,8 +402,18 @@ pub fn batch_dir(
         apply_profile_flags(&mut roll.shared, req)?;
         roll
     } else {
+        let had_roll = existing.is_some();
         let base = existing.map(|r| r.settings).unwrap_or_default();
-        run_roll_settings(base, req)?
+        let (roll, changed) = run_roll_settings(base, req)?;
+        if had_roll && !changed.is_empty() {
+            events(FlowEvent::Warning(format!(
+                "--settings replaces the {} settings stored in {}; the roll is stored with the new \
+                 ones (the stored geometry is kept unless the settings file has a geometry key)",
+                changed.join(", "),
+                roll_path.display()
+            )));
+        }
+        roll
     };
     let ctx = context_with_warnings(roll, dir, events)?;
 
@@ -456,6 +528,12 @@ pub fn batch_dir(
     }
     let pool = analysis.pool;
     report_pool(&pool, &ctx.roll, events);
+    if let Some((geometry, true)) = stored
+        && !geometry.same_analysis(&ctx.roll.shared.geometry)
+        && !pool.dmin_from_border()
+    {
+        events(FlowEvent::Warning(BORDER_LOST_WARNING.to_owned()));
+    }
 
     // Pass 2: render each analysed frame with the pool.
     for (frame, record) in analysed.iter().zip(&pool.frames) {
@@ -493,10 +571,16 @@ pub fn batch_dir(
     Ok(summary)
 }
 
-/// Reports the frames rejected from a pool and a pool with no inliers
-/// (R-pool: those frames keep their own estimates).
+/// Reports the frames rejected from a pool, the frames that need an
+/// analysis area (Ruling 133) and a pool with no inliers (R-pool: those
+/// frames keep their own estimates).
 fn report_pool(pool: &RollPool, roll: &RollSettings, events: &mut dyn FnMut(FlowEvent)) {
     for f in &pool.frames {
+        if f.needs_analysis_area {
+            events(FlowEvent::NeedsAnalysisArea {
+                frame: f.source.clone(),
+            });
+        }
         for (what, role) in [
             ("Dmin", f.dmin_role),
             ("gamma", f.gamma_role),

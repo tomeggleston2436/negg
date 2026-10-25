@@ -1,0 +1,45 @@
+{
+  "schema_version": 4,
+  "film": {
+    "film_base": {
+      "mode": "auto"
+    },
+    "dmax": {
+      "mode": "auto"
+    },
+    "gamma": {
+      "mode": "auto"
+    }
+  },
+  "print": {
+    "grade": 115.0,
+    "exposure": 0.0,
+    "cmy": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "paper_dmin": 0.06,
+    "paper_dmax": 2.3,
+    "shoulder": 3.0,
+    "toe": 6.0,
+    "black_point_compensation": false
+  },
+  "colour": {
+    "auto_colour": true,
+    "cast": {
+      "mode": "auto"
+    },
+    "output_space": "srgb"
+  },
+  "profiles": {
+    "rig": null,
+    "film": null
+  },
+  "geometry": {
+    "crop": null,
+    "analysis_buffer": 0.05,
+    "rotate_degrees": 0,
+    "flip_horizontal": false
+  }
+}

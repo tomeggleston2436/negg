@@ -40,11 +40,11 @@ pub use error::IoError;
 pub use jpeg::{DEFAULT_JPEG_QUALITY, JpegOptions, encode_jpeg8, write_jpeg8};
 pub use profile::{read_film_profile, read_rig_profile, write_film_profile, write_rig_profile};
 pub use roll::{
-    ROLL_SIDECAR_NAME, ROLL_SIDECAR_SCHEMA_VERSION, RollSidecar, read_roll_sidecar,
-    roll_sidecar_path, write_roll_sidecar,
+    ROLL_SIDECAR_NAME, ROLL_SIDECAR_SCHEMA_VERSION, RollSidecar, migrate_roll, read_roll_sidecar,
+    roll_sidecar_bytes, roll_sidecar_path, write_roll_sidecar,
 };
 pub use sidecar::{
-    SIDECAR_SCHEMA_VERSION, SIDECAR_SUFFIX, Sidecar, migrate, read_sidecar, sidecar_path,
-    write_sidecar,
+    SIDECAR_SCHEMA_VERSION, SIDECAR_SUFFIX, Sidecar, migrate, read_sidecar, sidecar_bytes,
+    sidecar_path, write_file_atomic, write_sidecar,
 };
 pub use tiff::{Compression, DEFAULT_RESOLUTION_PPI, TiffOptions, write_tiff16};

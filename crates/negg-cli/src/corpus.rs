@@ -96,9 +96,11 @@ pub struct FrameGeometry {
     /// absent is the whole frame.
     #[serde(default)]
     pub crop: Option<Crop>,
-    /// Fraction of the crop's short side trimmed from every side for
-    /// analysis only, in `[0, 0.2]`; defaults to
-    /// [`negg_types::ANALYSIS_BUFFER_DEFAULT`].
+    /// Fraction of the analysis rectangle's short side trimmed from every
+    /// side of it for analysis only, in `[0, 0.2]`; defaults to
+    /// [`negg_types::ANALYSIS_BUFFER_DEFAULT`]. The manifest has no
+    /// analysis area yet, so the analysis rectangle is the crop, and the
+    /// buffer is ignored without one (Rulings 90 and 134).
     #[serde(default = "default_analysis_buffer")]
     pub analysis_buffer: f32,
     /// Clockwise rotation in degrees: 0, 90, 180 or 270.
@@ -138,6 +140,7 @@ impl FrameGeometry {
                 width: c.width,
                 height: c.height,
             }),
+            analysis_area: None,
             analysis_buffer: self.analysis_buffer,
             rotate_degrees: self.rotate_degrees,
             flip_horizontal: self.flip_horizontal,

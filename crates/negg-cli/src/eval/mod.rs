@@ -18,7 +18,7 @@
 //! keeps its analysis ([`crate::roll::analyse_roll_frames`]), the frames
 //! are pooled, and pass 2 decodes each frame again and renders it with the
 //! pooled values ([`crate::roll::render_in_roll`]). Each frame is decoded
-//! with `negg-decode`, brought to linear light and given its camera matrix
+//! with `negg-decode`, brought to linear light and given its step 7 matrix
 //! exactly as `negg convert` does (see [`crate::convert::prepare_input`]).
 //! The render is linear Rec.2020 and is scored in L*a*b* through
 //! [`negg_cms::lab::rec2020_linear_to_lab`]; reference renders are taken

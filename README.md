@@ -5,6 +5,17 @@ a command-line tool first and a Tauri desktop app second. The aim is to match
 or beat Negative Lab Pro on camera-scanned C-41 negatives without needing
 Lightroom.
 
+## Status
+
+Phases 0 to 3 are built: the engine and the `negg` CLI (phases 1 and 2: inversion,
+roll pooling, rig and film profiles, `negg eval`) and the desktop app with its
+C ABI (phase 3). The gates are not claimed met. The committed corpus has no
+frames and there is no rig, so Gates 1 and 2 are not met by data, and Gate 3
+(a tester converts a 36-frame roll in the app) is open: its automatic half, that
+the app's exports are byte-identical to the CLI's, is a test
+(`crates/negg-cli/tests/app_parity.rs`, ADR 0024). Linear DNG output,
+arbitrary-angle straightening and a GPU preview are phase 4.
+
 ## Crates
 
 All crates live under `crates/` and each has its own `README.md` stating what
@@ -18,8 +29,16 @@ it owns and what it must not do.
 - `negg-render`: inversion, print curve, adjustments and scopes.
 - `negg-cms`: working space, ICC profiles and soft proof.
 - `negg-io`: TIFF, DNG and JPEG writers plus sidecars.
-- `negg-cli`: the `negg` binary: convert, batch, eval and profile.
-- `negg-ffi`: C ABI over the engine (phase 3).
+- `negg-session`: the flows (convert, batch, lock, roll mode) and the
+  `Session` that the app and the C ABI drive; orchestration and I/O, no image
+  maths.
+- `negg-cli`: the `negg` binary: convert, batch, lock, eval and profile, on top
+  of `negg-session`.
+- `negg-ffi`: C ABI over `negg-session` for hosts that are not Rust (phase 3).
+
+The desktop app is in `app/` (see `app/README.md`). It is its own cargo
+workspace (`app/src-tauri`), so `cargo build --workspace` at the root never
+builds Tauri or needs Node.
 
 ## Licensing
 
@@ -56,9 +75,24 @@ All five must pass before a change is considered done.
 negg convert frame.dng                      # frame.negg.tif (16-bit, sRGB, ICC embedded) and frame.negg.json beside it
 negg convert frame.dng --out positives --format jpeg --space adobe_rgb
 negg convert frame.dng --settings my.json --dump-stats --timing
-negg batch roll/ --out positives            # every RAW or TIFF in roll/, sorted by name, same settings
+negg convert frame.dng --crop 0.04,0.06,0.92,0.88            # crop the export; the analysis sees the crop too
+negg convert frame.dng --analysis-area 0.1,0.1,0.8,0.8       # analyse the film only; the export is not cropped
+negg batch roll/ --out positives            # every RAW or TIFF in roll/ as one roll: pooled film base, gamma and cast
+negg batch roll/ --no-roll                  # each frame on its own, no roll.negg.json
+negg lock frame.dng --dmin --gamma          # keep this frame's estimates in later batches
+negg profile rig --flat flat.dng --name rig1 --source "..." --out rig1.rig.negg.toml
+negg profile film roll/ --patches patches.csv --stock Portra --iso 160 --name p160 --source "..." --out p160.film.negg.toml
 negg eval --corpus corpus --baseline eval-baseline.json --tolerances eval.toml
 ```
+
+`--crop x,y,w,h` and `--analysis-area x,y,w,h` take four fractions of the frame
+in its source orientation. A scan with the film holder in shot pins Dmax at the
+density cap and renders dark; an analysis area drawn on the film keeps the
+holder out of the estimates without cropping the photo (ADR 0021). A batch
+warns for each frame it finds pinned and leaves it out of the gamma and cast
+pools (ADR 0032). In roll mode both are stored in `roll.negg.json` and shared by
+every frame. `negg batch` also takes `--rig` and `--film` profile files, as
+does `convert`.
 
 `--dump-stats` prints the estimates used for the frame (Dmin and its source,
 Dmax, gamma and its source, the exposure anchor and `x0`, the cast fit) plus
@@ -72,8 +106,9 @@ object with neither is refused with exit status 2. The sidecar
 `<stem>.negg.json` records the settings, their hash and the estimates, so a
 render is reproducible from the source plus that file. Outputs are named
 `<stem>.negg.tif` or `<stem>.negg.jpg`, so a TIFF source is never
-overwritten, and `negg batch` skips any file whose name contains `.negg.`. A RAW is rendered
-through its camera matrix into Rec.2020; a TIFF with a matrix/TRC ICC
+overwritten, and `negg batch` skips any file whose name contains `.negg.`. A RAW's print
+channels are read as Rec.709 primaries and enter Rec.2020 through the BT.2087
+matrix (ADR 0026), not the camera matrix; a TIFF with a matrix/TRC ICC
 profile is linearised through its TRC in its own primaries and brought into
 Rec.2020 by its colorants after the print stage (LUT profiles are refused);
 an untagged TIFF is assumed gamma 2.2 and left in its
@@ -105,3 +140,10 @@ metric exceeds its baseline by more than its tolerance. To accept a new
 baseline, copy a fresh `eval-results.json` over `eval-baseline.json` in a
 reviewed commit that explains the delta. When a frame renders badly, add it as
 a `[[case]]` in `eval.toml` first, so the fix is measured and cannot regress.
+
+The committed corpus has no frames: frames and reference renders are
+local-only (docs/ADR/0005). Personal scans that must not be published go in a
+private corpus outside the repository, with the licence `LicenseRef-Private`,
+and are evaluated with their own `--corpus`, `--out` and `--baseline` (see
+`corpus/README.md`). A frame's manifest `geometry` can carry a crop, a buffer,
+a turn and a flip but not yet an `analysis_area`.

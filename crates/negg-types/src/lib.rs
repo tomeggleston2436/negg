@@ -21,7 +21,10 @@ pub mod roll;
 pub mod settings;
 
 pub use error::{Error, Result};
-pub use estimates::{CastCorrection, CastSource, DminSource, Estimates, GammaSource};
+pub use estimates::{
+    CastCorrection, CastSource, DENSITY_CAP, DMAX_PINNED_TOLERANCE, DminSource, Estimates,
+    GammaSource, dmax_pinned,
+};
 pub use geometry::{ANALYSIS_BUFFER_DEFAULT, CropRect, Geometry};
 pub use hash::ContentHash;
 pub use image::Image;

@@ -1,25 +1,28 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Frame geometry: the crop rectangle, the analysis buffer, the quarter-turn
-//! rotation and the horizontal flip (Rulings 70 and 90, ADR 0021).
+//! Frame geometry: the crop rectangle, the analysis area, the analysis
+//! buffer, the quarter-turn rotation and the horizontal flip (Rulings 70,
+//! 90 and 134, ADR 0021).
 //!
 //! [`Geometry`] is the one geometry field of [`crate::Settings`]. Its crop
-//! is normalised to the source frame in its decoded orientation, before any
-//! rotation or flip, and serves two purposes: it restricts what the step 3
-//! to 6 estimators see (the crop grid and the buffered analysis grid of
-//! step 3 of `docs/MATHS.md`), and it frames the export, which
-//! [`Geometry::apply`] produces after the render and before the output
-//! transform (step 8). Applying geometry only moves pixels, so it lives
-//! here rather than in `negg-render`.
+//! and its analysis area are normalised to the source frame in its decoded
+//! orientation, before any rotation or flip. The analysis rectangle
+//! ([`Geometry::analysis_rect`]: the analysis area when set, else the crop)
+//! restricts what the step 3 to 6 estimators see (the unbuffered and the
+//! buffered analysis grids of step 3 of `docs/MATHS.md`). The crop alone
+//! frames the export, which [`Geometry::apply`] produces after the render
+//! and before the output transform (step 8). Applying geometry only moves
+//! pixels, so it lives here rather than in `negg-render`.
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::image::{CHANNELS, Image};
 
-/// Default analysis buffer: the fraction of the crop's short side trimmed
-/// from every side of the crop for analysis only (Ruling 90). Controller
-/// choice, TODO(measure).
+/// Default analysis buffer: the fraction of the analysis rectangle's short
+/// side (the analysis area's, or the crop's when there is no analysis area)
+/// trimmed from every side of it for analysis only (Rulings 90 and 134).
+/// Ignored when there is neither. Controller choice, TODO(measure).
 pub const ANALYSIS_BUFFER_DEFAULT: f32 = 0.05;
 
 /// Largest valid analysis buffer (Ruling 90).
@@ -96,19 +99,29 @@ impl CropRect {
     }
 }
 
-/// The geometry of one frame (Ruling 70): an optional crop, the analysis
-/// buffer, a clockwise quarter-turn rotation and a horizontal flip.
+/// The geometry of one frame (Rulings 70 and 134): an optional crop, an
+/// optional analysis area, the analysis buffer, a clockwise quarter-turn
+/// rotation and a horizontal flip.
 ///
-/// Every field has a default, so `{}` loads as no crop, the default buffer,
-/// no rotation and no flip.
+/// Every field has a default, so `{}` loads as no crop, no analysis area,
+/// the default buffer, no rotation and no flip.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Geometry {
-    /// The crop in source orientation; `None` is the whole frame.
+    /// The crop in source orientation; `None` is the whole frame. It frames
+    /// the export, and limits the analysis when `analysis_area` is `None`.
     pub crop: Option<CropRect>,
-    /// Fraction of the crop's short side trimmed from every side of the crop
-    /// for analysis only (Ruling 90). Valid range `[0, 0.2]`; ignored when
-    /// `crop` is `None`.
+    /// The analysis area in source orientation (Ruling 134): when set, the
+    /// step 3 to 6 estimators see only this rectangle (shrunk by the
+    /// analysis buffer) and the crop limits the export alone. `None` (the
+    /// default) analyses the crop, or the whole frame without one, exactly
+    /// as before. Omitted from the JSON when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis_area: Option<CropRect>,
+    /// Fraction of the analysis rectangle's short side trimmed from every
+    /// side of it for analysis only (Rulings 90 and 134). Valid range
+    /// `[0, 0.2]`; ignored when there is neither an analysis area nor a
+    /// crop.
     pub analysis_buffer: f32,
     /// Clockwise rotation in degrees: 0, 90, 180 or 270.
     pub rotate_degrees: u16,
@@ -120,6 +133,7 @@ impl Default for Geometry {
     fn default() -> Self {
         Geometry {
             crop: None,
+            analysis_area: None,
             analysis_buffer: ANALYSIS_BUFFER_DEFAULT,
             rotate_degrees: 0,
             flip_horizontal: false,
@@ -150,17 +164,46 @@ fn crop_axis(start: f32, len: f32, n: usize) -> (usize, usize) {
     (p0, p1)
 }
 
+/// `rect` in pixels of a `w` by `h` frame by the rounding of Ruling 70;
+/// the whole frame for `None` or an empty frame.
+fn rect_pixels(rect: Option<&CropRect>, w: usize, h: usize) -> (usize, usize, usize, usize) {
+    match rect {
+        Some(c) if w > 0 && h > 0 => {
+            let (x0, x1) = crop_axis(c.x, c.width, w);
+            let (y0, y1) = crop_axis(c.y, c.height, h);
+            (x0, y0, x1, y1)
+        }
+        _ => (0, 0, w, h),
+    }
+}
+
 impl Geometry {
-    /// Whether this geometry leaves the frame as it is: no crop, no
-    /// rotation and no flip. The analysis buffer is irrelevant without a
-    /// crop.
+    /// Whether this geometry leaves the exported frame as it is: no crop,
+    /// no rotation and no flip. The analysis area and the analysis buffer
+    /// only limit the analysis, so they do not count (Ruling 134).
     pub fn is_identity(&self) -> bool {
         self.crop.is_none() && self.rotate_degrees == 0 && !self.flip_horizontal
     }
 
+    /// The rectangle the analysis uses (Ruling 134): the analysis area when
+    /// set, else the crop, else `None` (the whole frame).
+    pub fn analysis_rect(&self) -> Option<CropRect> {
+        self.analysis_area.or(self.crop)
+    }
+
+    /// Whether `self` and `other` give every frame the same analysis
+    /// (Rulings 81 and 134): the same [`Geometry::analysis_rect`] and, when
+    /// there is one, the same analysis buffer. Rotation, flip and a crop
+    /// that an analysis area overrides do not touch the analysis.
+    pub fn same_analysis(&self, other: &Geometry) -> bool {
+        let rect = self.analysis_rect();
+        rect == other.analysis_rect()
+            && (rect.is_none() || self.analysis_buffer == other.analysis_buffer)
+    }
+
     /// Checks the geometry: `rotate_degrees` is 0, 90, 180 or 270, the crop
-    /// (when any) passes [`CropRect::validate`], and `analysis_buffer` is
-    /// finite and in `[0, 0.2]`.
+    /// and the analysis area (when any) pass [`CropRect::validate`], and
+    /// `analysis_buffer` is finite and in `[0, 0.2]`.
     ///
     /// # Errors
     ///
@@ -174,6 +217,10 @@ impl Geometry {
         }
         if let Some(crop) = &self.crop {
             crop.validate()?;
+        }
+        if let Some(area) = &self.analysis_area {
+            area.validate()
+                .map_err(|e| Error::Invalid(format!("analysis_area: {e}")))?;
         }
         let b = self.analysis_buffer;
         if !(b.is_finite() && (0.0..=ANALYSIS_BUFFER_MAX).contains(&b)) {
@@ -191,26 +238,29 @@ impl Geometry {
     /// zero in `f64`. The whole frame when there is no crop or the frame is
     /// empty.
     pub fn crop_pixels(&self, w: usize, h: usize) -> (usize, usize, usize, usize) {
-        match &self.crop {
-            Some(c) if w > 0 && h > 0 => {
-                let (x0, x1) = crop_axis(c.x, c.width, w);
-                let (y0, y1) = crop_axis(c.y, c.height, h);
-                (x0, y0, x1, y1)
-            }
-            _ => (0, 0, w, h),
-        }
+        rect_pixels(self.crop.as_ref(), w, h)
     }
 
-    /// The analysis rectangle in source pixels (Ruling 90): the crop of
-    /// [`Geometry::crop_pixels`] shrunk on each side by
+    /// The unbuffered analysis rectangle in source pixels (Rulings 91 and
+    /// 134): [`Geometry::analysis_rect`] by the rounding of
+    /// [`Geometry::crop_pixels`]. The whole frame when there is neither an
+    /// analysis area nor a crop. The step 3 Dmin border search runs inside
+    /// it.
+    pub fn analysis_rect_pixels(&self, w: usize, h: usize) -> (usize, usize, usize, usize) {
+        rect_pixels(self.analysis_rect().as_ref(), w, h)
+    }
+
+    /// The buffered analysis rectangle in source pixels (Rulings 90 and
+    /// 134): [`Geometry::analysis_rect_pixels`] shrunk on each side by
     /// `round(analysis_buffer * min(x1 - x0, y1 - y0))` pixels, limited so
     /// that at least one pixel is left in each direction. The whole frame
-    /// when there is no crop (the buffer is then ignored).
+    /// when there is neither an analysis area nor a crop (the buffer is
+    /// then ignored).
     pub fn analysis_pixels(&self, w: usize, h: usize) -> (usize, usize, usize, usize) {
-        if self.crop.is_none() {
+        if self.analysis_rect().is_none() {
             return (0, 0, w, h);
         }
-        let (x0, y0, x1, y1) = self.crop_pixels(w, h);
+        let (x0, y0, x1, y1) = self.analysis_rect_pixels(w, h);
         let (cw, ch) = (x1 - x0, y1 - y0);
         let short = cw.min(ch) as f64;
         let buffer = f64::from(self.analysis_buffer.max(0.0));
@@ -340,6 +390,12 @@ mod tests {
                 y: 0.2,
                 width: 0.5,
                 height: 0.6,
+            }),
+            analysis_area: Some(CropRect {
+                x: 0.15,
+                y: 0.25,
+                width: 0.4,
+                height: 0.5,
             }),
             analysis_buffer: 0.1,
             rotate_degrees: 270,
@@ -506,5 +562,93 @@ mod tests {
             Err(Error::Invalid(_))
         ));
         assert!(crop(0.0, 0.0, 1.0, 1.0).apply(&Image::new(0, 0)).is_err());
+    }
+
+    fn area(x: f32, y: f32, width: f32, height: f32) -> Geometry {
+        Geometry {
+            analysis_area: Some(CropRect {
+                x,
+                y,
+                width,
+                height,
+            }),
+            ..Geometry::default()
+        }
+    }
+
+    #[test]
+    fn analysis_area_limits_the_analysis_and_not_the_export() {
+        // An analysis area alone: the analysis rect is the area, buffered;
+        // the export is the whole frame.
+        let g = area(0.1, 0.2, 0.8, 0.6);
+        assert!(g.is_identity(), "an analysis area does not crop the export");
+        assert_eq!(g.crop_pixels(1000, 500), (0, 0, 1000, 500));
+        assert_eq!(g.output_size(1000, 500), (1000, 500));
+        assert_eq!(g.analysis_rect_pixels(1000, 500), (100, 100, 900, 400));
+        assert_eq!(g.analysis_pixels(1000, 500), (115, 115, 885, 385));
+        // With a crop as well, the area still decides the analysis and the
+        // crop the export.
+        let mut both = g;
+        both.crop = crop(0.0, 0.0, 0.5, 0.5).crop;
+        assert_eq!(both.crop_pixels(1000, 500), (0, 0, 500, 250));
+        assert_eq!(both.analysis_rect_pixels(1000, 500), (100, 100, 900, 400));
+        assert_eq!(both.analysis_pixels(1000, 500), (115, 115, 885, 385));
+        // Without an area the crop is the analysis rect, as before.
+        let c = crop(0.1, 0.2, 0.8, 0.6);
+        assert_eq!(c.analysis_rect(), c.crop);
+        assert_eq!(c.analysis_rect_pixels(1000, 500), c.crop_pixels(1000, 500));
+        assert_eq!(Geometry::default().analysis_rect(), None);
+        assert_eq!(Geometry::default().analysis_rect_pixels(7, 5), (0, 0, 7, 5));
+    }
+
+    #[test]
+    fn analysis_area_is_validated_like_a_crop() {
+        area(0.0, 0.0, 1.0, 1.0).validate().unwrap();
+        for bad in [
+            area(0.5, 0.5, 0.6, 0.1),
+            area(-0.01, 0.0, 0.5, 0.5),
+            area(0.0, 0.0, 0.005, 0.5),
+            area(f32::NAN, 0.0, 0.5, 0.5),
+        ] {
+            match bad.validate() {
+                Err(Error::Invalid(m)) => assert!(m.contains("analysis_area"), "{m}"),
+                other => panic!("{bad:?}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn analysis_area_json_is_omitted_when_none() {
+        let json = serde_json::to_string(&Geometry::default()).unwrap();
+        assert!(!json.contains("analysis_area"), "{json}");
+        let g = area(0.1, 0.1, 0.8, 0.8);
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(json.contains("analysis_area"), "{json}");
+        assert_eq!(serde_json::from_str::<Geometry>(&json).unwrap(), g);
+    }
+
+    #[test]
+    fn same_analysis_compares_the_analysed_rect_and_buffer() {
+        let none = Geometry::default();
+        let mut buffered = none;
+        buffered.analysis_buffer = 0.1;
+        assert!(
+            none.same_analysis(&buffered),
+            "the buffer is ignored without a rect"
+        );
+        let c = crop(0.1, 0.1, 0.8, 0.8);
+        assert!(!none.same_analysis(&c));
+        let a = area(0.1, 0.1, 0.8, 0.8);
+        assert!(c.same_analysis(&a), "the same rect, as a crop or an area");
+        let mut a_buffered = a;
+        a_buffered.analysis_buffer = 0.1;
+        assert!(!a.same_analysis(&a_buffered));
+        // A crop that the analysis area overrides does not change the
+        // analysis; rotation and flip never do.
+        let mut a_cropped = a;
+        a_cropped.crop = crop(0.0, 0.0, 0.5, 0.5).crop;
+        a_cropped.rotate_degrees = 90;
+        a_cropped.flip_horizontal = true;
+        assert!(a.same_analysis(&a_cropped));
     }
 }
