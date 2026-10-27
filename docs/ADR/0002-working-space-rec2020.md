@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-10-20. Decision 2 in `IMPLEMENTATION_PLAN.md`. The working space stands; the way a RAW enters it changed in part in ADR 0026 (the print channels are read as Rec.709 primaries and enter through the BT.2087 matrix, not the camera matrix).
+Accepted, 2026-10-20. Decision 2 in `ROADMAP.md`. The working space stands; the way a RAW enters it changed in part in ADR 0026 (the print channels are read as Rec.709 primaries and enter through the BT.2087 matrix, not the camera matrix).
 
 ## Context
 

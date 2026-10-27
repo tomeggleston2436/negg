@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! End-to-end tests for the crop (Rulings 70, 90, 91, 92): the crop is the
+//! End-to-end tests for the crop: the crop is the
 //! area the analysis sees, the export is cropped, rotated and flipped, and
 //! `--crop` sets the roll's shared crop. Synthetic data only.
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Typed listeners for the backend events ("### Tauri backend (P3-T)").
+// Typed listeners for the backend events.
 // A payload that does not decode is reported through `onError` and dropped.
 
 import { listen as tauriListen } from "@tauri-apps/api/event";

@@ -322,7 +322,7 @@ fn commit_then_flush_writes_sidecars_read_overrides_returns() {
     assert!(!s.is_dirty());
     assert_eq!(read_overrides(&dir.path("f1.tif")).unwrap(), o);
     // The frame not edited is written as `negg batch` writes it, since
-    // the roll is now written (Ruling 139).
+    // the roll is now written.
     let zero = negg_io::read_sidecar(&dir.path("f0.negg.json")).unwrap();
     assert_eq!(zero.overrides, FrameOverrides::default());
     assert_eq!(zero.estimates, s.frame_view(0).unwrap().estimates);
@@ -850,7 +850,7 @@ fn export_size_after_rotate_90_and_crop() {
     s.flush().unwrap();
 }
 
-/// Timing on a 24 MP synthetic frame (Ruling 83): opening the frame, a
+/// Timing on a 24 MP synthetic frame: opening the frame, a
 /// level-0 tile and a fit-level tile. Reported, not gated. Run with
 /// `cargo test --release -p negg-session -- --ignored --nocapture`.
 #[test]
@@ -1019,7 +1019,7 @@ fn a_frame_found_stale_in_a_flush_is_pooled_before_estimates_are_written() {
         PoolRole::Excluded,
         "the pool saw frame 0's lock"
     );
-    // Frame 2, never edited, was brought up to date too (Ruling 139).
+    // Frame 2, never edited, was brought up to date too.
     let names = ["f1.negg.json", "f2.negg.json", ROLL_SIDECAR_NAME];
     let flushed: Vec<Vec<u8>> = names
         .iter()
@@ -1215,7 +1215,7 @@ fn a_roll_analysis_area_set_before_pass_1_keeps_the_holder_out() {
     }
 
     // Set during pass 1 (one frame analysed) or after it, through the
-    // Ruling 81 path, the result is the same.
+    // refresh path, the result is the same.
     let mut during = Session::open_roll(&dir.0).unwrap();
     during.analyse_next().unwrap();
     during.set_roll_analysis_area(Some(area)).unwrap();
@@ -1315,7 +1315,11 @@ fn browsing_a_folder_never_batched_writes_nothing() {
     s.thumbnail_jpeg(2).unwrap();
     s.flush().unwrap();
     drop(s);
-    assert_eq!(listing(&dir.0), before, "Ruling 141: no roll.negg.json");
+    assert_eq!(
+        listing(&dir.0),
+        before,
+        "a session that only browsed writes no roll.negg.json"
+    );
 }
 
 #[test]
@@ -1574,9 +1578,9 @@ fn roll_preset_scopes_touch_only_look_fields() {
     assert_eq!(print0.preset, None);
     s.apply_roll_preset(&rich, RollPresetScope::FramesWithoutOwnLook)
         .unwrap();
-    // Ruling 5: a frame with any look override looks exactly as before.
+    // A frame with any look override looks exactly as before.
     // Frame 0's whole look was pinned into its overrides, its label of
-    // None as "" (Ruling 8), so its resolved print is unchanged, label
+    // None as "", so its resolved print is unchanged, label
     // included.
     assert_eq!(resolve(&s.roll, &s.frames[0].overrides).print, print0);
     assert_eq!(s.frames[0].overrides.print.preset.as_deref(), Some(""));

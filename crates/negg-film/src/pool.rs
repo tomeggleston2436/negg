@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Roll pooling of `docs/MATHS.md` step 3 (R-pool, Ruling 48) and step 6
-//! (R-cast-pool, Ruling 49).
+//! Roll pooling of `docs/MATHS.md` step 3 and step 6.
 
 use negg_types::{CastCorrection, DminSource, PoolRole};
 
@@ -9,7 +8,7 @@ use crate::stats::median;
 
 /// A frame is rejected from a Dmin or gamma pool when any channel lies more
 /// than this many log-D from the pool median (Chebyshev distance). Step 3 of
-/// `docs/MATHS.md`, R-pool; Controller choice, `TODO(measure)`.
+/// `docs/MATHS.md`; Provisional choice, `TODO(measure)`.
 pub const ROLL_REJECT_LOG_D: f32 = 0.3;
 
 /// Result of [`pool_channels`]: the pooled value and each frame's role.
@@ -32,7 +31,7 @@ fn channel_median(values: &[[f32; 3]], members: impl Iterator<Item = usize> + Cl
 }
 
 /// Pools per-frame three-channel values (Dmin or gamma) over the candidate
-/// frames: step 3 of `docs/MATHS.md`, "Roll pooling" (R-pool, Ruling 48).
+/// frames: step 3 of `docs/MATHS.md`, "Roll pooling".
 ///
 /// Takes the per-channel median over the candidates, rejects any candidate
 /// with a channel more than [`ROLL_REJECT_LOG_D`] from it, and pools the
@@ -75,8 +74,7 @@ pub fn pool_channels(values: &[[f32; 3]], candidate: &[bool]) -> ChannelPool {
     }
 }
 
-/// Dmin candidate flags: step 3 of `docs/MATHS.md`, "Roll pooling"
-/// (R-pool, Ruling 48).
+/// Dmin candidate flags: step 3 of `docs/MATHS.md`, "Roll pooling".
 ///
 /// The candidates are the non-excluded frames whose source is
 /// [`DminSource::Border`] when at least 2 non-excluded frames are Border,
@@ -96,8 +94,7 @@ pub fn dmin_candidates(sources: &[DminSource], excluded: &[bool]) -> Vec<bool> {
         .collect()
 }
 
-/// Weighted median: step 6 of `docs/MATHS.md`, "Cast pooling"
-/// (R-cast-pool, Ruling 49).
+/// Weighted median: step 6 of `docs/MATHS.md`, "Cast pooling".
 ///
 /// Sorts by value ascending (ties keep input order) and returns the first
 /// value where the cumulative weight reaches half the total. Entries with a
@@ -127,7 +124,7 @@ pub fn weighted_median(values: &[f32], weights: &[f32]) -> Option<f32> {
 }
 
 /// Pools the per-frame cast corrections: step 6 of `docs/MATHS.md`, "Cast
-/// pooling" (R-cast-pool, Ruling 49).
+/// pooling".
 ///
 /// A frame contributes when `candidate` is true and `cells_used > 0`; its
 /// weight is `cells_used`. Each of `slope_r`, `offset_r`, `slope_b` and

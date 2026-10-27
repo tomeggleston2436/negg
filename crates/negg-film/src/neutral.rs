@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The neutral-patch gamma fit of step 4 of `docs/MATHS.md` (R-neutral-fit,
-//! Ruling 44 as amended by Ruling 58).
+//! The neutral-patch gamma fit of step 4 of `docs/MATHS.md`.
 
 use negg_types::{Error, Result};
 
 /// Smallest largest-`d_G` over the patches, in log-D, below which there is no
-/// spread to fit. Step 4 of `docs/MATHS.md`; Controller choice,
+/// spread to fit. Step 4 of `docs/MATHS.md`; Provisional choice,
 /// `TODO(measure)`.
 pub const NEUTRAL_MIN_SPREAD: f32 = 0.1;
 
@@ -20,14 +19,13 @@ pub struct NeutralFit {
     /// `gamma_G` times the RMS of the `2 n` e-space residuals over the `n`
     /// points used, log-D.
     pub residual_rms: f32,
-    /// Points used (Ruling 58): 2 when one grey patch plus the film base
+    /// Points used: 2 when one grey patch plus the film base
     /// were fitted, else the number of grey patches `N`.
     pub patches: u32,
 }
 
 /// Fits the per-channel contrast ratios and offsets from neutral patches:
-/// step 4 of `docs/MATHS.md`, "Neutral-patch fit" (R-neutral-fit, Ruling 44
-/// as amended by Ruling 58).
+/// step 4 of `docs/MATHS.md`, "Neutral-patch fit".
 ///
 /// `d_above_base` holds `d_n = max(D_n - Dmin, 0)` for `N >= 1` grey patches.
 /// Only when `N == 1` is the film base `d = (0, 0, 0)` added as a second

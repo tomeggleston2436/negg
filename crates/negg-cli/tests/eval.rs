@@ -136,7 +136,7 @@ fn one_frame_is_rendered_and_scored() {
     let e = &f["estimates"];
     assert!(e.is_object(), "{f}");
     assert!(e["dmin_source"].is_string(), "{e}");
-    // Every frame is rendered in roll mode (Ruling 53), so even a roll of
+    // Every frame is rendered in roll mode, so even a roll of
     // one takes its gamma from the pool, which holds its own value.
     assert_eq!(e["gamma_source"], "roll");
     assert_eq!(f["pool"]["dmin_role"], "inlier", "{f}");
@@ -168,7 +168,7 @@ fn one_frame_is_rendered_and_scored() {
 
 #[test]
 fn both_references_give_a_reference_distance_and_the_gate1_summary() {
-    // Ruling 32: with a negadoctor and a NegPy reference the frame gets the
+    // With a negadoctor and a NegPy reference the frame gets the
     // reference-to-reference distance and the summary the Gate 1 fields.
     let dir = one_frame_corpus("gate1");
     write_grey_tiff(&dir.path("reference/r001-01.negadoctor.tif"), 64, 48);
@@ -882,7 +882,7 @@ fn roll_outlier_is_rejected_and_the_rest_are_measured() {
         let var = roll["dmin_variance"][c].as_f64().unwrap();
         assert!((var - s * s).abs() < 1e-6, "{roll}");
     }
-    // Ruling 59: the rejected frame still renders with the pooled Dmin.
+    // The rejected frame still renders with the pooled Dmin.
     assert_eq!(v["frames"][3]["estimates"]["dmin"], roll["pooled_dmin"]);
     assert_eq!(v["frames"][3]["estimates"]["dmin_source"], "roll");
     let g = &v["summary"]["gate2"];

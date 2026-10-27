@@ -56,7 +56,7 @@ pub const REC2020_BLUE: [f32; 2] = [0.131, 0.046];
 ///
 /// The values are standard, not measured (ground rule 6). Step 7 applies
 /// this matrix to the print output of a RAW input, treating the three
-/// print channels as Rec.709 primaries (ADR 0026, Ruling 96).
+/// print channels as Rec.709 primaries (ADR 0026).
 pub const REC709_TO_REC2020: Matrix3 = [
     [0.6274, 0.3293, 0.0433],
     [0.0691, 0.9195, 0.0114],
@@ -278,7 +278,7 @@ pub fn rgb_to_xyz_from_primaries(
 pub const ICC_PCS_D50: [f32; 3] = [0.9642, 1.0, 0.8249];
 
 /// The step 7 entry matrix of `docs/MATHS.md` for a TIFF linearised in
-/// its own ICC primaries (ADR 0012, Ruling 29): linear RGB in the
+/// its own ICC primaries (ADR 0012): linear RGB in the
 /// profile's primaries to linear Rec.2020 (D65),
 ///
 /// ```text
@@ -315,7 +315,7 @@ pub fn colorants_to_colorants(src: [[f64; 3]; 3], dst: [[f64; 3]; 3]) -> Result<
 
 /// The step 7 entry matrix of `docs/MATHS.md`: camera RGB to linear
 /// Rec.2020 (D65), to be applied **after** inversion to `out_c`,
-/// white-normalised per ADR 0012 (Ruling 28).
+/// white-normalised per ADR 0012.
 ///
 /// `xyz_to_camera` (`X2C`) is the camera's colour matrix as recorded in
 /// step 1 (rawler's matrix, DNG `ColorMatrix2`, maps XYZ to camera RGB),

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-10-23 (controller rulings 51, 52 and 55 pending owner review).
+Proposed, 2026-10-23.
 
 ## Context
 
@@ -10,9 +10,9 @@ Phase 2 adds a fixed cast to `ColourSettings`, profile references to `Settings`,
 
 ## Decision
 
-- Ruling 51 (R-schema): `SETTINGS_SCHEMA_VERSION` goes 1 to 2 (adds `colour.cast` and `profiles`); `SIDECAR_SCHEMA_VERSION` goes 1 to 2 (adds `overrides` and `roll`; `Estimates` gains `neutral_offset` and `cast_source`). `migrate` v1 to v2 edits the JSON value: `schema_version = 2`; `settings.schema_version = 2`; when `estimates` is an object, insert `neutral_offset = [0,0,0]` and `cast_source = "fit"` if `cast.cells_used > 0` else `"identity"`. `parse_settings` sets `schema_version` to the current value after loading a v1 Settings file. The roll sidecar starts at its own version 1. The pinned default hash in `settings.rs` is recomputed.
-- Ruling 52 (R-paths): `Settings.profiles` paths resolve relative to the directory of the file that holds them (the roll or frame sidecar, which share a directory); CLI flag paths are made absolute before storing. In `negg convert` without a roll sidecar, relative `profiles` paths in a `--settings` file resolve against the frame's directory, which is where its sidecar will be, not against the settings file's directory.
-- Ruling 55 (R-cast-source): `CastSource` is `{ Fit, Fixed, Roll, Identity }`. It is `Identity` when auto colour is off, fewer than 8 cells survive, or a film correction is in use.
+- Schema: `SETTINGS_SCHEMA_VERSION` goes 1 to 2 (adds `colour.cast` and `profiles`); `SIDECAR_SCHEMA_VERSION` goes 1 to 2 (adds `overrides` and `roll`; `Estimates` gains `neutral_offset` and `cast_source`). `migrate` v1 to v2 edits the JSON value: `schema_version = 2`; `settings.schema_version = 2`; when `estimates` is an object, insert `neutral_offset = [0,0,0]` and `cast_source = "fit"` if `cast.cells_used > 0` else `"identity"`. `parse_settings` sets `schema_version` to the current value after loading a v1 Settings file. The roll sidecar starts at its own version 1. The pinned default hash in `settings.rs` is recomputed.
+- Paths: `Settings.profiles` paths resolve relative to the directory of the file that holds them (the roll or frame sidecar, which share a directory); CLI flag paths are made absolute before storing. In `negg convert` without a roll sidecar, relative `profiles` paths in a `--settings` file resolve against the frame's directory, which is where its sidecar will be, not against the settings file's directory.
+- Cast source: `CastSource` is `{ Fit, Fixed, Roll, Identity }`. It is `Identity` when auto colour is off, fewer than 8 cells survive, or a film correction is in use.
 
 ## Consequences
 
@@ -21,7 +21,7 @@ Phase 2 adds a fixed cast to `ColourSettings`, profile references to `Settings`,
 - A roll directory can be moved or copied together with its relative profile paths; absolute flag paths stay where they were stated.
 - `cast_source` lets the eval and the user see why no cast was applied.
 
-Cost if wrong: Ruling 51, one migration step; Ruling 52, the path rule; Ruling 55, an enum variant.
+Cost if wrong: schema, one migration step; paths, the path rule; cast source, an enum variant.
 
 ## Eval delta
 

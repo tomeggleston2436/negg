@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-10-24 (Ruling 107). Reopens ADR 0008 and supersedes it in part: `x_0` is no longer set by the exposure anchor alone. The anchor, its analytic solve and the user's `exposure` and `cmy_c` stand.
+Accepted, 2026-10-24. Reopens ADR 0008 and supersedes it in part: `x_0` is no longer set by the exposure anchor alone. The anchor, its analytic solve and the user's `exposure` and `cmy_c` stand.
 
 Superseded in part by ADR 0031: `P_black` is no longer the fixed 2.0 but the knee of the toe, `Dmax_p - ln(2) / a_sh` (2.1845 with the defaults), so the floor is defined for every valid paper. The floor `x_0 = max(x_0_anchor, x_black)` and its interaction with `exposure` and `cmy_c` stand.
 
@@ -22,7 +22,7 @@ x_black = Dmin_p + softplus_inv(a_hl * (v_black - Dmin_p)) / a_hl
 x_0     = max(x_0_anchor, x_black)
 ```
 
-`x_0_anchor` is the ADR 0008 solve. At `e = 0` the paper exposure is `x = x_0`, so the grade drops out and `x_black` is the closed-form inverse of the print curve at `P_black`; it depends on the print settings only, never on scene content. `P_black = 2.0` is a controller choice, `TODO(measure)`, named `BLACK_PRINT_DENSITY` in `negg-render`. The floor is computed in one place (`solve_exposure` in `negg-render`, called by `estimate_frame`), so single-frame and roll renders both use it.
+`x_0_anchor` is the ADR 0008 solve. At `e = 0` the paper exposure is `x = x_0`, so the grade drops out and `x_black` is the closed-form inverse of the print curve at `P_black`; it depends on the print settings only, never on scene content. `P_black = 2.0` is a provisional choice, `TODO(measure)`, named `BLACK_PRINT_DENSITY` in `negg-render`. The floor is computed in one place (`solve_exposure` in `negg-render`, called by `estimate_frame`), so single-frame and roll renders both use it.
 
 How it meets the user's settings:
 

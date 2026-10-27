@@ -103,7 +103,7 @@ roll still pools over all its frames. The grey card rect stays in fractions of
 the whole scan. A geometry that `Settings.geometry` would reject (a crop
 outside the frame, a turn other than 0, 90, 180 or 270) fails the manifest.
 
-The manifest geometry does not yet carry `analysis_area` (Ruling 134, ADR
+The manifest geometry does not yet carry `analysis_area` (ADR
 0021): the table accepts `crop`, `analysis_buffer`, `rotate_degrees` and
 `flip_horizontal` only, and an `analysis_area` key is a manifest error. A frame
 that needs the holder kept out of the analysis therefore takes a `crop`

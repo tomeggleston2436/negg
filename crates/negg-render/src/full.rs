@@ -31,11 +31,11 @@ use crate::saturation::saturate_pixel;
 /// `linear` (linear camera RGB, or linear Rec.2020 for an ICC input), take
 /// the density `D = -log10(max(I, 1e-6))` (step 3), or the rig density
 /// model through [`density_model_pixel`] when `density` is given
-/// (R-density-use, ADR 0015), invert with `est.dmin` and `est.gamma` and
-/// subtract `est.neutral_offset` (step 4, R-contrast:
+/// (ADR 0015), invert with `est.dmin` and `est.gamma` and
+/// subtract `est.neutral_offset` (step 4:
 /// `e_c = -d_c / gamma_c - offset_c / gamma_G`), apply `est.cast` (step 6),
 /// print with `print` (step 5), then apply `matrix` with a clip at 0 when
-/// one is given (step 7, unchanged by a rig, R-step7). Runs in parallel
+/// one is given (step 7, unchanged by a rig). Runs in parallel
 /// over row bands and allocates only the output image.
 ///
 /// `print` should have been built from `est.x0` (see
@@ -62,7 +62,7 @@ pub fn render_full(
 
 /// A rectangle of pixels of an image: the `width` by `height` block whose
 /// top-left pixel is `(x, y)`. Used by [`render_region`] for preview tiles
-/// (Step 8 of docs/MATHS.md (preview), Ruling 73).
+/// (Step 8 of docs/MATHS.md (preview)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Region {
     /// Left column, in pixels.
@@ -77,7 +77,7 @@ pub struct Region {
 
 /// Steps 3 to 7 of `docs/MATHS.md` on one rectangle of `image`: exactly
 /// [`render_full`] restricted to `region`, for preview tiles (Step 8 of
-/// docs/MATHS.md (preview), Ruling 73). Every step of the fused kernel is
+/// docs/MATHS.md (preview)). Every step of the fused kernel is
 /// per pixel with no neighbourhood, so the result is bitwise equal to the
 /// same pixels of `render_full(image, est, print, density, matrix)`; only
 /// the region is copied and rendered.

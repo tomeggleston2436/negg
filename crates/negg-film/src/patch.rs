@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The patch statistic of step 4 of `docs/MATHS.md` (R-patch, Ruling 43).
+//! The patch statistic of step 4 of `docs/MATHS.md`.
 
 use negg_types::{Image, PatchRect};
 
 use crate::stats::median;
 
 /// Fraction of the rect's width and height dropped on each side before
-/// selecting cells. Controller choice, `TODO(measure)` (ADR 0016).
+/// selecting cells. Provisional choice, `TODO(measure)` (ADR 0016).
 const PATCH_SHRINK: f32 = 0.1;
 
-/// Fewest cells a patch may be summarised from. Controller choice,
+/// Fewest cells a patch may be summarised from. Provisional choice,
 /// `TODO(measure)` (ADR 0016).
 const PATCH_MIN_CELLS: usize = 4;
 
 /// Per-channel median of the grid cells inside a patch, the one patch
-/// statistic of `docs/MATHS.md` (step 4, "Patch statistic", R-patch,
-/// Ruling 43; also used by the wedge and band fits of step 2).
+/// statistic of `docs/MATHS.md` (step 4, "Patch statistic";
+/// also used by the wedge and band fits of step 2).
 ///
 /// `rect` is in fractions of the frame. It is shrunk by 10% of its width and
 /// height on each side, and every grid cell whose centre

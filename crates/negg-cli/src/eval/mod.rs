@@ -9,7 +9,7 @@
 //! per-roll variance of estimated Dmin and gammas. Print a table and write
 //! `eval-results.json`."
 //!
-//! A roll is the manifest `roll` field (Ruling 47), and every frame
+//! A roll is the manifest `roll` field, and every frame
 //! belongs to one, so every frame is rendered in roll mode exactly as
 //! `negg batch` renders a directory (docs/ADR/0017): the roll settings are
 //! the defaults with the roll's `rig` and `film_profile` (paths relative
@@ -44,10 +44,10 @@
 //! negadoctor and a NegPy reference, the two references are also compared
 //! with each other ([`metrics::reference_distance`], matched in size the
 //! same way; no distance when they cannot be matched), which is the
-//! distance the plan's Gate 1 compares the engine's against; the summary
-//! carries the Gate 1 fields and the per-tool means (Ruling 32).
+//! distance Gate 1 compares the engine's against; the summary
+//! carries the Gate 1 fields and the per-tool means.
 //!
-//! The per-roll statistics (Ruling 53, docs/ADR/0019) are taken over the
+//! The per-roll statistics (docs/ADR/0019) are taken over the
 //! roll's Dmin inliers using each frame's own, unpooled Dmin and gamma
 //! from pass 1: the population standard deviation and variance per
 //! channel, present only when the roll has two or more inliers. The Gate 2
@@ -257,8 +257,8 @@ fn roll_error(roll: &str, err: ConvertError) -> EvalError {
 /// does a directory (ADR 0017), and scores each. The roll settings are the
 /// defaults with the roll's `rig` and `film_profile` (the same for every
 /// frame of the roll, checked by the manifest loader) resolved against
-/// `corpus` (R-paths); a frame's only override is its manifest
-/// `geometry`, as a whole (Ruling 71). A frame that does not
+/// `corpus`; a frame's only override is its manifest
+/// `geometry`, as a whole. A frame that does not
 /// decode, in either pass, is appended to `skipped_frames` and left out of
 /// the pool and the results.
 fn render_roll(
@@ -364,7 +364,7 @@ fn render_roll(
 
 /// Scores one rendered frame. Neutrality is measured on the render as it
 /// comes from the engine, whenever the frame has a grey card (its rect is
-/// on the source frame); then `geometry` is applied (step 8, Ruling 70)
+/// on the source frame); then `geometry` is applied (step 8)
 /// and the references are scored against the result. A reference whose
 /// file is absent, whose size cannot be matched to the render, or which
 /// does not register onto it, is appended to `skipped` and the frame's
@@ -684,7 +684,7 @@ fn assemble(
         .filter_map(|f| f.neutrality)
         .map(|n| n.de)
         .collect();
-    // Gate 2 (Ruling 53): the largest Dmin spread over the rolls with two
+    // Gate 2: the largest Dmin spread over the rolls with two
     // or more inliers, and the worst light over the qualifying film rolls.
     let dmin_std_max = max_of(rolls.iter().filter_map(|r| report::max_channel(r.dmin_std)));
     let three_lights_max_de = max_of(
@@ -743,7 +743,7 @@ fn tone_summary(frames: &[FrameResult]) -> Option<ToneSummary> {
 }
 
 /// One roll's entry: the statistics over its Dmin inliers' own values
-/// (Ruling 53) and its pooled values.
+/// and its pooled values.
 fn roll_result(
     roll: &str,
     members: &[&FrameResult],
@@ -781,7 +781,7 @@ fn gamma_ratio(gamma: [f32; 3]) -> Option<[f32; 2]> {
     (gamma[1].is_finite() && gamma[1] > 0.0).then(|| [gamma[0] / gamma[1], gamma[2] / gamma[1]])
 }
 
-/// The roll-to-roll entries (Ruling 53): per stock, in order of first
+/// The roll-to-roll entries: per stock, in order of first
 /// appearance, the spread across its rolls of the pooled Dmin and pooled
 /// gamma ratios, counting only the rolls that have both; a stock needs two
 /// such rolls. A roll's stock is that of its first evaluated frame.
@@ -817,7 +817,7 @@ fn roll_to_roll(by_roll: &[(&str, Vec<&FrameResult>)], rolls: &[RollResult]) -> 
         .collect()
 }
 
-/// The three-lights entry of one film roll (Ruling 53): the mean card dE
+/// The three-lights entry of one film roll: the mean card dE
 /// per light source over its evaluated grey-card frames.
 fn three_lights(film_roll: &str, members: &[&FrameResult]) -> ThreeLights {
     let cards: Vec<&FrameResult> = members

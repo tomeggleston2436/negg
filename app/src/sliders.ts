@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-// The slider table (Ruling 78), in order. Ranges are UI limits (Controller
+// The slider table, in order. Ranges are UI limits (Provisional
 // choice), not model defaults. Each slider maps to an existing settings field
 // (geometry.analysis_buffer is the one new field). `get` reads the effective
 // value: the frame's override when set, else the resolved setting. `set`
 // returns new overrides with that field set; the frontend always sends whole
-// values, never deltas (Ruling 79).
+// values, never deltas.
 
 import type { CropRect, FrameOverrides, Geometry, Rgb, Settings } from "./ipc/types";
 
@@ -83,7 +83,7 @@ export function sameGeometry(a: Geometry, b: Geometry): boolean {
   );
 }
 
-/** The analysis area in effect for a geometry (Ruling 134); null when none. */
+/** The analysis area in effect for a geometry; null when none. */
 export function analysisArea(g: Geometry): CropRect | null {
   return g.analysis_area ?? null;
 }
@@ -228,7 +228,7 @@ export function turn(rotate: Geometry["rotate_degrees"], dir: 1 | -1): Geometry[
  * What typed entry commits when the field is left or Enter is pressed: null
  * when the text is unchanged from what the field showed at focus time (so
  * tabbing through an out-of-range or off-step value from a sidecar never
- * rewrites it, Ruling 78), when it is not a number, or when the clamped value
+ * rewrites it), when it is not a number, or when the clamped value
  * equals the current one; otherwise the value snapped and clamped to the spec.
  */
 export function enteredValue(

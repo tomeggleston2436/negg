@@ -117,9 +117,9 @@ jobs:
 
       # No em dash (U+2014) or en dash (U+2013) in tracked source, config or
       # prose files. `git grep` sees only tracked files, so untracked and
-      # ignored files are out of scope. IMPLEMENTATION_PLAN.md and LICENSE*
-      # files are exempt. git grep exits 0 on a match, 1 on no match and 2 or
-      # more on an error; no `-e` so the exit code can be inspected.
+      # ignored files are out of scope. LICENSE* files are exempt. git grep
+      # exits 0 on a match, 1 on no match and 2 or more on an error; no `-e`
+      # so the exit code can be inspected.
       - name: No em dashes
         shell: bash
         run: |
@@ -127,7 +127,7 @@ jobs:
           export LC_ALL=C.UTF-8
           status=0
           git grep -nP '[\x{2014}\x{2013}]' -- '*.rs' '*.toml' '*.md' '*.yml' '*.yaml' '*.json' '*.ts' '*.tsx' \
-            ':!IMPLEMENTATION_PLAN.md' ':!LICENSE*' ':!**/LICENSE*' || status=$?
+            ':!LICENSE*' ':!**/LICENSE*' || status=$?
           case "$status" in
             0)
               echo "::error::em dash (U+2014) or en dash (U+2013) found in the files listed above"
@@ -170,7 +170,7 @@ jobs:
           path: eval-results.json
           if-no-files-found: error
 
-  # The desktop app (Ruling 69): its own cargo workspace in app/src-tauri
+  # The desktop app: its own cargo workspace in app/src-tauri
   # and the React frontend in app/. Everything P3-T verifies locally except
   # the bundle, which package.yml builds. Tauri 2 needs the WebKitGTK
   # development packages on Linux.

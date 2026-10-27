@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Step 8 of `docs/MATHS.md` (preview, "The negative before analysis",
-//! Ruling 134): the decoded linear negative made viewable, with no
+//! Step 8 of `docs/MATHS.md` (preview, "The negative before
+//! analysis"): the decoded linear negative made viewable, with no
 //! inversion, so that the app can show a frame (and let the user draw its
 //! analysis area) before pass 1 has run.
 //!

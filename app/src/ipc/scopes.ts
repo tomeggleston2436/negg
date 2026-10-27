@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Reader for the binary scopes response (Ruling 75, "### Wire formats"):
+// Reader for the binary scopes response:
 // a 32-byte little-endian header, then the histogram (4 x 256 u32: R, G, B,
 // luma), the parade (3 x 256 x 256 u16, [channel][value][column]) and the
 // vectorscope (256 x 256 u16, [row][column]); 528416 bytes in all.

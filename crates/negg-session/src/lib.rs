@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The negg flows, shared by the `negg` CLI, the desktop app and the C ABI
-//! (Ruling 68): settings-file parsing, decode and prepare, rig and film
+//! The negg flows, shared by the `negg` CLI, the desktop app and the C ABI:
+//! settings-file parsing, decode and prepare, rig and film
 //! loading, roll mode (pass 1 and pooling), one frame's conversion
 //! ([`convert_frame_with`]), `negg convert` ([`convert_one`]), `negg batch`
 //! ([`batch_dir`]) and `negg lock` ([`lock_frame`]); and the [`Session`]

@@ -35,7 +35,7 @@ export interface CropRect {
 export interface Geometry {
   crop: CropRect | null;
   /**
-   * The analysis area (Ruling 134): the part of the source the estimates are
+   * The analysis area: the part of the source the estimates are
    * made from, separate from the output crop, which it never changes. Omitted
    * on the wire when there is none (the crop, else the whole frame, is
    * analysed); null and absent both mean none.
@@ -116,7 +116,7 @@ export interface PrintOverrides {
   /** Omitted on the wire when the frame has no saturation of its own. */
   saturation?: number | null;
   /**
-   * A frame label for the look. "" means pinned: no preset (Ruling 8), which
+   * A frame label for the look. "" means pinned: no preset, which
    * resolves to no label. Omitted when the frame inherits the roll's label.
    */
   preset?: string | null;
@@ -172,7 +172,7 @@ export interface PoolFrame {
   dmin_role: PoolRole;
   gamma_role: PoolRole;
   cast_role: PoolRole;
-  /** Dmax pinned at the density cap (Ruling 133); omitted when false. */
+  /** Dmax pinned at the density cap; omitted when false. */
   needs_analysis_area?: boolean;
 }
 
@@ -182,7 +182,7 @@ export interface HistoryView {
   len: number;
   cursor: number;
   /**
-   * A re-pool is pending (Rulings 124 and 126): the backend makes it in the
+   * A re-pool is pending: the backend makes it in the
    * background and announces it with `negg://analysis`; until then estimates
    * are on the previous pool. Absent in older JSON, read as false.
    */
@@ -197,7 +197,7 @@ export interface FrameInfo {
   status: FrameStatus;
   message: string | null;
   /**
-   * The frame's Dmax is pinned at the density cap (Ruling 133): the film
+   * The frame's Dmax is pinned at the density cap: the film
    * holder is in its analysed area, so it needs an analysis area. From its
    * last completed analysis. Absent in older JSON, read as false.
    */
@@ -212,26 +212,26 @@ export interface RollView {
   generation: number;
   history: HistoryView;
   /**
-   * A re-pool is pending (Rulings 124 and 126): the backend makes it in the
+   * A re-pool is pending: the backend makes it in the
    * background and announces it with `negg://analysis`; until then estimates
    * are on the previous pool. Absent in older JSON, read as false.
    */
   pool_pending?: boolean;
   /**
    * The roll was opened for the first time (no roll.negg.json) and the user
-   * has not pressed Analyse yet (Ruling 136): the negatives are shown and the
+   * has not pressed Analyse yet: the negatives are shown and the
    * analysis area can be set first. Sent by the app's commands only.
    */
   awaiting_analysis?: boolean;
   /**
    * Set when the last analysis area or crop change took the roll's film
-   * base pool off the clear film edge (Ruling 138): the text to show. Absent
+   * base pool off the clear film edge: the text to show. Absent
    * when unset.
    */
   pool_warning?: string | null;
 }
 
-/** A frame's negative before analysis (Ruling 134): its size and pyramid. */
+/** A frame's negative before analysis: its size and pyramid. */
 export interface NegativeView {
   index: number;
   source: string;
@@ -260,7 +260,7 @@ export interface FrameView {
   read_only: boolean;
   history: HistoryView;
   /**
-   * A re-pool is pending (Rulings 124 and 126): the backend makes it in the
+   * A re-pool is pending: the backend makes it in the
    * background and announces it with `negg://analysis`; until then estimates
    * are on the previous pool. Absent in older JSON, read as false.
    */
@@ -380,7 +380,7 @@ export function emptyOverrides(): FrameOverrides {
 
 /**
  * The preset label a resolved print shows: null when it is absent, null or
- * "" (a frame that pinned "no preset", Ruling 8).
+ * "" (a frame that pinned "no preset").
  */
 export function presetLabel(print: { preset?: string | null }): string | null {
   return print.preset ? print.preset : null;

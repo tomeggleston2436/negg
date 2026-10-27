@@ -80,63 +80,63 @@ use rayon::prelude::*;
 /// Smallest fraction of the render width the oriented reference may
 /// cover. A hand crop in another tool rarely removes more than a fifth on
 /// each side; 0.6 leaves room for a tight crop of a frame we render with
-/// its border. Controller choice, TODO(measure).
+/// its border. Provisional choice, TODO(measure).
 pub const MIN_COVERAGE: f64 = 0.6;
 
 /// Largest fraction of the render width the oriented reference may cover:
 /// a little over 1, because the reference may keep a sliver of border the
-/// render's own crop removed. Controller choice, TODO(measure).
+/// render's own crop removed. Provisional choice, TODO(measure).
 pub const MAX_COVERAGE: f64 = 1.1;
 
 /// How far, as a fraction of the render's width or height, the reference
-/// may reach past the render's edge during the search. Controller choice,
+/// may reach past the render's edge during the search. Provisional choice,
 /// TODO(measure).
 pub const MARGIN: f64 = 0.05;
 
 /// Smallest fraction of the render a candidate must cover to be
 /// considered at all, so that a tiny overlap cannot win on a chance
-/// correlation. Controller choice, TODO(measure).
+/// correlation. Provisional choice, TODO(measure).
 pub const MIN_OVERLAP: f64 = 0.3;
 
 /// Smallest fraction of the oriented reference that must lie on the
 /// render. The reference is a crop of roughly the same frame, so nearly
 /// all of it is on the render; without this bound a small corner of the
-/// reference, blown up, can fit a smooth render by chance. Controller
+/// reference, blown up, can fit a smooth render by chance. Provisional
 /// choice, TODO(measure).
 pub const MIN_REFERENCE_INSIDE: f64 = 0.75;
 
 /// The smallest edge correlation ([`Registration::correlation`]) at which
 /// a reference counts as aligned. The synthetic tests give 0.9 to 0.99 for
 /// the same scene (lower when the reference is exported smaller and loses
-/// fine edges) and 0.07 to 0.22 for unrelated scenes. Controller choice,
+/// fine edges) and 0.07 to 0.22 for unrelated scenes. Provisional choice,
 /// TODO(measure) on the first real Negative Lab Pro references.
 pub const MIN_CORRELATION: f32 = 0.5;
 
 /// Largest rotation, in degrees either way, the search may add to the
 /// orientation. Hand straightening in an editor turns a frame by a degree
-/// or so; 2 leaves room for a loose horizon. Controller choice (Ruling
-/// 108), TODO(measure).
+/// or so; 2 leaves room for a loose horizon. Provisional choice,
+/// TODO(measure).
 pub const MAX_ROTATION_DEGREES: f64 = 2.0;
 
 /// Smallest long side, in pixels, of a pyramid level on which the climb
 /// also turns the reference: the coarsest level's, so every level the
-/// climb visits turns it unless the whole image is tiny. Controller choice
-/// (Ruling 108), TODO(measure).
+/// climb visits turns it unless the whole image is tiny. Provisional choice,
+/// TODO(measure).
 const ROTATION_MIN_LONG_SIDE: usize = COARSE_LONG_SIDE;
 
 /// Starting angles, in degrees, of the climb on the first level below the
-/// coarsest. Controller choice (Ruling 108), TODO(measure).
+/// coarsest. Provisional choice, TODO(measure).
 const ANGLE_SEEDS: [f64; 3] = [-1.2, 0.0, 1.2];
 
 /// Two climbs that end within this many degrees of each other, on the
-/// same placement, count as one. Controller choice, TODO(measure).
+/// same placement, count as one. Provisional choice, TODO(measure).
 const ANGLE_SEPARATION_DEGREES: f64 = 0.3;
 
 /// Smallest long side, in pixels, of a pyramid level on which the search
 /// also correlates the gradient magnitude. On coarser levels the edges of
 /// a textured scene are blurred into noise that pulls the climb off the
 /// L* peak (the 360 pixel synthetic frames: a 5 pixel error at 90 pixels
-/// wide). Controller choice (Ruling 108), TODO(measure).
+/// wide). Provisional choice, TODO(measure).
 const EDGE_MIN_LONG_SIDE: usize = 3 * COARSE_LONG_SIDE;
 
 /// Long side of the coarsest pyramid level, where the exhaustive search
@@ -153,15 +153,15 @@ pub const FINE_LONG_SIDE: usize = 1536;
 /// whose maximum can lie a few coarse pixels from the true placement (the
 /// synthetic dark-ramp test), so the best placement alone is not enough:
 /// the best few distinct ones go on to the finer levels, where the edges
-/// decide. Controller choice (Ruling 108), TODO(measure).
+/// decide. Provisional choice, TODO(measure).
 const COARSE_SEEDS: usize = 3;
 
 /// Two seeds of one orientation are distinct when their offsets differ by
-/// more than this many coarse pixels on an axis. Controller choice,
+/// more than this many coarse pixels on an axis. Provisional choice,
 /// TODO(measure).
 const SEED_SEPARATION: f64 = 1.5;
 
-/// ... or their scales differ by more than this fraction. Controller
+/// ... or their scales differ by more than this fraction. Provisional
 /// choice, TODO(measure).
 const SEED_SCALE_SEPARATION: f64 = 0.04;
 

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The command bodies ("### Tauri backend (P3-T)"): plain functions taking
+//! The command bodies: plain functions taking
 //! [`AppState`], so `cargo test` runs them without a webview. The
 //! `#[tauri::command]` wrappers in `lib.rs` only forward to these.
 //!
 //! Every edit (commit, lock, undo, redo) schedules the debounced flush
-//! (Ruling 80) and, through [`AppState::with_session`], starts the analyse
-//! loop when it left a re-pool pending (Ruling 124). Errors are never
+//! and, through [`AppState::with_session`], starts the analyse
+//! loop when it left a re-pool pending. Errors are never
 //! retried by overwriting: a sidecar the session refuses stays as it is and
-//! the error reaches the user (Rulings 80 and 122).
+//! the error reaches the user.
 
 use std::path::{Path, PathBuf};
 
@@ -22,7 +22,7 @@ use crate::state::{Access, AppRollView, AppState, CommandError, Event, ExportEve
 
 /// Opens the roll in `dir` (flushing and replacing any open one). Pass 1
 /// starts in the background when the roll has a `roll.negg.json`; otherwise
-/// the roll awaits [`start_analysis`] (Ruling 136).
+/// the roll awaits [`start_analysis`].
 pub fn open_roll(state: &AppState, dir: String) -> Result<AppRollView, CommandError> {
     state.open_roll(&PathBuf::from(dir))
 }
@@ -37,7 +37,7 @@ pub fn roll_view(state: &AppState) -> Result<AppRollView, CommandError> {
     state.with_roll(Access::Read, |s| Ok(s.roll_view()))
 }
 
-/// Opens frame `frame` for its negative (Ruling 134): its size and
+/// Opens frame `frame` for its negative: its size and
 /// pyramid, before pass 1 too.
 pub fn negative_view(state: &AppState, frame: u32) -> Result<NegativeView, CommandError> {
     state.with_session(Access::Read, |s| s.negative_view(frame))
@@ -62,7 +62,7 @@ pub fn negative_thumbnail(state: &AppState, frame: u32) -> Result<Vec<u8>, Comma
     state.with_session(Access::Read, |s| s.negative_thumbnail_jpeg(frame))
 }
 
-/// Sets the roll's analysis area (Ruling 134), at any time: before
+/// Sets the roll's analysis area, at any time: before
 /// Analyse it only records the area; after, the analyses it changes are
 /// made again and the roll re-pooled in the background.
 pub fn set_roll_analysis_area(
@@ -269,7 +269,7 @@ pub fn flush(state: &AppState) -> Result<(), CommandError> {
     state.with_session(Access::Settle, Session::flush)
 }
 
-/// Exports by the CLI's flows (Ruling 82), sending `negg://export` per
+/// Exports by the CLI's flows, sending `negg://export` per
 /// frame. The session flushes first; a sidecar changed by another program
 /// stops the export with that error and nothing is overwritten.
 pub fn export(state: &AppState, request: ExportRequest) -> Result<ExportReport, CommandError> {

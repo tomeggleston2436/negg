@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The frame screen's controls: the slider table, black point compensation,
 // quarter turns, flip, crop, lock and reset. Every control edits this frame's
-// FrameOverrides (Ruling 79); toggles and buttons commit at once.
+// FrameOverrides; toggles and buttons commit at once.
 
 import { useState } from "react";
 import type { FrameOverrides, Settings } from "../ipc/types";

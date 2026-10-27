@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// One wrapper per Tauri command ("### Tauri backend (P3-T)"), same names and
+// One wrapper per Tauri command, same names and
 // argument keys as the Rust functions. JSON results go through the decoders in
 // types.ts; binary results (tiles, thumbnails, scopes) come back as an
 // ArrayBuffer. Tests swap the transport with `setInvoke`.
@@ -94,7 +94,7 @@ export async function openRoll(dir: string): Promise<RollView> {
   return decodeRollView(await call("open_roll", { dir }));
 }
 
-/** Starts the analysis of a roll that awaits it (the Analyse button, Ruling 136). */
+/** Starts the analysis of a roll that awaits it (the Analyse button). */
 export async function startAnalysis(): Promise<RollView> {
   return decodeRollView(await call("start_analysis"));
 }

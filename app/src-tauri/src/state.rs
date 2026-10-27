@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The app state behind every command ("### Tauri backend (P3-T)"): the open
+//! The app state behind every command: the open
 //! [`Session`], the background analyse loop, the debounced sidecar flush and
 //! the event sink. Nothing here touches a webview, so `cargo test` drives it
 //! with a recording sink.
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 /// The roll view as the app's commands send it: the session's [`RollView`]
 /// (its keys flattened in) plus whether the roll waits for the user to
-/// start the analysis (Ruling 136).
+/// start the analysis.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AppRollView {
     /// The session's view.
@@ -36,7 +36,7 @@ impl std::ops::Deref for AppRollView {
     }
 }
 
-/// Delay between the last commit and the sidecar flush (Ruling 80).
+/// Delay between the last commit and the sidecar flush.
 pub const FLUSH_DELAY: Duration = Duration::from_millis(500);
 
 /// Event name of [`AnalysisEvent`].
@@ -205,7 +205,7 @@ struct Slot {
     /// An analyse loop is running for this session.
     looping: bool,
     /// The analysis may run: the roll had a `roll.negg.json` when it was
-    /// opened, or the user pressed Analyse (Ruling 136). Until then no
+    /// opened, or the user pressed Analyse. Until then no
     /// edit starts the analyse loop.
     started: bool,
 }
@@ -244,7 +244,7 @@ pub enum Access {
     /// is checked afterwards.
     Read,
     /// Edits: afterwards the analyse loop is started when pass 1 or a
-    /// re-pool is outstanding (Ruling 124).
+    /// re-pool is outstanding.
     Edit,
     /// Flush, lock and export, which settle a pending re-pool: it is made
     /// first, here, so the host hears of it (and of a pool error) as from
@@ -252,7 +252,7 @@ pub enum Access {
     Settle,
 }
 
-/// The app state ("### Tauri backend (P3-T)"): the session behind a mutex,
+/// The app state: the session behind a mutex,
 /// the debounced flush and the event sink. Cloning shares it.
 #[derive(Clone)]
 pub struct AppState {
@@ -413,7 +413,7 @@ impl AppState {
     /// Opens the roll in `dir`, replacing the open session after flushing
     /// it. When the roll has a `roll.negg.json` (it was opened before) the
     /// analyse loop starts at once; otherwise the roll awaits Analyse
-    /// ([`AppState::start_analysis`], Ruling 136) so the user can set the
+    /// ([`AppState::start_analysis`]) so the user can set the
     /// analysis area on the negatives first. When the old session's edits
     /// cannot be written, the old session stays open and the error says
     /// so; the next attempt opens the roll without them.
@@ -468,8 +468,8 @@ impl AppState {
         })
     }
 
-    /// Starts the analysis of a roll that awaits it (the Analyse button,
-    /// Ruling 136): from now on the analyse loop runs whenever pass 1 or a
+    /// Starts the analysis of a roll that awaits it (the Analyse button):
+    /// from now on the analyse loop runs whenever pass 1 or a
     /// re-pool is outstanding. Does nothing more when it has started.
     pub fn start_analysis(&self) -> Result<AppRollView, CommandError> {
         let (view, start) = {
@@ -492,7 +492,7 @@ impl AppState {
         })
     }
 
-    /// Asks for a flush [`FLUSH_DELAY`] after the last call (Ruling 80).
+    /// Asks for a flush [`FLUSH_DELAY`] after the last call.
     /// Called after every edit, so it also re-arms the unsaved-edits
     /// warning: a close after new edits warns again.
     pub fn schedule_flush(&self) {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Fails when any npm dependency (dev included) carries a licence outside the
-// allow list in the repository's deny.toml (Ruling 85). An `OR` expression
+// allow list in the repository's deny.toml. An `OR` expression
 // passes when one operand is allowed; an `AND` expression needs every operand.
 
 import { execFileSync } from "node:child_process";

@@ -432,7 +432,7 @@ fn profile_film_recovers_the_synthetic_ratios_and_renders_with_them() {
     assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
     assert!(stderr(&o).contains("nope.tif"), "{}", stderr(&o));
 
-    // One grey patch: the film base is added as a second point (Ruling 58),
+    // One grey patch: the film base is added as a second point,
     // and n_patches counts both.
     let p = CARD[1];
     dir.write(

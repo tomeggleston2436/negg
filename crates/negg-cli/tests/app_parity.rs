@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Gate 3, the automatic half (Ruling 83): the app's engine API
+//! Gate 3, the automatic half: the app's engine API
 //! ([`negg_session::Session`]) and the `negg` binary produce byte-identical
 //! files for the same settings. A synthetic 6-frame float TIFF roll is
 //! edited through the session (roll crop, analysis buffer and output space;
@@ -254,8 +254,8 @@ fn app_exports_equal_cli_outputs_byte_for_byte() {
     s.flush().unwrap();
     assert!(!s.roll_view().pool_pending, "flush ran the pending re-pool");
     let flushed_roll = std::fs::read(roll_dir.join("roll.negg.json")).unwrap();
-    // The flush wrote all six frame sidecars (the edited frames, and by
-    // Ruling 139 any frame a roll edit made out of date); they must equal
+    // The flush wrote all six frame sidecars (the edited frames, and
+    // any frame a roll edit made out of date); they must equal
     // what `negg batch` writes.
     let session_flushed = sidecars(&roll_dir);
     assert_eq!(session_flushed.len(), 7);
@@ -264,7 +264,7 @@ fn app_exports_equal_cli_outputs_byte_for_byte() {
         assert!(v.estimates.is_some(), "frame {} has no estimates", v.index);
     }
 
-    // Level-0 tiles equal the frame's render (Ruling 73), for the rotated
+    // Level-0 tiles equal the frame's render, for the rotated
     // frame and the frame with its own crop. The reference is pass 2 of
     // `negg batch`: prepare, then render with the roll context and the
     // pool the session flushed.
@@ -440,7 +440,7 @@ fn copy_files(from: &Path, to: &Path) {
     }
 }
 
-/// A preset applied in the app and on the command line (Ruling 7): with
+/// A preset applied in the app and on the command line: with
 /// `scope`, the session's roll preset then a roll export against
 /// `negg batch --preset Rich [--preset-all-frames]`; without, the
 /// session's frame preset on frame 3 then its export against

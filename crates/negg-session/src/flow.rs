@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The two whole flows: [`convert_one`] (`negg convert`) and [`batch_dir`]
-//! (`negg batch`), with roll mode (R-roll, R-pool, R-lock, Ruling 63).
+//! (`negg batch`), with roll mode.
 //!
 //! Nothing here prints. What the CLI used to print as it went is reported
 //! through a [`FlowEvent`] callback, in the same order, so that a caller
@@ -49,16 +49,16 @@ pub struct OutputRequest {
     /// [`crate::parse_settings_file`] at the point the flow needs it, so
     /// that its errors come in the same order as before. In roll mode it
     /// replaces the roll's shared look and keeps the stored geometry unless
-    /// it has a `geometry` key (Ruling 143). Used only when `settings` is
+    /// it has a `geometry` key. Used only when `settings` is
     /// `None`.
     pub settings_file: Option<PathBuf>,
     /// Output colour space override (`--space`), written to
     /// `colour.output_space`.
     pub space: Option<OutputSpace>,
-    /// Crop override (`--crop`, Ruling 92), written to `geometry.crop`; in
+    /// Crop override (`--crop`), written to `geometry.crop`; in
     /// roll mode it is the shared crop.
     pub crop: Option<CropRect>,
-    /// Analysis area override (`--analysis-area`, Ruling 134), written to
+    /// Analysis area override (`--analysis-area`), written to
     /// `geometry.analysis_area`; in roll mode it is the shared analysis
     /// area.
     pub analysis_area: Option<CropRect>,
@@ -70,8 +70,8 @@ pub struct OutputRequest {
     /// Render each frame on its own, as phase 1 did, reading and writing no
     /// roll sidecar (`--no-roll`).
     pub no_roll: bool,
-    /// A tone preset (`--preset`, ADR 0034), applied after `--settings`
-    /// (Ruling 7). Without roll mode its look is set on the settings with
+    /// A tone preset (`--preset`, ADR 0034), applied after `--settings`.
+    /// Without roll mode its look is set on the settings with
     /// [`negg_types::PrintLook::apply_to_settings`] (frame look overrides
     /// still win, as `resolve` does). `negg convert` of a roll frame puts
     /// it in the frame's overrides, as
@@ -161,7 +161,7 @@ pub enum FlowEvent {
         /// The note.
         note: String,
     },
-    /// A frame was rejected from one of the roll's pools (R-pool; the CLI
+    /// A frame was rejected from one of the roll's pools (the CLI
     /// prints `<who>: <frame>: rejected from the <pool> pool`).
     PoolRejected {
         /// The frame's file name, as the pool records it.
@@ -170,7 +170,7 @@ pub enum FlowEvent {
         pool: &'static str,
     },
     /// A frame's Dmax is pinned at the density cap, so it was left out of
-    /// the gamma and cast pools and needs an analysis area (Ruling 133; the
+    /// the gamma and cast pools and needs an analysis area (the
     /// CLI prints a warning naming the frame).
     NeedsAnalysisArea {
         /// The frame's file name, as the pool records it.
@@ -203,8 +203,8 @@ fn load_settings(req: &OutputRequest) -> Result<Settings, ConvertError> {
 }
 
 /// Applies `--space` to `colour.output_space`, `--crop` to
-/// `geometry.crop` (Ruling 92) and `--analysis-area` to
-/// `geometry.analysis_area` (Ruling 134), after any `--settings`.
+/// `geometry.crop` and `--analysis-area` to
+/// `geometry.analysis_area`, after any `--settings`.
 fn apply_output_flags(settings: &mut Settings, req: &OutputRequest) {
     if let Some(space) = req.space {
         settings.colour.output_space = space;
@@ -231,10 +231,10 @@ fn apply_profile_flags(settings: &mut Settings, req: &OutputRequest) -> Result<(
 /// The roll settings for a run: `base` (an existing roll's settings, or
 /// the defaults), with `--settings` replacing the shared look (film,
 /// print, colour, profiles) and, only when the settings file has a
-/// `geometry` key, the shared geometry (Ruling 143: the stored crop,
+/// `geometry` key, the shared geometry (the stored crop,
 /// analysis area, buffer, rotation and flip are kept otherwise);
-/// `--space` setting the output space, `--crop` the shared crop (Ruling
-/// 92), `--analysis-area` the shared analysis area (Ruling 134), and
+/// `--space` setting the output space, `--crop` the shared crop,
+/// `--analysis-area` the shared analysis area, and
 /// `--rig` and `--film` stored as absolute paths. Returns with them the
 /// parts of the shared settings `--settings` changed (`film`, `print`,
 /// `colour`, `profiles`, `geometry`), for the warning of a batch that
@@ -287,17 +287,17 @@ fn context_with_warnings(
 
 /// `negg convert` for one frame. When `req.no_roll` is not set and the
 /// frame's directory holds a roll sidecar listing the frame, the roll's
-/// settings and pool are used (R-roll) and the roll sidecar is left as it
+/// settings and pool are used and the roll sidecar is left as it
 /// is. `--settings` replaces the shared look for this run (and the shared
-/// geometry only when it has a `geometry` key, Ruling 143), `--crop` sets
+/// geometry only when it has a `geometry` key), `--crop` sets
 /// the shared crop and `--analysis-area` the shared analysis area; the
-/// frame's sidecar overrides are applied in every mode (R-lock). When
+/// frame's sidecar overrides are applied in every mode. When
 /// `--rig` or `--film` make the profiles differ from those the roll was
 /// pooled with, or `--crop`, `--analysis-area` or `--settings` change what
 /// the shared analysis sees, the pool is not used: a warning says the
 /// roll must be batched again and the frame is rendered with the roll
-/// settings but without the pool, and its sidecar records no `roll`
-/// (Ruling 63). `--preset` (Ruling 7) sets its look on a frame outside a
+/// settings but without the pool, and its sidecar records no `roll`.
+/// `--preset` sets its look on a frame outside a
 /// roll (or with `--no-roll`) after `--settings`, and on a roll frame in
 /// its overrides, as [`crate::Session::apply_frame_preset`] does, so the
 /// frame's sidecar records it; the roll sidecar is never written.
@@ -367,7 +367,7 @@ pub fn convert_one(
     if roll_sidecar.is_some()
         && let Some(p) = &req.preset
     {
-        // Ruling 7: a roll frame takes the preset as its own look, exactly
+        // A roll frame takes the preset as its own look, exactly
         // as `Session::apply_frame_preset` gives it.
         p.look.apply_to_overrides(&p.name, &mut overrides.print);
     } else {
@@ -420,14 +420,14 @@ struct BatchFrame {
 }
 
 /// `negg batch`: every frame in `dir` in name order. Roll mode unless
-/// `req.no_roll` (R-roll): the roll settings come from an existing
+/// `req.no_roll`: the roll settings come from an existing
 /// `roll.negg.json` (else the defaults), `--settings` replaces their
 /// shared look and keeps their geometry unless the settings file has a
-/// `geometry` key (Ruling 143; a warning names what it replaced), and
+/// `geometry` key (a warning names what it replaced), and
 /// `--rig` and `--film` set the profiles; when an analysis area or crop
 /// change takes the roll's Dmin pool off the clear film edge, a warning
-/// says so (Ruling 138); each frame resolves the roll settings with its sidecar
-/// overrides (R-lock); pass 1 analyses and pools the roll, pass 2 renders
+/// says so; each frame resolves the roll settings with its sidecar
+/// overrides; pass 1 analyses and pools the roll, pass 2 renders
 /// each frame with the pool and writes its output and sidecar (with
 /// `roll = "roll.negg.json"`); last the roll sidecar is written with the
 /// pool and the frame list. A frame that fails in pass 1 is reported and
@@ -441,7 +441,7 @@ struct BatchFrame {
 /// with [`ConvertError::DuplicateOutput`] and is skipped; a source whose sidecar would be the roll sidecar fails
 /// with [`ConvertError::RollSidecarClash`].
 ///
-/// `--preset` (Ruling 7) applies after `--settings`: with `no_roll` to the
+/// `--preset` applies after `--settings`: with `no_roll` to the
 /// settings; in roll mode to the roll's shared settings (stored in the roll
 /// sidecar), with each frame's overrides passed through the rule
 /// [`crate::Session::apply_roll_preset`] uses
@@ -483,7 +483,7 @@ pub fn batch_dir(
         read_roll(&roll_path)?
     };
     // The stored roll's analysis rectangle and whether its Dmin pool was
-    // on the clear film edge (Ruling 138).
+    // on the clear film edge.
     let stored = existing.as_ref().map(|r| {
         (
             r.settings.shared.geometry,
@@ -511,7 +511,7 @@ pub fn batch_dir(
         }
         roll
     };
-    // Ruling 7: the preset is the look of the settings (roll mode: the
+    // The preset is the look of the settings (roll mode: the
     // roll's), and in roll mode each frame with its own look is treated as
     // `Session::apply_roll_preset` treats it, against the print before the
     // preset.
@@ -698,7 +698,7 @@ pub fn batch_dir(
 }
 
 /// Reports the frames rejected from a pool, the frames that need an
-/// analysis area (Ruling 133) and a pool with no inliers (R-pool: those
+/// analysis area and a pool with no inliers (those
 /// frames keep their own estimates).
 fn report_pool(pool: &RollPool, roll: &RollSettings, events: &mut dyn FnMut(FlowEvent)) {
     for f in &pool.frames {

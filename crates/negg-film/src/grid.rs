@@ -62,8 +62,8 @@ impl AnalysisGrid {
 /// image.
 ///
 /// The block size is `b = ceil(long_side_px / long_side)`, at least 1, so
-/// the grid is at most `long_side` cells on its long side (the plan's
-/// "about 1024 px"). A 2049 px wide frame therefore gets `b = 3` and 683
+/// the grid is at most `long_side` cells on its long side (roughly
+/// 1024 px). A 2049 px wide frame therefore gets `b = 3` and 683
 /// columns, and a frame no larger than `long_side` is its own grid with
 /// every `cv` zero. Each cell is the per-channel median of its `b x b`
 /// block (smaller on the right and bottom edges); see [`AnalysisGrid`] for
@@ -145,7 +145,7 @@ fn axis_cells(cells: usize, b: usize, n: usize, p0: usize, p1: usize) -> (usize,
 }
 
 /// The analysis area of step 3 of `docs/MATHS.md`
-/// (`docs/MATHS.md#step-3-density-and-film-base`, Ruling 90): the cell
+/// (`docs/MATHS.md#step-3-density-and-film-base`): the cell
 /// rectangle `(cx0, cy0, cx1, cy1)`, ends exclusive, of the cells of `grid`
 /// whose centres in source pixels lie inside the pixel rectangle
 /// `rect = (x0, y0, x1, y1)` (ends exclusive). A cell's centre is
@@ -166,7 +166,7 @@ pub fn grid_cells_in(
 /// The part of `grid` inside the cell rectangle
 /// `cells = (cx0, cy0, cx1, cy1)` (ends exclusive, clamped to the grid), as
 /// a grid of its own for the estimators of step 3 of `docs/MATHS.md`
-/// (`docs/MATHS.md#step-3-density-and-film-base`, Ruling 90): `median` and
+/// (`docs/MATHS.md#step-3-density-and-film-base`): `median` and
 /// `cv` cropped, `block` and the source size kept. An empty rectangle gives
 /// a grid with no cells.
 pub fn sub_grid(grid: &AnalysisGrid, cells: (usize, usize, usize, usize)) -> AnalysisGrid {

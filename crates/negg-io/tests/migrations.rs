@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Settings schema migrations (Rulings 71 and 134): hand-written phase 1
+//! Settings schema migrations: hand-written phase 1
 //! and phase 2 fixtures migrate to the current schema with identity
 //! geometry, phase 3 (schema 3) fixtures keep their geometry with no
 //! analysis area, every other field unchanged; they round-trip through a

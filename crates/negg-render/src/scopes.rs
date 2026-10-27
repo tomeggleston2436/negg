@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The scopes of Step 8 of docs/MATHS.md (preview), Ruling 75 (R-scopes,
-//! ADR 0022): histogram, RGB parade and vectorscope of an 8-bit sRGB
+//! The scopes of Step 8 of docs/MATHS.md (preview) (ADR
+//! 0022): histogram, RGB parade and vectorscope of an 8-bit sRGB
 //! render.
 //!
 //! The caller renders the whole frame at the first pyramid level whose
@@ -12,19 +12,19 @@
 use negg_types::{Error, Result};
 
 /// Number of bins of every scope axis: one per 8-bit code value, and the
-/// number of parade columns and vectorscope rows and columns (Ruling 75).
+/// number of parade columns and vectorscope rows and columns.
 pub const SCOPE_BINS: usize = 256;
 
-/// BT.709 luma weights on code values (Ruling 75).
+/// BT.709 luma weights on code values.
 const LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
 
 /// BT.709 colour difference divisors: `Cb = (B' - Y') / 1.8556`,
-/// `Cr = (R' - Y') / 1.5748` (Ruling 75).
+/// `Cr = (R' - Y') / 1.5748`.
 const CB_DIVISOR: f64 = 1.8556;
 const CR_DIVISOR: f64 = 1.5748;
 
-/// The scopes of one 8-bit sRGB image (Step 8 of docs/MATHS.md (preview),
-/// Ruling 75). Serialised by the session as the `NEGGSCOP` binary layout,
+/// The scopes of one 8-bit sRGB image (Step 8 of docs/MATHS.md (preview)).
+/// Serialised by the session as the `NEGGSCOP` binary layout,
 /// in field order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scopes {
@@ -43,14 +43,14 @@ pub struct Scopes {
     pub vectorscope: Vec<u16>,
 }
 
-/// Luma code value of Ruling 75: `round(0.2126 R + 0.7152 G + 0.0722 B)`
+/// Luma code value: `round(0.2126 R + 0.7152 G + 0.0722 B)`
 /// on code values, rounded half away from zero, at most 255.
 fn luma_code(px: [u8; 3]) -> usize {
     let y = LUMA[0] * f64::from(px[0]) + LUMA[1] * f64::from(px[1]) + LUMA[2] * f64::from(px[2]);
     (y.round() as usize).min(SCOPE_BINS - 1)
 }
 
-/// Vectorscope cell `(row, col)` of Ruling 75 for one pixel: BT.709
+/// Vectorscope cell `(row, col)` for one pixel: BT.709
 /// `Cb = (B' - Y') / 1.8556` and `Cr = (R' - Y') / 1.5748` on `code / 255`,
 /// then `col = floor((Cb + 0.5) * 256)` and `row = floor((0.5 - Cr) * 256)`,
 /// each clamped to `[0, 255]` (the clamp at 0 only absorbs rounding at
@@ -69,7 +69,7 @@ fn vectorscope_cell(px: [u8; 3]) -> (usize, usize) {
     (bin(0.5 - cr), bin(cb + 0.5))
 }
 
-/// Step 8 of docs/MATHS.md (preview), Ruling 75: the histogram, RGB parade
+/// Step 8 of docs/MATHS.md (preview): the histogram, RGB parade
 /// and vectorscope of `rgb8`, an interleaved 8-bit sRGB image of `width`
 /// by `height` pixels, row-major from the top-left.
 ///

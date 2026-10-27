@@ -196,7 +196,7 @@ pub struct ExposureSolve {
     pub floor_active: bool,
 }
 
-/// Step 5 of `docs/MATHS.md` (ADR 0030, Ruling 107): `x_0 =
+/// Step 5 of `docs/MATHS.md` (ADR 0030): `x_0 =
 /// max(x0_anchor, x_black)`, so the anchor still sets the exposure unless it
 /// would leave the film base printing lighter than [`black_print_density`].
 ///

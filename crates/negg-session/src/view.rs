@@ -20,20 +20,20 @@ pub struct RollView {
     /// The roll settings as they are now (committed).
     pub roll: RollSettings,
     /// True once pass 1 and pooling have finished; edits and exports wait
-    /// until then (Ruling 81).
+    /// until then.
     pub analysed: bool,
     /// The session generation (stamped into tiles and scopes).
     pub generation: u32,
     /// The edit history.
     pub history: HistoryView,
     /// An edit changed what the roll pool sees and the pool has not been
-    /// made again yet (Ruling 124): the host calls `analyse_next` until it
+    /// made again yet: the host calls `analyse_next` until it
     /// returns Done, then fetches its views again. Absent in older JSON,
     /// read as false.
     #[serde(default)]
     pub pool_pending: bool,
     /// Set when the last analysis area or crop change took the roll's
-    /// film base (Dmin) pool off the clear film edge (Ruling 138): the
+    /// film base (Dmin) pool off the clear film edge: the
     /// text to show, which says to cover the whole film including its
     /// clear edge (rebate) and leave out only the holder. Omitted when
     /// unset; absent in older JSON, read as unset.
@@ -53,7 +53,7 @@ pub enum FrameStatus {
     /// says why.
     Failed,
     /// Its sidecar could not be read or changed on disk; it can be viewed
-    /// but not edited, and its sidecar is never written (Ruling 80).
+    /// but not edited, and its sidecar is never written.
     ReadOnly,
 }
 
@@ -69,7 +69,7 @@ pub struct FrameInfo {
     /// Why it failed or is read-only; for a ready frame, the decoder's
     /// notes, if any.
     pub message: Option<String>,
-    /// The frame's Dmax is pinned at the density cap (Ruling 133): the film
+    /// The frame's Dmax is pinned at the density cap: the film
     /// holder or another opaque area is in its analysed area, it is left
     /// out of the gamma and cast pools, and the app shows "needs analysis
     /// area". False before pass 1 reaches it. It reflects the frame's last
@@ -91,7 +91,7 @@ pub struct FrameView {
     pub width: u32,
     /// Height of the source in pixels, in its decoded orientation.
     pub height: u32,
-    /// Pyramid levels including level 0 (`L + 1`, Ruling 73).
+    /// Pyramid levels including level 0 (`L + 1`).
     pub levels: u32,
     /// Side of a preview tile in pixels.
     pub tile_size: u32,
@@ -111,19 +111,19 @@ pub struct FrameView {
     pub read_only: bool,
     /// The edit history.
     pub history: HistoryView,
-    /// A re-pool is pending (Rulings 124 and 126), as in [`RollView`]: the
+    /// A re-pool is pending, as in [`RollView`]: the
     /// estimates shown are on the previous pool until the host has run
     /// `analyse_next` to Done. Absent in older JSON, read as false.
     #[serde(default)]
     pub pool_pending: bool,
-    /// As [`FrameInfo::needs_analysis_area`] (Ruling 133). Absent in older
+    /// As [`FrameInfo::needs_analysis_area`]. Absent in older
     /// JSON, read as false.
     #[serde(default)]
     pub needs_analysis_area: bool,
 }
 
-/// A frame's decoded negative as the pre-analysis step shows it
-/// (Ruling 134): its size and pyramid, for
+/// A frame's decoded negative as the pre-analysis step shows it:
+/// its size and pyramid, for
 /// [`crate::Session::negative_tile`]. Available before pass 1.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NegativeView {
@@ -135,13 +135,13 @@ pub struct NegativeView {
     pub width: u32,
     /// Height of the source in pixels, in its decoded orientation.
     pub height: u32,
-    /// Pyramid levels including level 0 (`L + 1`, Ruling 73).
+    /// Pyramid levels including level 0 (`L + 1`).
     pub levels: u32,
     /// Side of a tile in pixels.
     pub tile_size: u32,
 }
 
-/// The edit history (Ruling 79): one linear list with a cursor.
+/// The edit history: one linear list with a cursor.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoryView {
     /// True when there is an edit to undo.
@@ -152,14 +152,14 @@ pub struct HistoryView {
     pub len: u32,
     /// Number of edits applied (the rest are the redo tail).
     pub cursor: u32,
-    /// A re-pool is pending (Rulings 124 and 126), as in [`RollView`], so
+    /// A re-pool is pending, as in [`RollView`], so
     /// that undo and redo tell the host to run `analyse_next` to Done.
     /// Absent in older JSON, read as false.
     #[serde(default)]
     pub pool_pending: bool,
 }
 
-/// What to export (Ruling 82).
+/// What to export.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExportScope {

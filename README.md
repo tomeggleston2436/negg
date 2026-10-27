@@ -15,7 +15,7 @@ frames and there is no rig, so Gates 1 and 2 are not met by data, and Gate 3
 the app's exports are byte-identical to the CLI's, is a test
 (`crates/negg-cli/tests/app_parity.rs`, ADR 0024). Phase 4 has begun with
 tone presets, saturation and web export (ADR 0033 to 0035); the built-in preset
-values are provisional. Linear DNG output was dropped by the owner and looks as
+values are provisional. Linear DNG output was dropped and looks as
 3D LUTs are parked; arbitrary-angle straightening remains. The app's preview renders on the GPU when there is one (ADR 0036).
 
 ## Crates
@@ -148,7 +148,7 @@ the chroma of the patch's mean colour), and per-roll variance of the
 estimated Dmin and gamma per channel (present when a roll has two or more
 evaluated frames). When a frame has both a negadoctor and a NegPy reference,
 their distance to each other is recorded as `reference_distance`. The summary
-gives the mean CIEDE2000 per tool (`de2000_mean_by_tool`) and the plan's
+gives the mean CIEDE2000 per tool (`de2000_mean_by_tool`) and the
 Gate 1 criteria under `gate1`: `engine_vs_negpy` and `negadoctor_vs_negpy`
 (both over the frames that have both references), `neutrality_de_mean`, and
 `pass`, which is present when both distances are and is true when the engine

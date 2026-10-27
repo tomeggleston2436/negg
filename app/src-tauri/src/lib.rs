@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The negg desktop app's backend (Ruling 67): Tauri commands over the
+//! The negg desktop app's backend: Tauri commands over the
 //! negg-session [`negg_session::Session`], linked as Rust crates (no C ABI).
 //!
 //! The command bodies live in [`commands`] and the state, the analyse loop,
 //! the debounced flush and the events in [`state`]; the
 //! `#[tauri::command]` wrappers here only forward, on a blocking thread so
 //! that a long decode never stalls the webview. Arguments are snake_case
-//! on the wire (Ruling 120).
+//! on the wire.
 
 pub mod commands;
 pub mod state;
@@ -410,7 +410,7 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // Ruling 80: flush on close, off the main thread.
+                // Flush on close, off the main thread.
                 if !window.state::<AppState>().close_approved() {
                     api.prevent_close();
                     request_close(

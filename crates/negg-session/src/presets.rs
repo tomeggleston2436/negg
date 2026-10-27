@@ -178,15 +178,15 @@ fn scan_presets(dir: Option<&Path>) -> (Vec<PresetEntry>, Vec<Skipped>) {
 
 /// A frame's overrides after a roll preset (spec "Roll preset vs frames
 /// with their own look"), the one rule [`crate::Session::apply_roll_preset`]
-/// and `negg batch --preset` share (Ruling 7). A frame without its own
+/// and `negg batch --preset` share. A frame without its own
 /// look is returned as it is (it takes the roll's new look). A frame with
 /// its own look: with [`RollPresetScope::AllFrames`] its look fields are
 /// cleared, so it takes the roll's; with
 /// [`RollPresetScope::FramesWithoutOwnLook`] the whole look it renders with
 /// under the roll's print settings `old_print` (the five look fields and its resolved preset label) is
-/// pinned into its overrides, so it renders exactly as before (Ruling 5);
+/// pinned into its overrides, so it renders exactly as before;
 /// a resolved label of `None` is pinned as `""`, which `resolve` reads
-/// back as no label (Ruling 8).
+/// back as no label.
 /// Its other overrides stay in both cases.
 #[must_use]
 pub(crate) fn preset_frame_overrides(

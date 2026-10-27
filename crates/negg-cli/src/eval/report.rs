@@ -53,11 +53,11 @@ pub struct EvalReport {
     /// One entry per roll, in order of first appearance.
     pub rolls: Vec<RollResult>,
     /// One entry per film stock with at least two rolls that have pooled
-    /// values, in order of first appearance (Ruling 53).
+    /// values, in order of first appearance.
     #[serde(default)]
     pub roll_to_roll: Vec<RollToRoll>,
     /// One entry per `film_roll` among the evaluated frames, in order of
-    /// first appearance (Ruling 53).
+    /// first appearance.
     #[serde(default)]
     pub three_lights: Vec<ThreeLights>,
     /// Corpus-wide averages.
@@ -221,7 +221,7 @@ pub struct FrameResult {
     /// `docs/MATHS.md`), as the sidecar records it.
     pub estimates: Option<Estimates>,
     /// CIEDE2000 of the negadoctor reference against the NegPy reference,
-    /// when the frame has both and their sizes can be matched (Ruling 32):
+    /// when the frame has both and their sizes can be matched:
     /// the distance Gate 1 compares the engine's against. Absent from
     /// reports written before this field existed, which read back as
     /// `None`.
@@ -305,7 +305,7 @@ impl Alignment {
     }
 }
 
-/// One frame's record in its roll's pools (R-pool, R-cast-pool): what it
+/// One frame's record in its roll's pools: what it
 /// estimated on its own and whether it fed each pool.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FramePool {
@@ -315,7 +315,7 @@ pub struct FramePool {
     /// value when the user fixed it).
     pub gamma: [f32; 3],
     /// Its role in the Dmin pool. The Dmin inliers are the frames Gate 2
-    /// measures (Ruling 48).
+    /// measures.
     pub dmin_role: PoolRole,
     /// Its role in the gamma pool.
     pub gamma_role: PoolRole,
@@ -343,8 +343,8 @@ pub struct ReferenceResult {
 }
 
 /// Per-roll consistency of the estimates. The statistics are taken over
-/// the roll's Dmin inliers (Ruling 48) using each frame's own, unpooled
-/// values from pass 1 (Ruling 53), and are `None` with fewer than two
+/// the roll's Dmin inliers using each frame's own, unpooled
+/// values from pass 1, and are `None` with fewer than two
 /// inliers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RollResult {
@@ -366,7 +366,7 @@ pub struct RollResult {
     #[serde(default)]
     pub rejected: Vec<String>,
     /// Population standard deviation (log-D) of the per-frame Dmin per
-    /// channel over the inliers: the Gate 2 Dmin term (Ruling 53).
+    /// channel over the inliers: the Gate 2 Dmin term.
     #[serde(default)]
     pub dmin_std: Option<[f32; 3]>,
     /// Population standard deviation of the per-frame gamma per channel
@@ -382,7 +382,7 @@ pub struct RollResult {
     pub pooled_gamma_ratio: Option<[f32; 2]>,
 }
 
-/// Consistency across the rolls of one film stock (Ruling 53): the
+/// Consistency across the rolls of one film stock: the
 /// population standard deviation across rolls of the pooled values.
 /// Reported and tolerance-gated, not a Gate 2 term.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -411,7 +411,7 @@ pub struct LightResult {
     pub neutrality_de_mean: f32,
 }
 
-/// The Gate 2 three-lights test for one film roll (Ruling 53).
+/// The Gate 2 three-lights test for one film roll.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThreeLights {
     /// The `film_roll` from the manifest.
@@ -443,15 +443,15 @@ pub struct Summary {
     pub de2000_p95_mean: Option<f32>,
     /// Mean over frames with a neutrality score of `(|a*| + |b*|) / 2`.
     pub neutrality_mean: Option<f32>,
-    /// [`Summary::de2000_mean`] split by reference tool (Ruling 32).
+    /// [`Summary::de2000_mean`] split by reference tool.
     /// Absent from older reports, which read back as all `None`.
     #[serde(default)]
     pub de2000_mean_by_tool: ByTool,
-    /// The plan's Gate 1 corpus criteria (Ruling 32). Absent from older
+    /// The Gate 1 corpus criteria. Absent from older
     /// reports, which read back as all `None`.
     #[serde(default)]
     pub gate1: Gate1,
-    /// The plan's Gate 2 criteria (Ruling 53).
+    /// The Gate 2 criteria.
     #[serde(default)]
     pub gate2: Gate2,
     /// Means of the tone and colour descriptors over the registered
@@ -549,7 +549,7 @@ pub struct ByTool {
 }
 
 /// The neutrality bound of Gate 1: "grey-card neutrality error is under
-/// dE 4" (`IMPLEMENTATION_PLAN.md`).
+/// dE 4" (`ROADMAP.md`).
 pub const GATE1_NEUTRALITY_DE: f32 = 4.0;
 
 /// Gate 1 of the plan: "on the corpus, default renders have lower mean
@@ -597,7 +597,7 @@ impl Gate1 {
 }
 
 /// The Dmin bound of Gate 2: "roll-level Dmin variance under 0.02 log-D
-/// across inlier frames", read as a standard deviation (Ruling 53).
+/// across inlier frames", read as a standard deviation.
 pub const GATE2_DMIN_STD: f32 = 0.02;
 
 /// The neutrality bound of Gate 2: "grey-card neutrality under dE 2 on the
@@ -609,7 +609,7 @@ pub const GATE2_NEUTRALITY_DE: f32 = 2.0;
 /// the three-lights test.
 pub const GATE2_MIN_LIGHTS: usize = 3;
 
-/// Gate 2 of the plan (Ruling 53). Each field is `None` when the corpus
+/// Gate 2 of the plan. Each field is `None` when the corpus
 /// has no data for it; a `None` pass is not a pass.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Gate2 {
@@ -1172,7 +1172,7 @@ mod tests {
         let r: EvalReport = serde_json::from_str(old).unwrap();
         assert_eq!(r.corpus, empty_report().corpus);
         assert!(r.skipped.is_empty());
-        // Nor the Ruling 32 fields: per-tool means, gate1, the per-frame
+        // Nor the newer fields: per-tool means, gate1, the per-frame
         // reference distance and neutrality.de.
         assert_eq!(r.summary, empty_report().summary);
         let old_frame = r#"{

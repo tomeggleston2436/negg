@@ -2,9 +2,8 @@
 // One roll browser cell: the frame's JPEG thumbnail from the store's cache
 // (fetched once the frame is analysed, and again only when `negg://thumbs`
 // marks it stale), its file name and a status badge. Before a frame is
-// analysed it shows the frame's negative (Ruling 136), and a frame whose
-// Dmax is pinned at the density cap carries a "Needs analysis area" badge
-// (Ruling 133).
+// analysed it shows the frame's negative, and a frame whose
+// Dmax is pinned at the density cap carries a "Needs analysis area" badge.
 
 import { useEffect } from "react";
 import type { FrameInfo, FrameStatus } from "../ipc/types";

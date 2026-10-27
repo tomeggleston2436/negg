@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Roll mode: pass 1 of the two-pass roll render (ADR 0017, R-roll).
+//! Roll mode: pass 1 of the two-pass roll render (ADR 0017).
 //!
 //! [`analyse_frame`] reduces one frame to what the roll estimator needs
 //! (step 3 of `docs/MATHS.md`: the analysis grid density, Dmin and Dmax),
 //! and [`pool_roll`] pools Dmin and gamma across the frames (step 3, "Roll
-//! pooling", R-pool) and then the cast fits (step 6, "Roll mode",
-//! R-cast-pool). Pass 2 renders each frame with
+//! pooling") and then the cast fits (step 6, "Roll mode"). Pass 2 renders each frame with
 //! [`crate::render_frame_with`] and the pooled values in its
 //! [`crate::RenderContext`]; the precedence of fixed settings, film
-//! correction, pool and frame estimate is applied there (R-lock).
+//! correction, pool and frame estimate is applied there.
 //!
 //! The pooling statistics themselves live in `negg-film`
 //! ([`dmin_candidates`], [`pool_channels`], [`pool_cast`]); this module only
@@ -41,7 +40,7 @@ use crate::rig::density_grid;
 pub struct FrameAnalysis {
     /// The density of the analysis grid (step 3), with the rig density
     /// model when one was given: the whole grid without an analysis area or
-    /// a crop, else the buffered analysis grid (Rulings 90 and 134), as the
+    /// a crop, else the buffered analysis grid, as the
     /// cast pool uses it.
     pub grid_density: Image,
     /// The frame's own Dmin estimate and its source (Border or Percentile).
@@ -51,13 +50,13 @@ pub struct FrameAnalysis {
 }
 
 /// Step 3 of `docs/MATHS.md` for one frame of a roll from its cached
-/// whole-frame analysis grid and grid density (Rulings 90 and 91): the
+/// whole-frame analysis grid and grid density: the
 /// frame's own Dmin and Dmax estimated exactly as
 /// [`crate::estimate_frame`] does under `geometry` (Dmin on the unbuffered
 /// analysis rectangle's grid, Dmax on the buffered analysis grid, a rig
 /// density model honoured), and the grid density the cast pool fits on
 /// (the analysis grid's part). The analysis rectangle is the analysis area
-/// when set, else the crop (Ruling 134); with neither the whole grid is
+/// when set, else the crop; with neither the whole grid is
 /// used and the analysis buffer is ignored.
 ///
 /// # Errors
@@ -105,7 +104,7 @@ pub fn analyse_grid<'a>(
 
 /// Step 3 of `docs/MATHS.md` for one frame of a roll: the analysis grid of
 /// `linear` (after the caller's step 2, [`crate::apply_rig_linear`]), its
-/// density with the rig model `density` when given (R-density-use), then
+/// density with the rig model `density` when given, then
 /// [`analyse_grid`] under `geometry`.
 ///
 /// # Errors
@@ -123,7 +122,7 @@ pub fn analyse_frame(
 
 /// One frame as [`pool_roll`] sees it: its file name, its pass 1 analysis
 /// and the settings it resolves to (the roll's shared settings with the
-/// frame's overrides, R-lock).
+/// frame's overrides).
 #[derive(Clone, Copy, Debug)]
 pub struct RollFrame<'a> {
     /// The source file name, recorded in [`PoolFrame::source`].
@@ -152,7 +151,7 @@ fn mark_excluded(mut roles: Vec<PoolRole>, excluded: &[bool]) -> Vec<PoolRole> {
 }
 
 /// Steps 3 and 6 of `docs/MATHS.md` across a roll: pools Dmin, gamma and the
-/// cast over `frames` (R-pool, R-cast-pool, R-lock; ADR 0017).
+/// cast over `frames` (ADR 0017).
 ///
 /// - Dmin: a frame whose resolved `film.film_base` is Fixed is Excluded.
 ///   The candidates are chosen by [`dmin_candidates`] (Border frames when
@@ -160,8 +159,8 @@ fn mark_excluded(mut roles: Vec<PoolRole>, excluded: &[bool]) -> Vec<PoolRole> {
 ///   [`pool_channels`].
 /// - Dmin in effect: Fixed, else `dmin_with_pool`
 ///   of its own estimate and the pooled Dmin (the pooled value, capped per
-///   channel by the frame's own estimate when that is a percentile one,
-///   Ruling 105), exactly as [`crate::estimate_frame`] renders it.
+///   channel by the frame's own estimate when that is a percentile one),
+///   exactly as [`crate::estimate_frame`] renders it.
 /// - Gamma: per frame `gamma_f = max(Dmax_f - Dmin_f, 0.05)` with `Dmin_f`
 ///   the frame's Dmin in effect and `Dmax_f` its Dmax in effect (Fixed,
 ///   else its own). A frame whose `film.gamma` is Fixed is Excluded; every
@@ -172,16 +171,16 @@ fn mark_excluded(mut roles: Vec<PoolRole>, excluded: &[bool]) -> Vec<PoolRole> {
 ///   pooled, else its own). The candidates are the frames not Rejected for
 ///   Dmin or gamma; a frame Rejected there is Rejected here too. Pooled by
 ///   [`pool_cast`] (weight `cells_used`). With a film correction the cast is
-///   the identity (R-contrast), so nothing is fitted or pooled: the cast
+///   the identity, so nothing is fitted or pooled: the cast
 ///   pool is `None`, user-fixed frames are Excluded and the rest Unused.
 ///   The cast is pooled only when the pooled Dmin came from Border frames
-///   (every Dmin candidate is Border, Ruling 106); otherwise the fits are
+///   (every Dmin candidate is Border); otherwise the fits are
 ///   kept in the record but not pooled: the cast pool is `None`, user-fixed
 ///   frames are Excluded and the rest Unused, and each frame is rendered
 ///   with its own fit.
 /// - A `pool_*` flag of `roll` that is off gives that pool `None` with
 ///   every role Unused.
-/// - Ruling 133: a frame whose Dmax in effect is pinned at the density cap
+/// - A frame whose Dmax in effect is pinned at the density cap
 ///   ([`negg_types::dmax_pinned`]: the film holder or another opaque area
 ///   is in its analysed rectangle) is not a candidate for the gamma pool
 ///   nor the cast pool: its role there is Unused (Excluded when the user
@@ -236,7 +235,7 @@ pub fn pool_roll(
     } else {
         (None, vec![PoolRole::Unused; n])
     };
-    // The Dmin each frame renders with (Ruling 105): exactly what
+    // The Dmin each frame renders with: exactly what
     // `estimate_frame` takes, so the gamma pooled below and the cast fits
     // use the same base as the render.
     let dmin_in_effect: Vec<[f32; 3]> = frames
@@ -244,7 +243,7 @@ pub fn pool_roll(
         .zip(&dmin_fixed)
         .map(|(f, fx)| fx.unwrap_or_else(|| dmin_with_pool(&f.analysis.dmin, pooled_dmin).0))
         .collect();
-    // Ruling 106: the cast is pooled only when the pooled Dmin came from
+    // The cast is pooled only when the pooled Dmin came from
     // Border frames, that is every Dmin candidate (Inlier or Rejected) is
     // a Border frame, as the border preference of `dmin_candidates` makes
     // it when at least two non-excluded frames are Border.
@@ -259,7 +258,7 @@ pub fn pool_roll(
         .iter()
         .map(|f| fixed(f.settings.film.dmax).unwrap_or(f.analysis.dmax))
         .collect();
-    // Ruling 133: a Dmax pinned at the density cap keeps the frame out of
+    // A Dmax pinned at the density cap keeps the frame out of
     // the gamma and cast pools.
     let pinned: Vec<bool> = dmax_in_effect.iter().map(dmax_pinned).collect();
 
@@ -667,7 +666,7 @@ mod tests {
         assert_eq!(own.dmin_source, DminSource::Percentile);
         assert_eq!(own.dmin_role, PoolRole::Rejected);
         let pooled = pool.dmin.unwrap();
-        // Ruling 105: d renders with its own base, not the higher pool.
+        // D renders with its own base, not the higher pool.
         assert_eq!(est[3].dmin, own.dmin);
         assert_eq!(est[3].dmin_source, DminSource::Percentile);
         assert!((0..3).all(|c| own.dmin[c] < pooled[c]));
@@ -680,7 +679,7 @@ mod tests {
             let want = (own.dmax[c] - own.dmin[c]).max(0.05);
             assert!((own.gamma[c] - want).abs() < 1e-6, "{:?}", own.gamma);
         }
-        // Ruling 106: a percentile pool gives no pooled cast; each frame is
+        // A percentile pool gives no pooled cast; each frame is
         // corrected with its own fit, the one the pool recorded.
         assert_eq!(pool.cast, None);
         for (f, e) in pool.frames.iter().zip(&est) {
@@ -709,7 +708,7 @@ mod tests {
         for e in &est {
             assert_eq!((e.dmin, e.dmin_source), (pooled, DminSource::Roll));
         }
-        // A Border pool still pools the cast (Ruling 49).
+        // A Border pool still pools the cast.
         let cast = pool.cast.unwrap();
         for e in &est {
             assert_eq!((e.cast, e.cast_source), (cast, CastSource::Roll));
@@ -719,7 +718,7 @@ mod tests {
     #[test]
     fn one_border_frame_among_percentile_frames_pools_no_cast() {
         // Fewer than two Border frames: every frame is a Dmin candidate, so
-        // the pool did not come from Border frames alone (Ruling 106).
+        // the pool did not come from Border frames alone.
         let imgs = vec![
             negative([0.2, 0.5, 0.7], [1.6, 1.7, 1.8]),
             negative_with_border([0.2, 0.5, 0.7], [1.6, 1.7, 1.8], 0),

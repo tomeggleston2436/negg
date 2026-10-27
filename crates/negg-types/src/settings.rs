@@ -5,13 +5,13 @@
 //!
 //! Settings are plain serde structs. Every struct carries
 //! `#[serde(default)]`, so a sidecar that omits a field (or an empty `{}`)
-//! loads with the plan's defaults, and unknown fields are ignored so that a
+//! loads with the default values, and unknown fields are ignored so that a
 //! file of the same `schema_version` with fields this build does not know
 //! still loads. The structs themselves accept any `schema_version`; the
 //! readers check it: a sidecar, a roll sidecar or a `--settings` file whose
 //! `schema_version` is newer than [`SETTINGS_SCHEMA_VERSION`] (or the
-//! sidecar's own schema) is refused with a message to upgrade negg
-//! (Ruling 144), never loaded with its new fields dropped. Settings are immutable once
+//! sidecar's own schema) is refused with a message to upgrade negg,
+//! never loaded with its new fields dropped. Settings are immutable once
 //! written and are identified by their [`ContentHash`]; the settings history
 //! that backs undo is a list of such hashes.
 //!
@@ -25,8 +25,8 @@ use crate::geometry::Geometry;
 use crate::hash::{ContentHash, hash_value};
 
 /// Version of the settings schema written into sidecars. Version 3 added
-/// `geometry` (Ruling 71); version 4 adds `geometry.analysis_area`
-/// (Ruling 134), absent meaning none; version 5 adds `print.saturation` and
+/// `geometry`; version 4 adds `geometry.analysis_area`,
+/// absent meaning none; version 5 adds `print.saturation` and
 /// `print.preset` (phase 4, ADR 0033), absent meaning 1 and none.
 pub const SETTINGS_SCHEMA_VERSION: u32 = 5;
 
@@ -244,11 +244,10 @@ pub struct Settings {
     pub colour: ColourSettings,
     /// Rig and film profiles to apply (phase 2). Default none.
     pub profiles: ProfileRefs,
-    /// Crop, analysis area, analysis buffer, rotation and flip (phase 3,
-    /// Rulings 70, 90 and 134). The analysis area (else the crop) restricts
-    /// the step 3 to 6 estimators; the crop frames the export (step 8).
-    /// Default: no crop, no analysis area, buffer 0.05, no rotation or
-    /// flip.
+    /// Crop, analysis area, analysis buffer, rotation and flip (phase 3). The
+    /// analysis area (else the crop) restricts the step 3 to 6 estimators;
+    /// the crop frames the export (step 8). Default: no crop, no analysis
+    /// area, buffer 0.05, no rotation or flip.
     pub geometry: Geometry,
 }
 

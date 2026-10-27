@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// The single app store (Ruling 84): one reducer, no library. Server state
+// The single app store: one reducer, no library. Server state
 // (roll, frame view, history) is whatever the last command returned; the
 // only client state on top is the draft overrides during a drag, the open
 // screen, the selection and progress counters.
@@ -48,7 +48,7 @@ export interface State {
   /** Last FrameView returned for `current`. */
   frame: FrameView | null;
   /**
-   * The negative of `current` (Ruling 134), shown while pass 1 has not
+   * The negative of `current`, shown while pass 1 has not
    * reached the frame.
    */
   negative: NegativeView | null;
@@ -320,7 +320,7 @@ export function reducer(state: State, action: Action): State {
   }
 }
 
-/** True while the roll waits for Analyse (Ruling 136). */
+/** True while the roll waits for Analyse. */
 export function awaitingAnalysis(state: State): boolean {
   return state.roll?.awaiting_analysis === true;
 }

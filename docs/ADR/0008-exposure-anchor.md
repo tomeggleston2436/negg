@@ -2,13 +2,13 @@
 
 ## Status
 
-Proposed, 2026-10-20 (controller ruling pending owner review).
+Proposed, 2026-10-20.
 
-Superseded in part by ADR 0030 (Ruling 107): `x_0` is no longer set by the anchor alone; it is `max(x_0_anchor, x_black)`, where `x_black` makes the film base (`e = 0`) print at `P = 2.0`. The anchor, its solve and the user's `exposure` and `cmy_c` stand. Since ADR 0031 `x_black` makes the base print at the knee of the toe, `P_black = Dmax_p - ln(2) / a_sh`, not at 2.0.
+Superseded in part by ADR 0030: `x_0` is no longer set by the anchor alone; it is `max(x_0_anchor, x_black)`, where `x_black` makes the film base (`e = 0`) print at `P = 2.0`. The anchor, its solve and the user's `exposure` and `cmy_c` stand. Since ADR 0031 `x_black` makes the base print at the knee of the toe, `P_black = Dmax_p - ln(2) / a_sh`, not at 2.0.
 
 ## Context
 
-`docs/MATHS.md` step 5 says `x_0` is chosen so that the frame's exposure anchor prints at `P = 0.75`, and that the anchor is "the trimmed mean of textured grid cells in the midtones". That is all the plan says. `docs/MATHS.md` carried the line "TODO(spec): the plan does not say how 'textured' cells are selected, what density band counts as 'midtones', what fraction the trimmed mean trims, or whether the anchor is one value or one per channel. The sign conventions and display units of `x_0` and `cmy_c` as user-facing sliders are also open." `exposure_anchor` in `negg-film` and `solve_x0` in `negg-render` need all of this, so this ADR records the ruling (contract item R-anchor).
+`docs/MATHS.md` step 5 says `x_0` is chosen so that the frame's exposure anchor prints at `P = 0.75`, and that the anchor is "the trimmed mean of textured grid cells in the midtones". That is all the original model says. `docs/MATHS.md` carried the line "TODO(spec): the model does not say how 'textured' cells are selected, what density band counts as 'midtones', what fraction the trimmed mean trims, or whether the anchor is one value or one per channel. The sign conventions and display units of `x_0` and `cmy_c` as user-facing sliders are also open." `exposure_anchor` in `negg-film` and `solve_x0` in `negg-render` need all of this, so this ADR records the decision.
 
 ## Decision
 
@@ -28,7 +28,7 @@ The user's `Settings.print.exposure` is added to `x_0`; positive means more prin
 - The solve is exact and closed-form because both softplus terms are invertible for the arguments involved: `softplus_inv` is only called on positive values (`Dmax_p - 0.75` and `v - Dmin_p` are positive with any sensible paper constants). With the step 5 defaults (`Dmin_p = 0.06`, `Dmax_p = 2.3`, `a_hl = 3.0`, `a_sh = 6.0`) the solve gives `v = 0.75002` and `x_target = 0.70505`; running `x_target` forward through the two softplus equations returns `P = 0.75` to within floating-point rounding, which is the unit test for `solve_x0`.
 - `x_0` depends on `a` and on `k`, so changing the grade `R` re-solves `x_0` and the anchor stays at `P = 0.75`: the grade pivots around the anchor rather than around paper white. The user's `exposure` is added after the solve and is not part of it (`solve_x0` takes the anchor and the print settings only).
 - Both user controls are in log print density, the same unit as `x_0` and `cmy_c` in the step 5 equations. No display unit conversion exists in phase 1; the GUI (phase 3) may choose one in its own ADR.
-- The textured threshold reuses the plan's 0.03. The midtone band (25th to 75th percentiles), the 10% trim and the minimum of 16 midtone cells are controller choices pending measurement; they are marked `TODO(measure)` in the step 5 constants table. The median fallback exists so that a frame with almost no texture (a flat test target, or a badly underexposed frame) still gets a defined `x_0`.
+- The textured threshold reuses the original model's 0.03. The midtone band (25th to 75th percentiles), the 10% trim and the minimum of 16 midtone cells are provisional choices pending measurement; they are marked `TODO(measure)` in the step 5 constants table. The median fallback exists so that a frame with almost no texture (a flat test target, or a badly underexposed frame) still gets a defined `x_0`.
 - `Estimates` in `negg-types` carries `anchor` and `x0` (before the user's exposure is added) so the sidecar records both and a render is reproducible without re-running the estimator.
 - Percentiles are nearest-rank, as implemented by `percentile` in `negg-film`.
 

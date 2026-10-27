@@ -92,7 +92,7 @@ fn batch_pools_the_roll_and_rejects_the_outlier() {
         assert_eq!(s["schema_version"], 5);
         assert!(s.get("overrides").is_none(), "{s}");
     }
-    // The Rejected frame still renders with the pooled base (Ruling 59).
+    // The Rejected frame still renders with the pooled base.
     let d = read_json(&roll.join("d.negg.json"));
     assert_eq!(d["estimates"]["dmin"], *pooled, "{d}");
     assert_eq!(d["estimates"]["dmin_source"], "roll", "{d}");
@@ -148,7 +148,7 @@ fn write_golden_input(path: &Path) {
 /// an ADR. To regenerate it, write the input with `cargo test -p negg-cli
 /// --test roll -- --ignored write_the_golden_input` (it goes to
 /// `$NEGG_GOLDEN_INPUT`) and convert it with the current release binary.
-/// The embedded ICC profile now carries the fixed creation date of Ruling 77
+/// The embedded ICC profile now carries the fixed creation date
 /// (2026-01-01 00:00:00) and a zero profile ID, so only the date masking of
 /// the comparison is still needed for older baselines.
 const PHASE1_GOLDEN: &str = concat!(
@@ -642,7 +642,7 @@ fn a_percentile_frame_never_takes_a_pooled_base_above_its_own() {
         assert!(got > own + 0.3, "{pooled} {alone}");
     }
     assert_eq!(rs["pool"]["frames"][3]["dmin_role"], "rejected", "{rs}");
-    // d renders with its own base and records it as such (Ruling 105).
+    // d renders with its own base and records it as such.
     let d = read_json(&roll.join("d.negg.json"));
     assert_eq!(d["estimates"]["dmin"], alone["dmin"], "{d}");
     assert_eq!(d["estimates"]["dmin_source"], "percentile", "{d}");
@@ -678,7 +678,7 @@ fn a_bordered_roll_still_gives_every_frame_the_pooled_base() {
     }
     assert_eq!(frames[3]["dmin_role"], "rejected", "{rs}");
     let pooled = &rs["pool"]["dmin"];
-    // Ruling 59 is unchanged for Border frames: d, Rejected, takes the pool.
+    // Pooling is unchanged for Border frames: d, Rejected, takes the pool.
     for name in ["a", "b", "c", "d"] {
         let s = read_json(&roll.join(format!("{name}.negg.json")));
         assert_eq!(s["estimates"]["dmin"], *pooled, "{name}");
@@ -746,7 +746,7 @@ fn a_bordered_roll_still_uses_the_pooled_cast() {
     }
 }
 
-/// Rulings 142 to 144: `--settings` takes a roll sidecar's shared
+/// `--settings` takes a roll sidecar's shared
 /// settings, refuses an unrecognised file and a newer schema (exit 2),
 /// and in roll mode keeps the stored geometry unless the file has its own,
 /// warning about what it replaced.

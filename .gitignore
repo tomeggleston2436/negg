@@ -11,5 +11,5 @@ eval-results.json
 corpus/**
 !corpus/manifest.toml
 !corpus/README.md
-# Claude Code SDD workspace (ledger, briefs, reports)
+# Local scratch workspace
 .superpowers/

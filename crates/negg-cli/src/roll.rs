@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `negg convert`, `negg batch` and `negg lock` on the command line (ADR
-//! 0017, R-roll, R-pool, R-lock; ADR 0018, R-paths).
+//! 0017; ADR 0018).
 //!
-//! The flows and roll mode live in [`negg_session`] (Ruling 68) and are
+//! The flows and roll mode live in [`negg_session`] and are
 //! re-exported here so that callers keep their paths. This module maps the
 //! clap arguments to a [`negg_session::OutputRequest`] and prints the
 //! flows' [`FlowEvent`]s with the `negg convert: ` and `negg batch: `
@@ -91,7 +91,7 @@ fn role_name(role: PoolRole) -> String {
 
 /// The extra `--dump-stats` lines of a frame rendered in roll mode: its
 /// roles in the three pools and where its cast came from. (A frame that
-/// needs an analysis area, Ruling 133, says so in [`format_stats`]: its
+/// needs an analysis area says so in [`format_stats`]: its
 /// Dmax is its own in roll mode too.)
 pub fn format_roll_stats(record: Option<&PoolFrame>, converted: &Converted) -> String {
     let mut s = String::new();

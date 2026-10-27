@@ -4,10 +4,10 @@
 //! density with a rig density model.
 //!
 //! [`apply_rig_linear`] runs the linear part of a rig correction on the
-//! step 1 output, in the order of ADR 0014 (R-rig-order): the flat field
-//! gain (R-flat, bilinear between grid cell centres), then the crosstalk
-//! unmix `I <- max(M^-1 I, 0)` (R-crosstalk). The density model of
-//! R-density-use is not applied to the image: it replaces the density
+//! step 1 output, in the order of ADR 0014: the flat field
+//! gain (bilinear between grid cell centres), then the crosstalk
+//! unmix `I <- max(M^-1 I, 0)`. The rig's density model
+//! (ADR 0015) is not applied to the image: it replaces the density
 //! formula of step 3, through [`density_model_pixel`] and [`density_grid`]
 //! on the analysis grid and per pixel in [`crate::render_full`].
 //!
@@ -21,7 +21,7 @@ use negg_types::{DensityModel, Error, FlatField, Image, Result, RigCorrection};
 use crate::par::{for_each_pixel_mut, for_each_row_mut};
 
 /// Step 3 of `docs/MATHS.md` with a rig density model (step 2,
-/// R-density-use, ADR 0015): `D_c = a_c + sum_k g[c][k] * log10(max(I_k,
+/// ADR 0015): `D_c = a_c + sum_k g[c][k] * log10(max(I_k,
 /// 1e-6))`.
 ///
 /// The floored log is `-negg_film::density_value(I_k)`, so the floor is the
@@ -40,7 +40,7 @@ pub fn density_model_pixel(i: [f32; 3], m: &DensityModel) -> [f32; 3] {
 
 /// Step 3 of `docs/MATHS.md` on an image (normally the analysis grid's
 /// block medians): the density per pixel, from the rig density model when
-/// one is given ([`density_model_pixel`], R-density-use) and otherwise
+/// one is given ([`density_model_pixel`]) and otherwise
 /// `negg_film::density` (`D_c = -log10(max(I_c, 1e-6))`).
 ///
 /// Shape-preserving; runs in parallel over row bands with a model.
@@ -56,7 +56,7 @@ pub fn density_grid(linear: &Image, model: Option<&DensityModel>) -> Image {
     }
 }
 
-/// One axis of the R-flat bilinear lookup: for each output position, the
+/// One axis of the flat field's bilinear lookup: for each output position, the
 /// two grid indices and the weight of the second.
 fn axis_weights(len: usize, grid_len: usize) -> Vec<(usize, usize, f32)> {
     let last = grid_len - 1;
@@ -103,7 +103,7 @@ fn check_flat(flat: &FlatField, image: &Image) -> Result<()> {
 }
 
 /// Multiplies `image` by the flat field gain, bilinear between grid cell
-/// centres (R-flat). Interpolates the two grid rows into one gain line per
+/// centres. Interpolates the two grid rows into one gain line per
 /// image row, then each pixel between two entries of that line.
 fn apply_flat(image: &mut Image, flat: &FlatField) {
     let gain = &flat.gain;
@@ -125,11 +125,11 @@ fn apply_flat(image: &mut Image, flat: &FlatField) {
 }
 
 /// Step 2 of `docs/MATHS.md` on the step 1 output, in place, in the order
-/// of R-rig-order (ADR 0014): the flat field gain when `rig.flat` is set
-/// (R-flat: per pixel, bilinear between grid cell centres at
+/// of ADR 0014: the flat field gain when `rig.flat` is set
+/// (per pixel, bilinear between grid cell centres at
 /// `u = (x + 0.5) / W * gw - 0.5` clamped to `[0, gw - 1]`, the same for
-/// `v`), then the unmix `I <- max(M^-1 I, 0)` when `rig.unmix` is set
-/// (R-crosstalk). `rig.density` is not used here: it replaces the step 3
+/// `v`), then the unmix `I <- max(M^-1 I, 0)` when `rig.unmix` is set.
+/// `rig.density` is not used here: it replaces the step 3
 /// density (see [`density_grid`] and [`crate::render_full`]). Runs in
 /// parallel over row bands.
 ///

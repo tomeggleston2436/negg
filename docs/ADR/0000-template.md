@@ -6,7 +6,7 @@ Proposed, YYYY-MM-DD.
 
 ## Context
 
-What question is being answered. Name the plan ground rule, the `docs/MATHS.md` step, or the earlier ADR this touches.
+What question is being answered. Name the ground rule in `ROADMAP.md`, the `docs/MATHS.md` step, or the earlier ADR this touches.
 
 ## Decision
 

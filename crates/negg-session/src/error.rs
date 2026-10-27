@@ -59,7 +59,7 @@ pub enum ConvertError {
         first: PathBuf,
     },
     /// The frame's sidecar path would be the roll sidecar
-    /// (`roll.negg.json`, R-roll), so the frame is refused.
+    /// (`roll.negg.json`), so the frame is refused.
     RollSidecarClash(PathBuf),
     /// A rig or film profile, or a calibration CSV, could not be read (a
     /// usage error).
@@ -78,7 +78,7 @@ pub enum ConvertError {
     },
     /// The frame's existing sidecar could not be read or parsed. The frame
     /// is not rendered, so the sidecar (and any locks or overrides in it)
-    /// and the output are left untouched (R-lock).
+    /// and the output are left untouched.
     FrameSidecar {
         /// The frame's sidecar.
         path: PathBuf,
@@ -213,7 +213,7 @@ impl From<IoError> for ConvertError {
     }
 }
 
-/// Why a [`crate::Session`] call failed (Ruling 68).
+/// Why a [`crate::Session`] call failed.
 #[derive(Debug)]
 pub enum SessionError {
     /// A flow, decode, render, colour management or I/O error.
@@ -223,14 +223,13 @@ pub enum SessionError {
     /// The frame is read-only: its sidecar could not be read when the roll
     /// was opened, it changed on disk behind the session, or the frame can
     /// never be converted (a duplicate output or the roll sidecar's name).
-    /// Its sidecar is never written (Ruling 80). Holds the 0-based index;
+    /// Its sidecar is never written. Holds the 0-based index;
     /// the message names the 1-based frame number the app shows.
     ReadOnly(u32),
-    /// Pass 1 has not finished for the roll, so edits and exports wait
-    /// (Ruling 81).
+    /// Pass 1 has not finished for the roll, so edits and exports wait.
     Busy,
     /// A sidecar changed on disk since the session last read or wrote it,
-    /// so it was not overwritten (Ruling 80).
+    /// so it was not overwritten.
     Stale(PathBuf),
     /// An argument the session cannot use (invalid settings, a tile or
     /// level out of range, a frame that could not be analysed).

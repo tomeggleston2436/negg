@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! End-to-end tests for the analysis area and the holder guard (Rulings
-//! 133 and 134): `--analysis-area` limits what the analysis sees without
+//! End-to-end tests for the analysis area and the holder guard:
+//! `--analysis-area` limits what the analysis sees without
 //! cropping the export, frames whose Dmax is pinned at the density cap are
 //! flagged and kept out of the gamma and cast pools, and the app's session
 //! with the roll's analysis area set before pass 1 writes the very bytes
@@ -320,7 +320,7 @@ fn the_session_with_an_area_set_before_pass_1_writes_what_batch_writes() {
             .all(|f| !f.needs_analysis_area)
     );
     // No frame is edited: the roll's analysis area alone makes the flush
-    // write every frame sidecar, as `negg batch` writes them (Ruling 139).
+    // write every frame sidecar, as `negg batch` writes them.
     session.flush().unwrap();
     let sidecars = |d: &Path| files(d, |n| n.ends_with(".negg.json"));
     // What the session itself wrote, before any export runs a batch.
@@ -368,7 +368,7 @@ fn the_session_with_an_area_set_before_pass_1_writes_what_batch_writes() {
         assert!(!v.needs_analysis_area);
     }
 
-    // The export (the CLI's own flow, Ruling 82) gives the same images.
+    // The export (the CLI's own flow) gives the same images.
     let report = session
         .export(
             &ExportRequest {
@@ -391,7 +391,7 @@ fn the_session_with_an_area_set_before_pass_1_writes_what_batch_writes() {
     assert_eq!(a, files(&tmp.path("out-cli"), |_| true));
 }
 
-/// Ruling 139: a roll batched by the CLI, opened in a session, with only
+/// A roll batched by the CLI, opened in a session, with only
 /// the roll's analysis area (or only its crop) changed: the flush rewrites
 /// every frame sidecar and `roll.negg.json` exactly as a fresh `negg
 /// batch` with the same settings writes them.
@@ -464,7 +464,7 @@ fn a_roll_edit_alone_brings_every_sidecar_up_to_date() {
     }
 }
 
-/// Ruling 138: a batch whose analysis area leaves out the clear film edge
+/// A batch whose analysis area leaves out the clear film edge
 /// of a roll pooled on it says so.
 #[test]
 fn batch_warns_when_the_area_leaves_out_the_film_edge() {

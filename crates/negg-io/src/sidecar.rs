@@ -250,8 +250,8 @@ fn temp_path(path: &Path) -> PathBuf {
 /// The `schema_version` field is read first; only then is the rest of the
 /// value interpreted. Migration is a ladder: a version `n` file is upgraded
 /// to `n + 1` by a function that edits the raw `Value`, and so on until the
-/// current version, which is deserialised. Version 3 (Ruling 71) adds the
-/// settings' `geometry`, which takes its default; version 4 (Ruling 134)
+/// current version, which is deserialised. Version 3 adds the
+/// settings' `geometry`, which takes its default; version 4
 /// adds `geometry.analysis_area`, absent meaning none; version 5 (phase 4,
 /// ADR 0033) adds `print.saturation` and `print.preset`, absent meaning 1
 /// and none. Adding version 6 means bumping [`SIDECAR_SCHEMA_VERSION`],
@@ -287,7 +287,7 @@ pub fn migrate(value: Value) -> Result<Sidecar, IoError> {
     Ok(sidecar)
 }
 
-/// Upgrades a version 1 sidecar value to version 2 (Ruling 51, step 7 of
+/// Upgrades a version 1 sidecar value to version 2 (step 7 of
 /// docs/MATHS.md for the cast source): sets both schema versions to 2 and,
 /// when `estimates` is an object, inserts `neutral_offset = [0, 0, 0]` and
 /// a `cast_source` of `fit` when `cast.cells_used > 0`, else `identity`.
@@ -313,7 +313,7 @@ fn upgrade_v1_to_v2(mut value: Value) -> Value {
     value
 }
 
-/// Upgrades a version 2 sidecar value to version 3 (Ruling 71): sets
+/// Upgrades a version 2 sidecar value to version 3: sets
 /// `schema_version` and `settings.schema_version` to 3 and nothing else, so
 /// the settings' `geometry` (and any frame override's) takes its default.
 fn upgrade_v2_to_v3(mut value: Value) -> Value {
@@ -326,7 +326,7 @@ fn upgrade_v2_to_v3(mut value: Value) -> Value {
     value
 }
 
-/// Upgrades a version 3 sidecar value to version 4 (Ruling 134): sets
+/// Upgrades a version 3 sidecar value to version 4: sets
 /// `schema_version` and `settings.schema_version` to 4 and nothing else.
 /// Version 3 has no `geometry.analysis_area`, and an absent one means none,
 /// so every frame analyses exactly as it did.

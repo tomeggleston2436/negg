@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 //! Readers for the calibration input files: `wedge.csv` and `patches.csv`
-//! (docs/PROFILES.md, Input CSV files; Ruling 42).
+//! (docs/PROFILES.md, Input CSV files).
 //!
 //! Both are UTF-8, comma separated, with no quoting. Blank lines and lines
 //! starting with `#` are ignored; the first other line is the header. A
@@ -93,7 +93,7 @@ fn check_label(line: usize, name: &str, label: &str) -> Result<(), IoError> {
     }
 }
 
-/// Parses `wedge.csv` text (Ruling 42; step 2 of docs/MATHS.md).
+/// Parses `wedge.csv` text (step 2 of docs/MATHS.md).
 ///
 /// The header is exactly `patch,x,y,width,height,density` (neutral) or
 /// `patch,x,y,width,height,density_r,density_g,density_b` (coloured).
@@ -158,7 +158,7 @@ pub fn parse_wedge_csv(text: &str) -> Result<Vec<WedgePatch>, IoError> {
     Ok(patches)
 }
 
-/// Reads and parses a `wedge.csv` file (Ruling 42; step 2 of
+/// Reads and parses a `wedge.csv` file (step 2 of
 /// docs/MATHS.md).
 ///
 /// # Errors
@@ -169,7 +169,7 @@ pub fn read_wedge_csv(path: &Path) -> Result<Vec<WedgePatch>, IoError> {
     parse_wedge_csv(&text)
 }
 
-/// Parses `patches.csv` text (Ruling 42; step 4 of docs/MATHS.md).
+/// Parses `patches.csv` text (step 4 of docs/MATHS.md).
 ///
 /// The header is exactly `file,x,y,width,height`; `file` is a bare file
 /// name in the roll directory (no directory separators). Several patches
@@ -214,7 +214,7 @@ pub fn parse_patches_csv(text: &str) -> Result<Vec<NeutralPatchRef>, IoError> {
     Ok(patches)
 }
 
-/// Reads and parses a `patches.csv` file (Ruling 42; step 4 of
+/// Reads and parses a `patches.csv` file (step 4 of
 /// docs/MATHS.md).
 ///
 /// # Errors

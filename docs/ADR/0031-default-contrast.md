@@ -16,7 +16,7 @@ After ADRs 0026, 0027, 0029 and 0030, renders of real scans still looked a littl
 
 Saturation was examined separately. No candidate moved the chroma gap by much; the part of it that remains is mostly the reference's own cool look (blue skies and sea rendered cooler and more saturated), which is not an error to chase. Chroma followed tone where tone moved (a denser print sits further down the straight line of the curve, away from the shoulder that compresses channel differences), so no saturation control was added to the print stage.
 
-`P_black = 2.0` was a controller choice (Ruling 107, `TODO(measure)`) with no derivation. The paper curve has a natural black point of its own: the knee of the toe, where the straight line `v = x` (above the shoulder) meets paper black `Dmax_p`. At the knee the toe's softplus equals `ln 2`, so the print density there is `Dmax_p - ln(2) / a_sh`. Below the knee the toe compresses the shadows into paper black; above it the curve is close to its straight line. Putting the clearest part of the negative exactly at the knee uses the paper's full straight-line range without pushing the base into the compressed toe.
+`P_black = 2.0` was a provisional choice (`TODO(measure)`) with no derivation. The paper curve has a natural black point of its own: the knee of the toe, where the straight line `v = x` (above the shoulder) meets paper black `Dmax_p`. At the knee the toe's softplus equals `ln 2`, so the print density there is `Dmax_p - ln(2) / a_sh`. Below the knee the toe compresses the shadows into paper black; above it the curve is close to its straight line. Putting the clearest part of the negative exactly at the knee uses the paper's full straight-line range without pushing the base into the compressed toe.
 
 ## Decision
 
@@ -28,7 +28,7 @@ x_black = Dmin_p + softplus_inv(a_hl * (Dmax_p - Dmin_p)) / a_hl    # 2.2996 wit
 x_0     = max(x_0_anchor, x_black)
 ```
 
-The second line is the ADR 0030 inverse with `v_black = Dmax_p`, which is exact because `softplus_inv(a_sh * (Dmax_p - P_black)) = softplus_inv(ln 2) = 0`. `black_print_density` and `black_point_x0` in `negg-render` compute it; the constant `BLACK_PRINT_DENSITY` is removed. It is derived from the paper constants (`Dmax_p`, `a_sh`, `Dmin_p`, `a_hl`), so it has no constant of its own and no `TODO(measure)`; choosing the knee as the definition of black is the controller's ruling, supported by the measurement above.
+The second line is the ADR 0030 inverse with `v_black = Dmax_p`, which is exact because `softplus_inv(a_sh * (Dmax_p - P_black)) = softplus_inv(ln 2) = 0`. `black_print_density` and `black_point_x0` in `negg-render` compute it; the constant `BLACK_PRINT_DENSITY` is removed. It is derived from the paper constants (`Dmax_p`, `a_sh`, `Dmin_p`, `a_hl`), so it has no constant of its own and no `TODO(measure)`; choosing the knee as the definition of black is a design choice, supported by the measurement above.
 
 ## Consequences
 

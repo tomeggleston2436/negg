@@ -29,15 +29,15 @@ const TODO_MARKER: &str = "TODO(measure)";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RigMethod {
-    /// Flat field from a blank frame (R-flat).
+    /// Flat field from a blank frame.
     FlatField,
-    /// Channel crosstalk from three narrow-band frames (R-crosstalk).
+    /// Channel crosstalk from three narrow-band frames.
     Crosstalk,
-    /// Density model fitted to a step wedge (R-density-fit).
+    /// Density model fitted to a step wedge.
     DensityFit,
 }
 
-/// Which density model a rig fit produced (R-density-fit).
+/// Which density model a rig fit produced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DensityModelKind {
@@ -47,7 +47,7 @@ pub enum DensityModelKind {
     Diagonal,
 }
 
-/// How a film profile was measured (R-neutral-fit).
+/// How a film profile was measured.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FilmMethod {
@@ -102,7 +102,7 @@ pub struct FlatFieldTable {
     pub measured_on: String,
     /// The flat frame, as a path relative to the profile file.
     pub frame: String,
-    /// Mean of the unblurred grid block medians per channel (R-flat).
+    /// Mean of the unblurred grid block medians per channel.
     pub mean: [f32; 3],
     /// How the blur width was chosen, for example `"long_side / 64"`.
     pub blur_sigma: String,
@@ -129,11 +129,11 @@ pub struct CrosstalkTable {
     /// Blue band frame, relative to the profile file.
     pub frame_b: String,
     /// The crosstalk matrix `M` (column `j` is band `j`'s response); unit
-    /// diagonal (R-crosstalk).
+    /// diagonal.
     pub m: [[f32; 3]; 3],
 }
 
-/// The density fit table (R-density-fit).
+/// The density fit table.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DensityFitTable {
@@ -221,7 +221,7 @@ pub struct DmaxTable {
     pub source: String,
 }
 
-/// The neutral-patch fit (R-neutral-fit, R-film-profile).
+/// The neutral-patch fit.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GammaTable {
@@ -397,7 +397,7 @@ impl RigProfile {
     }
 
     /// The runtime density model, `g = diag(b) + c`, or `None` when the
-    /// profile has no density fit (R-density-fit).
+    /// profile has no density fit.
     pub fn density_model(&self) -> Option<DensityModel> {
         let t = self.density_fit.as_ref()?;
         let mut g = t.c;
@@ -471,7 +471,7 @@ impl FilmProfile {
     }
 
     /// The runtime film correction, or `None` when the profile has no
-    /// `[gamma]` table or its method is `none` (R-film-profile).
+    /// `[gamma]` table or its method is `none`.
     pub fn correction(&self) -> Option<FilmCorrection> {
         if self.method == FilmMethod::None {
             return None;

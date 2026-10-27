@@ -6,7 +6,7 @@
 //! Owns calibration maths and profile data. Must not decode files,
 //! do I/O or render images. Step 2 of `docs/MATHS.md` defines the flat
 //! field and the crosstalk unmix; the density fit is the "Camera-to-density
-//! fit" part of the same step (R-density-fit).
+//! fit" part of the same step.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -20,25 +20,25 @@ use negg_types::rig::{
     DensityModel, FLAT_GAIN_MAX, FLAT_GAIN_MIN, FLAT_SIGMA_DIVISOR, FlatField, RigCorrection,
 };
 
-/// Long side, in cells, of the grid the flat is reduced to (R-flat).
+/// Long side, in cells, of the grid the flat is reduced to.
 const FLAT_GRID_LONG_SIDE: usize = 1024;
-/// A grid cell with any channel at or above this level counts as clipped
-/// (R-flat). Controller choice, TODO(measure).
+/// A grid cell with any channel at or above this level counts as clipped.
+/// Provisional choice, TODO(measure).
 const FLAT_CLIP_LEVEL: f32 = 0.98;
-/// The flat is rejected when more than this fraction of cells is clipped
-/// (R-flat). Controller choice, TODO(measure).
+/// The flat is rejected when more than this fraction of cells is clipped.
+/// Provisional choice, TODO(measure).
 const FLAT_CLIP_FRACTION: f64 = 0.01;
-/// `|det M|` below this is a singular crosstalk matrix (R-crosstalk).
-/// Controller choice, TODO(measure).
+/// `|det M|` below this is a singular crosstalk matrix.
+/// Provisional choice, TODO(measure).
 const CROSSTALK_MIN_DET: f64 = 1e-6;
-/// Transmittance floor before the log (R-density-fit), as in step 3.
+/// Transmittance floor before the log, as in step 3.
 const LINEAR_FLOOR: f32 = 1e-6;
-/// Fewest patches for the full density model (R-density-fit).
+/// Fewest patches for the full density model.
 const FULL_MODEL_MIN_PATCHES: usize = 8;
-/// Largest design matrix condition number for the full model
-/// (R-density-fit). Controller choice, TODO(measure).
+/// Largest design matrix condition number for the full model.
+/// Provisional choice, TODO(measure).
 const FULL_MODEL_MAX_CONDITION: f64 = 100.0;
-/// Fewest patches for the diagonal model (R-density-fit).
+/// Fewest patches for the diagonal model.
 const DIAGONAL_MODEL_MIN_PATCHES: usize = 3;
 
 /// Why a calibration could not be computed.
@@ -53,7 +53,7 @@ pub enum CalibError {
     },
     /// A matrix or normal system is singular.
     Singular,
-    /// The flat frame is clipped (R-flat).
+    /// The flat frame is clipped.
     Clipped(String),
     /// A frame does not have the size the profile records.
     SizeMismatch {
@@ -111,7 +111,7 @@ fn gaussian_kernel(sigma: f32) -> Vec<f32> {
 
 /// Separable Gaussian blur of a grid image with symmetric edge reflection.
 ///
-/// Step 2 of `docs/MATHS.md` (R-flat). The kernel radius is
+/// Step 2 of `docs/MATHS.md`. The kernel radius is
 /// `ceil(3 * sigma_cells)` and the weights sum to 1. A `sigma_cells` that is
 /// not finite or not positive returns the grid unchanged.
 pub fn gaussian_blur_grid(grid: &Image, sigma_cells: f32) -> Image {
@@ -170,7 +170,7 @@ pub fn gaussian_blur_grid(grid: &Image, sigma_cells: f32) -> Image {
 /// Builds the flat-field gains from a blank-light frame and returns them
 /// with the per-channel mean of the unblurred grid block medians.
 ///
-/// Step 2 of `docs/MATHS.md` (R-flat). The flat is reduced to the 1024 px
+/// Step 2 of `docs/MATHS.md`. The flat is reduced to the 1024 px
 /// analysis grid, blurred with `sigma_cells = (long_side_px / 64) / block`,
 /// and `gain = clamp(mean / blur, 0.25, 4)` (a zero blur gives 4).
 ///
@@ -260,7 +260,7 @@ fn from_matrix3(m: &Matrix3<f64>) -> [[f32; 3]; 3] {
 
 /// Builds the crosstalk matrix `M` from the three band responses.
 ///
-/// Step 2 of `docs/MATHS.md` (R-crosstalk). `responses[j]` is the
+/// Step 2 of `docs/MATHS.md`. `responses[j]` is the
 /// per-channel response `r_j` to band `j` lit alone; column `j` of the
 /// result is `r_j / r_j[j]`, so `M[c][j] = responses[j][c] / responses[j][j]`.
 ///
@@ -295,7 +295,7 @@ pub fn crosstalk_matrix(responses: [[f32; 3]; 3]) -> Result<[[f32; 3]; 3], Calib
 
 /// Inverts the crosstalk matrix, `M^-1` (applied as `I <- max(M^-1 I, 0)`).
 ///
-/// Step 2 of `docs/MATHS.md` (R-crosstalk).
+/// Step 2 of `docs/MATHS.md`.
 ///
 /// # Errors
 ///
@@ -314,7 +314,7 @@ pub fn unmix_matrix(m: [[f32; 3]; 3]) -> Result<[[f32; 3]; 3], CalibError> {
 }
 
 /// One wedge patch: the rig-corrected linear camera value and the certified
-/// density (R-density-fit).
+/// density.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DensitySample {
     /// `patch_median` of the rig-corrected wedge grid.
@@ -346,7 +346,7 @@ fn log_floor(v: f32) -> f64 {
 
 /// Fits the camera-to-density model `D_c = a_c + sum_k G_ck log10(max(I_k, 1e-6))`.
 ///
-/// Step 2 of `docs/MATHS.md` (R-density-fit, camera-to-density fit). Full
+/// Step 2 of `docs/MATHS.md` (camera-to-density fit). Full
 /// model (least squares by SVD on the centred design) when `N >= 8` and the
 /// design condition number is at most 100; otherwise the diagonal model
 /// (`G` diagonal, fitting `a_c` and `b_c`) when `N >= 3`.
@@ -453,7 +453,7 @@ pub fn fit_density(samples: &[DensitySample]) -> Result<DensityFit, CalibError> 
 /// Builds the runtime [`RigCorrection`] from a rig profile and, when the
 /// profile has a `[flat_field]` table, its decoded flat frame.
 ///
-/// Step 2 of `docs/MATHS.md` (R-flat, R-crosstalk, R-density-use). The flat
+/// Step 2 of `docs/MATHS.md`. The flat
 /// gain is recomputed from the frame (the table's `mean` is informational).
 /// The unmix is `M^-1` of the table's `m`. A flat frame passed to a profile
 /// without a flat field table is ignored.

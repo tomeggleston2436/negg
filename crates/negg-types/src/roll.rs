@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 //! Per-frame overrides of roll settings, and the roll pool record
-//! (ADR 0017, R-pool, R-lock).
+//! (ADR 0017).
 //!
 //! A roll sidecar holds [`RollSettings`] and a [`RollPool`]; a frame's own
 //! sidecar holds [`FrameOverrides`]. [`resolve`] combines the roll's shared
@@ -66,10 +66,10 @@ pub struct ColourOverrides {
     pub output_space: Option<OutputSpace>,
 }
 
-/// Everything a single frame overrides relative to its roll (R-lock). Every
+/// Everything a single frame overrides relative to its roll. Every
 /// field is optional: `None` means inherit from [`RollSettings::shared`].
 /// Profiles are never overridden per frame. The geometry is overridden as a
-/// whole (Ruling 71): a frame with its own crop gives its whole
+/// whole: a frame with its own crop gives its whole
 /// [`Geometry`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -80,8 +80,8 @@ pub struct FrameOverrides {
     pub print: PrintOverrides,
     /// Colour overrides (steps 6 and 7).
     pub colour: ColourOverrides,
-    /// Replaces the roll's whole `geometry` when `Some` (Rulings 70 and
-    /// 71). Omitted from the file when `None`.
+    /// Replaces the roll's whole `geometry` when `Some`.
+    /// Omitted from the file when `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub geometry: Option<Geometry>,
 }
@@ -94,10 +94,10 @@ impl FrameOverrides {
 }
 
 /// The settings a frame is rendered with: the roll's shared settings with
-/// each `Some` override of the frame replacing its field (R-lock), the
-/// geometry as a whole (Ruling 71). The `profiles` always come from
-/// `roll.shared`. A preset label override of `""` resolves to no label
-/// (Ruling 8), so a frame can pin "no preset" over a roll that has one.
+/// each `Some` override of the frame replacing its field, the
+/// geometry as a whole. The `profiles` always come from
+/// `roll.shared`. A preset label override of `""` resolves to no label,
+/// so a frame can pin "no preset" over a roll that has one.
 pub fn resolve(roll: &RollSettings, overrides: &FrameOverrides) -> Settings {
     let mut s = roll.shared.clone();
     let f = &overrides.film;
@@ -139,7 +139,7 @@ pub fn resolve(roll: &RollSettings, overrides: &FrameOverrides) -> Settings {
         s.print.saturation = v;
     }
     if let Some(v) = &p.preset {
-        // An empty label override pins "no preset" (Ruling 8): preset
+        // An empty label override pins "no preset": preset
         // names are never empty, so "" cannot be a real label.
         s.print.preset = (!v.is_empty()).then(|| v.clone());
     }
@@ -159,7 +159,7 @@ pub fn resolve(roll: &RollSettings, overrides: &FrameOverrides) -> Settings {
     s
 }
 
-/// A frame's part in one pooled quantity (R-pool).
+/// A frame's part in one pooled quantity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PoolRole {
@@ -196,7 +196,7 @@ pub struct PoolFrame {
     /// Role in the cast pool.
     pub cast_role: PoolRole,
     /// The frame's Dmax in effect is pinned at the density cap
-    /// ([`crate::estimates::dmax_pinned`], Ruling 133): its analysed area
+    /// ([`crate::estimates::dmax_pinned`]): its analysed area
     /// holds the film holder or another opaque area, so it was left out of
     /// the gamma and cast pools (its roles there are `Unused` unless the
     /// user fixed the value) and needs an analysis area. Omitted from the
@@ -206,7 +206,7 @@ pub struct PoolFrame {
 }
 
 /// The roll estimator's output: the pooled estimates and the per-frame
-/// record they came from. `None` means no pooled value (R-pool).
+/// record they came from. `None` means no pooled value.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RollPool {
@@ -238,7 +238,7 @@ impl RollPool {
     /// candidates (inliers or rejected), so the pool takes only those
     /// (step 3 of `docs/MATHS.md`, "Roll pooling"). False for a pool of
     /// percentile estimates, which an analysis area or a crop that leaves
-    /// the rebate out makes (Ruling 138).
+    /// the rebate out makes.
     pub fn dmin_from_border(&self) -> bool {
         self.frames
             .iter()
