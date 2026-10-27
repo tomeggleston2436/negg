@@ -2,7 +2,7 @@
 // The single-frame screen: tiled preview with zoom and pan, the crop and
 // analysis area tools, slider panel, lock, undo and redo, scopes and the
 // frame's estimates. Before pass 1 reaches the frame it shows the negative
-// and the analysis area tool sets the roll's area (Rulings 134 and 136).
+// and the analysis area tool sets the roll's area.
 
 import { useEffect, useRef, useState } from "react";
 import { scopes as fetchScopes } from "../ipc/commands";
@@ -94,7 +94,7 @@ export function FrameScreen() {
   const looked = frame && frame.index === current ? resolve(frame.settings, shownOverrides(state) ?? frame.overrides) : null;
   const preset = looked ? presetState(looked, state.presets) : null;
 
-  // P and Shift+P (Ruling 10) step from the preset last asked for, so quick
+  // P and Shift+P step from the preset last asked for, so quick
   // presses do not repeat one while its reply is on the way.
   const cycleFrom = useRef<{ frame: number; name: string } | null>(null);
   useEffect(() => {

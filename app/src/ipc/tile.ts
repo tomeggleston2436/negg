@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Reader for the binary tile response (Ruling 74, "### Wire formats"): a
+// Reader for the binary tile response: a
 // 48-byte little-endian header followed by width * height * 4 bytes of RGBA8.
 
 /** A binary response or a JSON shape that does not match the contract. */

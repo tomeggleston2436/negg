@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Step 7 for RAW input (ADR 0026, Ruling 96): the print channels are read
+//! Step 7 for RAW input (ADR 0026): the print channels are read
 //! as Rec.709 primaries and enter Rec.2020 with the BT.2087 matrix; the
 //! camera's scene matrix is not applied. Synthetic data only: a linear
 //! "camera" negative with a grey patch and a saturated blue patch, decoded

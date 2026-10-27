@@ -10,7 +10,7 @@
 //! every profile before writing it) in `negg-io`.
 //!
 //! Every measured number written is rounded to 6 significant digits first.
-//! `measured_on` defaults to today's UTC date (Ruling 56).
+//! `measured_on` defaults to today's UTC date.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,8 +30,7 @@ use crate::cli::{ProfileCommand, ProfileFilmArgs, ProfileRigArgs};
 use crate::convert::{ConvertError, batch_inputs};
 use crate::roll::{RollContext, analyse_roll_frames, decode_linear, file_name, load_rig};
 
-/// The central rect of a band frame whose patch median is its response
-/// (R-crosstalk).
+/// The central rect of a band frame whose patch median is its response.
 const BAND_RECT: PatchRect = PatchRect {
     x: 0.25,
     y: 0.25,
@@ -39,8 +38,8 @@ const BAND_RECT: PatchRect = PatchRect {
     height: 0.5,
 };
 
-/// The full density model needs at least this many wedge patches
-/// (R-density-fit); used only to word the fallback warning.
+/// The full density model needs at least this many wedge patches;
+/// used only to word the fallback warning.
 const FULL_MODEL_MIN_PATCHES: u32 = 8;
 
 /// Runs a `negg profile` subcommand.
@@ -89,7 +88,7 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
-/// Today's UTC date as `YYYY-MM-DD` from the system clock (Ruling 56).
+/// Today's UTC date as `YYYY-MM-DD` from the system clock.
 pub fn today_utc() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -153,7 +152,7 @@ fn grid_patch(image: &Image, rect: PatchRect, what: &str) -> Result<[f32; 3], Co
     })
 }
 
-/// Why the density fit fell back to the diagonal model (R-density-fit),
+/// Why the density fit fell back to the diagonal model,
 /// or `None` for a full model: fewer than 8 patches, or a condition number
 /// of the patch design above 100 (infinite for a neutral wedge, whose three
 /// log channels are collinear). The condition number is only reported
@@ -180,9 +179,9 @@ pub fn diagonal_reason(fit: &DensityFit) -> Option<String> {
     })
 }
 
-/// Runs `negg profile rig`: measures the flat field (R-flat), the crosstalk
-/// matrix from three band frames (R-crosstalk, on the flat-corrected
-/// frames) and the density model from a step wedge (R-density-fit, on the
+/// Runs `negg profile rig`: measures the flat field, the crosstalk
+/// matrix from three band frames (on the flat-corrected
+/// frames) and the density model from a step wedge (on the
 /// flat-corrected and unmixed wedge), whichever are given, and writes the
 /// rig profile. The flat and band frames must lie under the output file's
 /// directory and are stored relative to it. A density fit that falls back
@@ -258,7 +257,7 @@ pub fn run_profile_rig(args: &ProfileRigArgs) -> Result<RigProfile, ConvertError
     };
     let mut methods = Vec::new();
 
-    // Step 2, flat field (R-flat).
+    // Step 2, flat field.
     let flat_table = match (&args.flat, flat_rel) {
         (Some(path), Some(frame)) => {
             let (image, cam) = decode_linear(path)?;
@@ -281,7 +280,7 @@ pub fn run_profile_rig(args: &ProfileRigArgs) -> Result<RigProfile, ConvertError
         _ => None,
     };
 
-    // Step 2, crosstalk (R-crosstalk) on the flat-corrected band frames.
+    // Step 2, crosstalk on the flat-corrected band frames.
     let crosstalk_table = match (band_paths, band_rel) {
         (Some(paths), Some([frame_r, frame_g, frame_b])) => {
             let mut responses = [[0.0f32; 3]; 3];
@@ -307,7 +306,7 @@ pub fn run_profile_rig(args: &ProfileRigArgs) -> Result<RigProfile, ConvertError
         _ => None,
     };
 
-    // Step 2, density fit (R-density-fit) on the corrected wedge.
+    // Step 2, density fit on the corrected wedge.
     let density_table = match (&args.wedge, wedge_patches) {
         (Some(path), Some(patches)) => {
             let (mut image, cam) = decode_linear(path)?;
@@ -392,9 +391,9 @@ pub fn run_profile_rig(args: &ProfileRigArgs) -> Result<RigProfile, ConvertError
 /// the directory (with the `--rig` correction, default settings and no
 /// film correction), then for each grey patch of `patches.csv` the density
 /// above the pooled base `d = max(patch_median(grid density) - Dmin, 0)`,
-/// then [`negg_film::fit_neutral`] with `gamma_G` the pooled green gamma
-/// (R-neutral-fit, R-contrast), and writes a `grey_card_roll` film profile
-/// (R-film-profile). Returns the profile written.
+/// then [`negg_film::fit_neutral`] with `gamma_G` the pooled green gamma,
+/// and writes a `grey_card_roll` film profile.
+/// Returns the profile written.
 ///
 /// # Errors
 ///

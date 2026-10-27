@@ -2,15 +2,15 @@
 
 ## Status
 
-Proposed, 2026-10-21 (controller ruling pending owner review).
+Proposed, 2026-10-21.
 
 ## Context
 
-Gate 1 of the plan says "the CLI converts a 24 MP frame in under 2 s on a laptop CPU". Phase 1 measured only `negg_render::render_frame` (analysis and render), which was well inside the gate, and left decode, the export transform and the writer to `--timing`. The phase 1 final review (C1) timed `negg convert` end to end on a 6000x4000 frame and found 4.1 s to JPEG and 5.8 s to 16-bit TIFF: the Little-CMS export transform and the Deflate writer were single-threaded, and the full-resolution density image of step 3 was a second full-size allocation. This touches `docs/MATHS.md` steps 3, 7 and 8 (performance only, no change to the maths) and ground rule 4 (one quantisation point, unchanged).
+Gate 1 in `ROADMAP.md` says "the CLI converts a 24 MP frame in under 2 s on a laptop CPU". Phase 1 measured only `negg_render::render_frame` (analysis and render), which was well inside the gate, and left decode, the export transform and the writer to `--timing`. A review at the end of phase 1 timed `negg convert` end to end on a 6000x4000 frame and found 4.1 s to JPEG and 5.8 s to 16-bit TIFF: the Little-CMS export transform and the Deflate writer were single-threaded, and the full-resolution density image of step 3 was a second full-size allocation. This touches `docs/MATHS.md` steps 3, 7 and 8 (performance only, no change to the maths) and ground rule 4 (one quantisation point, unchanged).
 
 ## Decision
 
-Measure Gate 1 end to end, as the time `negg convert` takes on a 24 MP frame to 16-bit TIFF and to JPEG (Ruling 31). Meet it by running the export transform over bands in parallel with one Little-CMS transform per rayon worker, by taking the full-resolution density inside `render_full`, and by writing the TIFF in strips of 64 rows compressed in parallel with Deflate at its fast level.
+Measure Gate 1 end to end, as the time `negg convert` takes on a 24 MP frame to 16-bit TIFF and to JPEG. Meet it by running the export transform over bands in parallel with one Little-CMS transform per rayon worker, by taking the full-resolution density inside `render_full`, and by writing the TIFF in strips of 64 rows compressed in parallel with Deflate at its fast level.
 
 ## Consequences
 
@@ -27,7 +27,7 @@ Measure Gate 1 end to end, as the time `negg convert` takes on a 24 MP frame to 
 | 16-bit TIFF | 5897 ms (decode 94, analyse and render 890, transform 2681, write 2233) | best 1218 ms, worst 1260 ms | decode 89, analyse and render 772, transform 260, write 97 |
 | JPEG | 3868 ms (decode 85, analyse and render 875, transform 2713, write 196) | best 1367 ms, worst 1450 ms | decode 92, analyse and render 774, transform 280, write 222 |
 
-  `render_frame` alone: best 783 ms, worst 859 ms. Both formats are under the gate, so the fallback of Ruling 31 (hold the gate for JPEG and report TIFF) is not needed. A laptop with fewer cores than the M3 Max will be slower; the gate should be re-checked on the owner's reference laptop.
+  `render_frame` alone: best 783 ms, worst 859 ms. Both formats are under the gate, so the fallback (hold the gate for JPEG and report TIFF) is not needed. A laptop with fewer cores than the M3 Max will be slower; the gate should be re-checked on the reference laptop.
 - Cost if wrong: a gate wording.
 
 ## Eval delta

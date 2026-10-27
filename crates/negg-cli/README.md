@@ -44,7 +44,7 @@ paths. The output, stderr text and exit codes are unchanged by the move.
     whole film including its clear edge (rebate), where the film base is
     measured, and leave out only the film holder: when an area (or crop)
     leaves the clear edge out of a roll pooled on it, `negg batch` warns
-    that the film base is now estimated from the image (Ruling 138)
+    that the film base is now estimated from the image
   - Both are validated like `Settings.geometry`; a malformed or invalid
     value is a usage error (exit 2). They are applied after `--settings`. In
     roll mode they are the roll's for the run and shared by every frame;
@@ -52,7 +52,7 @@ paths. The output, stderr text and exit codes are unchanged by the move.
     writes the roll sidecar). A frame overrides them through
     `overrides.geometry` in its sidecar, which replaces the whole geometry.
     Rotation, flip and `analysis_buffer` are set through `--settings`
-- `--settings FILE` (Rulings 33, 142 to 144): a settings file (the
+- `--settings FILE` (142 to 144): a settings file (the
   `Settings` schema, omitted fields defaulted), a frame sidecar (its
   `settings`) or a roll sidecar `roll.negg.json` (its shared settings). Any
   other shape, and a file whose `schema_version` is newer than this negg, is
@@ -62,7 +62,7 @@ paths. The output, stderr text and exit codes are unchanged by the move.
   the stored geometry (crop, analysis area, buffer, rotation, flip) unless
   it has a `geometry` key of its own; `negg batch` warns, naming the parts
   it replaced, and stores the result. `--preset` applies after it
-- Tone presets (ADR 0034, Ruling 7), shared by `convert` and `batch`:
+- Tone presets (ADR 0034), shared by `convert` and `batch`:
   - `--preset NAME|FILE`: a built-in or user preset name (case-insensitive)
     or a `*.preset.negg.toml` file. It sets grade, toe, shoulder, black point
     compensation, saturation and the preset label, and nothing else. An

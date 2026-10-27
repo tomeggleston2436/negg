@@ -29,7 +29,7 @@ pub enum DminSource {
     Profile,
     /// In roll mode, per channel the lower of the roll's pooled Dmin and
     /// the frame's own percentile estimate, when some channels took one
-    /// and some the other (Ruling 105, ADR 0029). A frame whose every
+    /// and some the other (ADR 0029). A frame whose every
     /// channel took its own estimate records `Percentile`, and one whose
     /// every channel took the pool records `Roll`.
     RollMin,
@@ -51,7 +51,7 @@ pub enum GammaSource {
     Profile,
 }
 
-/// Where the step 6 cast correction came from (ADR 0018, R-cast-source).
+/// Where the step 6 cast correction came from (ADR 0018).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CastSource {
@@ -111,12 +111,12 @@ impl Default for CastCorrection {
 pub const DENSITY_CAP: f32 = 6.0;
 
 /// How close to [`DENSITY_CAP`] a Dmax channel may come before the frame
-/// counts as pinned at the cap (Ruling 133): 0.05 in density, that is a
-/// transmittance at most about 1.12 times the `1e-6` floor. Controller
+/// counts as pinned at the cap: 0.05 in density, that is a
+/// transmittance at most about 1.12 times the `1e-6` floor. Provisional
 /// choice, TODO(measure).
 pub const DMAX_PINNED_TOLERANCE: f32 = 0.05;
 
-/// Whether a Dmax is pinned at the density cap (Ruling 133, step 3 of
+/// Whether a Dmax is pinned at the density cap (step 3 of
 /// `docs/MATHS.md`): any channel at or above
 /// `DENSITY_CAP - DMAX_PINNED_TOLERANCE`. Such a frame has the holder or
 /// another opaque area in its analysed rectangle and needs an analysis
@@ -142,7 +142,7 @@ pub struct Estimates {
     pub gamma_source: GammaSource,
     /// Step 4 of `docs/MATHS.md`: the film correction's per-channel offset in
     /// normalised log-exposure units (`offset_c / gamma_G`), green zero. Zero
-    /// when no film correction is in use (R-contrast).
+    /// when no film correction is in use.
     pub neutral_offset: [f32; 3],
     /// Step 5 of `docs/MATHS.md`: the exposure anchor, a single luma value of
     /// normalised log exposure `e` that `x0` places at print density 0.75.

@@ -6,7 +6,7 @@ Accepted, 2026-10-27 (phase 4).
 
 ## Context
 
-The phase 4 plan asks for a wgpu preview kernel for the visible tiles, compared with the CPU path on every CI run with a tolerance of 1/4096 per channel (ground rule 3: one pipeline, a GPU copy only when it is tested against the CPU).
+Phase 4 asks for a wgpu preview kernel for the visible tiles, compared with the CPU path on every CI run with a tolerance of 1/4096 per channel (ground rule 3: one pipeline, a GPU copy only when it is tested against the CPU).
 
 Measured on a 24 MP synthetic frame (release build, Apple M3 Max) before this change, a 512 px tile took about 30 ms: about 16 ms in the Little-CMS 8-bit sRGB transform, which ran on one core because a tile is exactly one 262,144-pixel band of `negg-cms`'s parallel split, and the rest in the fused kernel. A fit-to-window redraw of 24 tiles took about 0.73 s after every slider step.
 

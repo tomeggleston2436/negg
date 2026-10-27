@@ -2,13 +2,13 @@
 
 ## Status
 
-Proposed, 2026-10-20 (controller ruling pending owner review). Amended 2026-10-21 (Ruling 30, pending owner review): luma and hue are read on `-e`; see "Amendment" below.
+Proposed, 2026-10-20. Amended 2026-10-21: luma and hue are read on `-e`; see "Amendment" below.
 
 Superseded in part by 0027 (2026-10-24): the choice of fitted cells (luma, chroma and hue now read after a provisional correction) and the slope clamp [0.8, 1.2] (now [0.5, 2]). The definitions on `-e`, the fitted lines and the applied correction stand.
 
 ## Context
 
-`docs/MATHS.md` step 6 fits a cast correction on the normalised log image `e_c` from step 4, on the analysis grid: split the cells into luma bands, keep the lowest-chroma cells outside the foliage and sky hue sectors, fit R and B against G as lines, and apply per-channel log-affine corrections before step 5. The plan uses the words luma, chroma and hue without defining them on `e_c`, and says "apply as per-channel log-affine corrections" without writing the correction down. `docs/MATHS.md` carried the line "TODO(spec): the plan does not define luma, chroma or hue on the normalised log image, nor the exact form of the applied correction (the implied form is to invert the fitted line so that the selected cells land on `e_G`, but this is not written down). Both need a decision before the first render lands." `fit_cast` and `apply_cast` in `negg-render` need the definitions, so this ADR records the ruling (contract item R-colour). The phase 2 roll mode TODO is not touched.
+`docs/MATHS.md` step 6 fits a cast correction on the normalised log image `e_c` from step 4, on the analysis grid: split the cells into luma bands, keep the lowest-chroma cells outside the foliage and sky hue sectors, fit R and B against G as lines, and apply per-channel log-affine corrections before step 5. The original model uses the words luma, chroma and hue without defining them on `e_c`, and says "apply as per-channel log-affine corrections" without writing the correction down. `docs/MATHS.md` carried the line "TODO(spec): the model does not define luma, chroma or hue on the normalised log image, nor the exact form of the applied correction (the implied form is to invert the fitted line so that the selected cells land on `e_G`, but this is not written down). Both need a decision before the first render lands." `fit_cast` and `apply_cast` in `negg-render` need the definitions, so this ADR records the decision. The phase 2 roll mode TODO is not touched.
 
 ## Decision
 
@@ -20,14 +20,14 @@ Work on `e = (e_R, e_G, e_B)` per grid cell, each in [-1, 0]. Define luma `l = (
 - Luma is the plain channel mean, not a weighted sum. After step 4 a neutral has `e_R = e_G = e_B`, so any weighting would only matter for coloured cells, which are exactly the ones the selection discards. Chroma as the max-min spread is the smallest definition that is zero on neutrals and monotone in cast size.
 - Hue exclusion runs before the 30% chroma cut, so the 30% is taken from the non-foliage, non-sky cells of each band; a band that is all grass or all sky contributes nothing rather than its least green or least blue cells.
 - The fit is pooled across the three bands rather than fitted per band; the bands shape the selection, so every tonal region is represented, but one affine line per channel is what step 6 applies and so one line is what is fitted.
-- `(e_R - o_R) / s_R` is the exact inverse of the fitted line, so a cell on the line is mapped onto `e_G`. The slope clamp [0.8, 1.2] is the plan's "plus or minus 0.2" written as an interval; when a fitted slope is clamped, the offset is recomputed through the centroid of the pooled cells, `o = mean(e_target) - s_clamped * mean(e_G)` (with `e_target` the `e_R` or `e_B` values of those cells), so the selected cells still land on `e_G` on average.
+- `(e_R - o_R) / s_R` is the exact inverse of the fitted line, so a cell on the line is mapped onto `e_G`. The slope clamp [0.8, 1.2] is the original model's "plus or minus 0.2" written as an interval; when a fitted slope is clamped, the offset is recomputed through the centroid of the pooled cells, `o = mean(e_target) - s_clamped * mean(e_G)` (with `e_target` the `e_R` or `e_B` values of those cells), so the selected cells still land on `e_G` on average.
 - Recomputing the offset after a clamp is what keeps the clamp from shifting the whole channel: a clamped slope with the original offset would move the centroid of the selected cells off `e_G`, which is a cast of its own.
 - Cells with `c < 1e-4` are the most neutral cells available, so they are kept: the hue exclusion cannot apply to them and the 30% chroma cut naturally favours them.
-- The chroma floor 1e-4 and the minimum of 8 surviving cells are controller choices pending measurement and are marked `TODO(measure)` in the step 6 constants table. The band percentiles, the 30% fraction, the hue sectors and the slope clamp are the plan's own numbers.
+- The chroma floor 1e-4 and the minimum of 8 surviving cells are provisional choices pending measurement and are marked `TODO(measure)` in the step 6 constants table. The band percentiles, the 30% fraction, the hue sectors and the slope clamp are the original model's own numbers.
 - `CastCorrection` in `negg-types` carries the two slopes, the two offsets and `cells_used`; identity values together with `cells_used` below 8 show in the sidecar that the fallback was taken.
 - Percentiles are nearest-rank, as implemented by `percentile` in `negg-film`.
 
-## Amendment (2026-10-21, Ruling 30)
+## Amendment (2026-10-21)
 
 ADR 0011 fixed the sign of the print stage so that a more negative `e_c` prints brighter in channel `c`. Read on `e` itself, the hue sectors of this ADR were then the complement of what they mean: a frame of grass, which prints green, has `e_G` as its most negative channel, so its hue on `e` is magenta (about 300 degrees) and it passed the foliage exclusion; its least saturated cells then dominated the fit and turned a grey patch magenta-green by C*ab 48.7 in the phase 1 review's foliage scene. Likewise the luma bands called the cells that print brightest "shadows".
 

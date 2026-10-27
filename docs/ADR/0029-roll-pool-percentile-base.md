@@ -2,11 +2,11 @@
 
 ## Status
 
-Accepted, 2026-10-24 (Rulings 105 and 106). Amends Ruling 59 and supersedes in part ADR 0017: the clause of Ruling 59 that gives every non-excluded frame the pooled Dmin, the gamma rule of Ruling 48 (`gamma_f = max(Dmax_f - Dmin_pooled, 0.05)`) and the use of the pooled cast by every non-fixed frame (Ruling 49). The rest of ADR 0017 stands.
+Accepted, 2026-10-24. Supersedes in part ADR 0017: the clause that gives every non-excluded frame the pooled Dmin, the gamma rule (`gamma_f = max(Dmax_f - Dmin_pooled, 0.05)`) and the use of the pooled cast by every non-fixed frame. The rest of ADR 0017 stands.
 
 ## Context
 
-`docs/MATHS.md` step 3 (roll pooling) gave every frame whose film base is not fixed the roll's pooled Dmin, including frames Rejected from the pool (Ruling 59), and step 6 gave every non-fixed frame the roll's pooled cast (Ruling 49). Both assume that every frame of the roll measures the same film base.
+`docs/MATHS.md` step 3 (roll pooling) gave every frame whose film base is not fixed the roll's pooled Dmin, including frames Rejected from the pool, and step 6 gave every non-fixed frame the roll's pooled cast. Both assume that every frame of the roll measures the same film base.
 
 That holds for frames whose Dmin is a Border estimate: the unexposed border is the base. It does not hold for a frame whose own Dmin is a Percentile estimate (no border visible, for example after a tight crop or on a frame scanned inside its image area). The 0.5th percentile of a frame's density is its thinnest scene density, which can lie well below the thinnest density of other frames on the same roll. Rendering such a frame with a pooled Dmin above its own puts part of its shadows below the base, and the `d >= 0` clamp of step 4 then maps all of them to one flat grey. On real camera scans this was seen on a large share of some frames' pixels.
 
@@ -14,9 +14,9 @@ The pooled cast has the same assumption: it is the cast of the shared base refer
 
 ## Decision
 
-- **Ruling 105 (amends Ruling 59).** In roll mode a frame whose own Dmin source is Percentile never takes a pooled Dmin above its own estimate: per channel it renders with `min(own_c, pooled_c)`. A frame whose own source is Border takes the pooled value as before, Rejected or not (Ruling 59 unchanged for Border frames). A fixed (user) film base still wins over everything. The sidecar records `dmin_source = roll` when every channel took the pooled value (ties count as pooled), `percentile` when every channel took the frame's own estimate, and the new value `roll_min` when some channels took one and some the other.
-- **Gamma (amends Ruling 48).** `gamma_f = max(Dmax_f - Dmin_f, 0.05)` with `Dmin_f` the Dmin the frame actually renders with: fixed, else the rule above applied to its own estimate and the pooled Dmin. One function (`dmin_with_pool` in `negg-render`) computes that Dmin, and both `pool_roll` (for `gamma_f`, the pooled gamma and the cast fits) and `estimate_frame` (for the render, and for the range gamma when no gamma is pooled) call it, so the pool and the render agree on every frame's base.
-- **Ruling 106 (amends Ruling 49).** The roll-pooled cast is applied only when the roll's pooled Dmin came from Border frames: a pooled Dmin exists and every Dmin candidate (Inlier or Rejected) is a Border frame, which is what the Border preference of Ruling 48 gives when at least 2 non-excluded frames are Border. Otherwise no cast is pooled (`pool.cast` is `None`), every non-excluded frame's cast role is Unused, and each frame is rendered with its own step 6 fit on its grid inverted with its Dmin and gamma in effect (the fit recorded in the roll sidecar). A fixed cast still wins, auto colour off and a film correction still give the identity. The frame sidecar's `cast_source` records the cast the frame actually used (`fit` or `identity` instead of `roll`).
+- **Dmin.** In roll mode a frame whose own Dmin source is Percentile never takes a pooled Dmin above its own estimate: per channel it renders with `min(own_c, pooled_c)`. A frame whose own source is Border takes the pooled value as before, Rejected or not (unchanged for Border frames). A fixed (user) film base still wins over everything. The sidecar records `dmin_source = roll` when every channel took the pooled value (ties count as pooled), `percentile` when every channel took the frame's own estimate, and the new value `roll_min` when some channels took one and some the other.
+- **Gamma.** `gamma_f = max(Dmax_f - Dmin_f, 0.05)` with `Dmin_f` the Dmin the frame actually renders with: fixed, else the rule above applied to its own estimate and the pooled Dmin. One function (`dmin_with_pool` in `negg-render`) computes that Dmin, and both `pool_roll` (for `gamma_f`, the pooled gamma and the cast fits) and `estimate_frame` (for the render, and for the range gamma when no gamma is pooled) call it, so the pool and the render agree on every frame's base.
+- **Cast.** The roll-pooled cast is applied only when the roll's pooled Dmin came from Border frames: a pooled Dmin exists and every Dmin candidate (Inlier or Rejected) is a Border frame, which is what the Border preference of ADR 0017 gives when at least 2 non-excluded frames are Border. Otherwise no cast is pooled (`pool.cast` is `None`), every non-excluded frame's cast role is Unused, and each frame is rendered with its own step 6 fit on its grid inverted with its Dmin and gamma in effect (the fit recorded in the roll sidecar). A fixed cast still wins, auto colour off and a film correction still give the identity. The frame sidecar's `cast_source` records the cast the frame actually used (`fit` or `identity` instead of `roll`).
 
 ## Consequences
 
@@ -28,7 +28,7 @@ The pooled cast has the same assumption: it is the cast of the shared base refer
 - `roll_min` is a new `dmin_source` value. Sidecars written before this change still read; a sidecar with `roll_min` cannot be read by an older negg.
 - A roll sidecar written before this change keeps its stored pooled cast; `negg convert` with such a sidecar still applies it until the roll is batched again. The Dmin cap applies at render time and needs no re-batch.
 
-Cost if wrong: Ruling 105, one branch in `dmin_with_pool`; Ruling 106, one condition in `pool_roll`.
+Cost if wrong: Dmin, one branch in `dmin_with_pool`; cast, one condition in `pool_roll`.
 
 ## Eval delta
 

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 //! Frame geometry: the crop rectangle, the analysis area, the analysis
-//! buffer, the quarter-turn rotation and the horizontal flip (Rulings 70,
-//! 90 and 134, ADR 0021).
+//! buffer, the quarter-turn rotation and the horizontal flip (ADR 0021).
 //!
 //! [`Geometry`] is the one geometry field of [`crate::Settings`]. Its crop
 //! and its analysis area are normalised to the source frame in its decoded
@@ -21,11 +20,11 @@ use crate::image::{CHANNELS, Image};
 
 /// Default analysis buffer: the fraction of the analysis rectangle's short
 /// side (the analysis area's, or the crop's when there is no analysis area)
-/// trimmed from every side of it for analysis only (Rulings 90 and 134).
-/// Ignored when there is neither. Controller choice, TODO(measure).
+/// trimmed from every side of it for analysis only.
+/// Ignored when there is neither. Provisional choice, TODO(measure).
 pub const ANALYSIS_BUFFER_DEFAULT: f32 = 0.05;
 
-/// Largest valid analysis buffer (Ruling 90).
+/// Largest valid analysis buffer.
 const ANALYSIS_BUFFER_MAX: f32 = 0.2;
 
 /// Smallest valid crop width or height, as a fraction of the frame.
@@ -99,7 +98,7 @@ impl CropRect {
     }
 }
 
-/// The geometry of one frame (Rulings 70 and 134): an optional crop, an
+/// The geometry of one frame: an optional crop, an
 /// optional analysis area, the analysis buffer, a clockwise quarter-turn
 /// rotation and a horizontal flip.
 ///
@@ -111,7 +110,7 @@ pub struct Geometry {
     /// The crop in source orientation; `None` is the whole frame. It frames
     /// the export, and limits the analysis when `analysis_area` is `None`.
     pub crop: Option<CropRect>,
-    /// The analysis area in source orientation (Ruling 134): when set, the
+    /// The analysis area in source orientation: when set, the
     /// step 3 to 6 estimators see only this rectangle (shrunk by the
     /// analysis buffer) and the crop limits the export alone. `None` (the
     /// default) analyses the crop, or the whole frame without one, exactly
@@ -119,7 +118,7 @@ pub struct Geometry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub analysis_area: Option<CropRect>,
     /// Fraction of the analysis rectangle's short side trimmed from every
-    /// side of it for analysis only (Rulings 90 and 134). Valid range
+    /// side of it for analysis only. Valid range
     /// `[0, 0.2]`; ignored when there is neither an analysis area nor a
     /// crop.
     pub analysis_buffer: f32,
@@ -155,8 +154,8 @@ fn round_clamp(v: f64, lo: usize, hi: usize) -> usize {
 }
 
 /// One axis of the crop in pixels: `p0 = round(start n)` clamped to
-/// `[0, n - 1]` and `p1 = round((start + len) n)` clamped to `[p0 + 1, n]`
-/// (Ruling 70). `n` must be at least 1.
+/// `[0, n - 1]` and `p1 = round((start + len) n)` clamped to `[p0 + 1, n]`.
+/// `n` must be at least 1.
 fn crop_axis(start: f32, len: f32, n: usize) -> (usize, usize) {
     let nf = n as f64;
     let p0 = round_clamp(f64::from(start) * nf, 0, n - 1);
@@ -164,7 +163,7 @@ fn crop_axis(start: f32, len: f32, n: usize) -> (usize, usize) {
     (p0, p1)
 }
 
-/// `rect` in pixels of a `w` by `h` frame by the rounding of Ruling 70;
+/// `rect` in pixels of a `w` by `h` frame by the crop rounding;
 /// the whole frame for `None` or an empty frame.
 fn rect_pixels(rect: Option<&CropRect>, w: usize, h: usize) -> (usize, usize, usize, usize) {
     match rect {
@@ -180,19 +179,19 @@ fn rect_pixels(rect: Option<&CropRect>, w: usize, h: usize) -> (usize, usize, us
 impl Geometry {
     /// Whether this geometry leaves the exported frame as it is: no crop,
     /// no rotation and no flip. The analysis area and the analysis buffer
-    /// only limit the analysis, so they do not count (Ruling 134).
+    /// only limit the analysis, so they do not count.
     pub fn is_identity(&self) -> bool {
         self.crop.is_none() && self.rotate_degrees == 0 && !self.flip_horizontal
     }
 
-    /// The rectangle the analysis uses (Ruling 134): the analysis area when
+    /// The rectangle the analysis uses: the analysis area when
     /// set, else the crop, else `None` (the whole frame).
     pub fn analysis_rect(&self) -> Option<CropRect> {
         self.analysis_area.or(self.crop)
     }
 
-    /// Whether `self` and `other` give every frame the same analysis
-    /// (Rulings 81 and 134): the same [`Geometry::analysis_rect`] and, when
+    /// Whether `self` and `other` give every frame the same analysis:
+    /// the same [`Geometry::analysis_rect`] and, when
     /// there is one, the same analysis buffer. Rotation, flip and a crop
     /// that an analysis area overrides do not touch the analysis.
     pub fn same_analysis(&self, other: &Geometry) -> bool {
@@ -232,7 +231,7 @@ impl Geometry {
     }
 
     /// The crop in source pixels of a `w` by `h` frame, as
-    /// `(x0, y0, x1, y1)` with `x1` and `y1` exclusive (Ruling 70):
+    /// `(x0, y0, x1, y1)` with `x1` and `y1` exclusive:
     /// `x0 = round(x w)` clamped to `[0, w - 1]`, `x1 = round((x + width) w)`
     /// clamped to `[x0 + 1, w]`, the same for `y`, rounding half away from
     /// zero in `f64`. The whole frame when there is no crop or the frame is
@@ -241,8 +240,8 @@ impl Geometry {
         rect_pixels(self.crop.as_ref(), w, h)
     }
 
-    /// The unbuffered analysis rectangle in source pixels (Rulings 91 and
-    /// 134): [`Geometry::analysis_rect`] by the rounding of
+    /// The unbuffered analysis rectangle in source pixels:
+    /// [`Geometry::analysis_rect`] by the rounding of
     /// [`Geometry::crop_pixels`]. The whole frame when there is neither an
     /// analysis area nor a crop. The step 3 Dmin border search runs inside
     /// it.
@@ -250,8 +249,8 @@ impl Geometry {
         rect_pixels(self.analysis_rect().as_ref(), w, h)
     }
 
-    /// The buffered analysis rectangle in source pixels (Rulings 90 and
-    /// 134): [`Geometry::analysis_rect_pixels`] shrunk on each side by
+    /// The buffered analysis rectangle in source pixels:
+    /// [`Geometry::analysis_rect_pixels`] shrunk on each side by
     /// `round(analysis_buffer * min(x1 - x0, y1 - y0))` pixels, limited so
     /// that at least one pixel is left in each direction. The whole frame
     /// when there is neither an analysis area nor a crop (the buffer is
@@ -283,7 +282,7 @@ impl Geometry {
         }
     }
 
-    /// Applies the geometry to an image (Ruling 70): the crop of
+    /// Applies the geometry to an image: the crop of
     /// [`Geometry::crop_pixels`], then the clockwise rotation, then the
     /// horizontal flip of the rotated image. Only moves pixels. An identity
     /// geometry returns an equal copy; callers that want to avoid the copy

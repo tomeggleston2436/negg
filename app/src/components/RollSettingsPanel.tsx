@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // The roll settings panel: edits RollSettings (shared settings, pool flags and
-// profiles) with commit_roll (Ruling 79). There is no roll preview command, so
+// profiles) with commit_roll. There is no roll preview command, so
 // a drag only moves the control and the release commits.
 
 import { useEffect, useState } from "react";

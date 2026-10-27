@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// The analysis area (Rulings 134, 136 and 138): the part of the scan the
+// The analysis area: the part of the scan the
 // estimates are measured from: the whole film including its clear edge
 // (rebate, where the film base is measured), leaving out only the film
 // holder. It is separate from the output crop and never crops the photo. The panel edits it for the roll

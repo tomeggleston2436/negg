@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // The frame screen's tone presets: a strip of small previews of this frame
 // as each preset would print it (clicking one applies it to the frame), the
-// previous and next buttons (P and Shift+P, Ruling 10), the heading with the
-// preset the look came from ("Rich" or "Rich (modified)", Ruling 9), and
+// previous and next buttons (P and Shift+P), the heading with the
+// preset the look came from ("Rich" or "Rich (modified)"), and
 // "Save as preset" with an inline name field.
 
 import { useState } from "react";

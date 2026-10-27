@@ -1,4 +1,4 @@
-# Packages the desktop app (Ruling 86). Runs only by hand or for a version
+# Packages the desktop app. Runs only by hand or for a version
 # tag, never on pull requests. It uploads the bundles as workflow artifacts
 # and publishes nothing: no release, no signing beyond the ad hoc macOS
 # signature, no notarisation (deferred).

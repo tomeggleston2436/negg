@@ -14,15 +14,15 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::image::Image;
 
-/// Smallest per-cell flat field gain (R-flat, ADR 0014).
+/// Smallest per-cell flat field gain (ADR 0014).
 pub const FLAT_GAIN_MIN: f32 = 0.25;
-/// Largest per-cell flat field gain (R-flat, ADR 0014).
+/// Largest per-cell flat field gain (ADR 0014).
 pub const FLAT_GAIN_MAX: f32 = 4.0;
 /// The flat is blurred with `sigma = (long_side_px / FLAT_SIGMA_DIVISOR)`
-/// (R-flat, ADR 0014).
+/// (ADR 0014).
 pub const FLAT_SIGMA_DIVISOR: f32 = 64.0;
 
-/// A flat field correction (step 2 of `docs/MATHS.md`, R-flat): one gain per
+/// A flat field correction (step 2 of `docs/MATHS.md`): one gain per
 /// channel per analysis grid cell, applied by bilinear interpolation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FlatField {
@@ -35,7 +35,7 @@ pub struct FlatField {
     pub height: usize,
 }
 
-/// The rig density model (step 3 of `docs/MATHS.md`, R-density-fit):
+/// The rig density model (step 3 of `docs/MATHS.md`):
 /// `D_c = a_c + sum_k g[c][k] * log10(max(I_k, 1e-6))`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DensityModel {
@@ -55,7 +55,7 @@ impl DensityModel {
 }
 
 /// A rig's correction as applied at render time (step 2 of
-/// `docs/MATHS.md`, R-rig-order). Each part is optional.
+/// `docs/MATHS.md`). Each part is optional.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RigCorrection {
     /// The profile name, for warnings and the sidecar.
@@ -69,7 +69,7 @@ pub struct RigCorrection {
 }
 
 /// A film stock's contrast correction as applied at render time (step 4 of
-/// `docs/MATHS.md`, R-contrast).
+/// `docs/MATHS.md`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilmCorrection {
     /// The profile name.
@@ -82,8 +82,7 @@ pub struct FilmCorrection {
     pub offset_log_d: [f32; 3],
 }
 
-/// A rectangle in fractions of the frame, as in the manifest `grey_card`
-/// (R-wedge-csv).
+/// A rectangle in fractions of the frame, as in the manifest `grey_card`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PatchRect {
     /// Left edge, as a fraction of the frame width.

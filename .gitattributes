@@ -1,0 +1,4 @@
+# Check text files out with LF on every system. Tests compare committed text
+# (the C header, IPC fixtures) with generated output byte for byte, and Git on
+# Windows would otherwise convert them to CRLF.
+* text=auto eol=lf

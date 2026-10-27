@@ -1,51 +1,50 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The [`Session`]: one open roll as the desktop app and the C ABI drive it
-//! (Rulings 73 to 83, 87, 89, 122, 124, 125).
+//! The [`Session`]: one open roll as the desktop app and the C ABI drive it.
 //!
 //! A session opens a roll directory without decoding or writing anything,
 //! then runs pass 1 one frame per [`Session::analyse_next`] call: each
 //! frame is decoded, prepared with the rig, reduced to its whole-frame
-//! analysis grid (kept, Ruling 87) and analysed under its geometry; the
-//! analysed frames are then pooled, exactly as `negg batch` pools them.
+//! analysis grid (kept) and analysed under its geometry; the analysed
+//! frames are then pooled, exactly as `negg batch` pools them.
 //! Every preview (tiles, thumbnails, scopes) renders with the frame's
 //! [`FramePlan`], made by [`plan_frame`] from the cached grid with the
-//! pool, so the preview and the export share one plan (Ruling 73).
+//! pool, so the preview and the export share one plan.
 //!
 //! Edits are whole values ([`FrameOverrides`] for a frame, [`RollSettings`]
-//! for the roll; Ruling 79). A preview changes what is drawn and nothing
-//! else; a commit is recorded in one linear history, marks the state dirty
-//! and, by the stale-pool rule (Ruling 81), marks the pool pending when the
-//! edit changes what the pool sees. A commit returns at once with the
+//! for the roll). A preview changes what is drawn and nothing else; a
+//! commit is recorded in one linear history, marks the state dirty and, by
+//! the stale-pool rule, marks the pool pending when the edit changes what
+//! the pool sees. A commit returns at once with the
 //! frame planned on the current pool; the pending re-pool runs in the next
 //! [`Session::analyse_next`] call (which the host drives, as it drives pass
-//! 1), and before any flush, lock or export (Ruling 124).
+//! 1), and before any flush, lock or export.
 //! [`Session::flush`] writes the dirty sidecars with the data safety rules
-//! of Rulings 80 and 122, and once the pool is final every other sidecar a
-//! roll edit made out of date (Ruling 139); a session that only browsed
-//! writes nothing (Ruling 141). [`Session::export`] checks every sidecar on
-//! disk, flushes and then calls the CLI's own flows (Ruling 82), so an
+//! (a sidecar that changed behind the session is left alone), and once the
+//! pool is final every other sidecar a roll edit made out of date; a
+//! session that only browsed writes nothing. [`Session::export`] checks
+//! every sidecar on disk, flushes and then calls the CLI's own flows, so an
 //! export is byte-identical to `negg batch` or `negg convert` on the same
 //! directory.
 //!
-//! Memory per frame (Rulings 87 and 125): the analysis grid (block medians
-//! and their coefficient of variation) and the pool input's density, which
+//! Memory per frame: the analysis grid (block medians and their coefficient
+//! of variation) and the pool input's density, which
 //! is the whole grid density when the frame has no analysis area and no
 //! crop. The whole density of such a frame is rebuilt from the grid when a
 //! plan needs it.
 //!
-//! Before pass 1 (Ruling 134) the app can show each frame's decoded
-//! negative, not inverted ([`Session::negative_view`],
+//! Before pass 1 the app can show each frame's decoded negative, not
+//! inverted ([`Session::negative_view`],
 //! [`Session::negative_tile`], [`Session::negative_thumbnail_jpeg`]), and
 //! set the roll's analysis area ([`Session::set_roll_analysis_area`]) so
 //! that pass 1 analyses only the film. A frame decoded for its negative
 //! keeps its analysis grid as its pass 1 data, so pass 1 does not decode it
-//! again (Ruling 140).
+//! again.
 //!
 //! Orchestration only: every pixel value is computed by `negg-render`
 //! (render, pyramid, scopes) and `negg-cms` (the sRGB display transform).
 //! Turning RGB into RGBA with alpha 255 and applying the geometry
-//! (`Geometry::apply`) only move pixels (Ruling 70).
+//! (`Geometry::apply`) only move pixels.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -86,20 +85,18 @@ use crate::view::{
 };
 use crate::wire::{TILE_SIZE, encode_scopes, encode_tile};
 
-/// Most edits the history keeps; the oldest is dropped beyond this
-/// (Ruling 79).
+/// Most edits the history keeps; the oldest is dropped beyond this.
 pub const HISTORY_LIMIT: usize = 1000;
 /// The warning when an analysis area or crop change takes the roll's film
-/// base (Dmin) pool off the clear film edge (Ruling 138): the frames'
+/// base (Dmin) pool off the clear film edge: the frames'
 /// Dmin then comes from their darkest image areas instead.
 pub const BORDER_LOST_WARNING: &str = "the analysis area (or crop) leaves out the clear film edge \
      (rebate), so the film base is no longer measured on it but estimated from the image; make \
      the analysis area cover the whole film including its clear edge and leave out only the \
      holder";
-/// JPEG quality of thumbnails (Ruling 76).
+/// JPEG quality of thumbnails.
 pub const THUMB_QUALITY: u8 = 85;
-/// Scopes measure the first pyramid level whose long side is at most this
-/// (Ruling 75).
+/// Scopes measure the first pyramid level whose long side is at most this.
 pub const SCOPES_LONG_SIDE: usize = 1024;
 
 /// A file's modification time and length, `None` when it does not exist.
@@ -117,7 +114,7 @@ fn stamp_of(meta: &std::fs::Metadata) -> Stamp {
 
 /// What the session last saw of a sidecar it read or wrote: its stamp and
 /// its bytes (`None` when it did not exist). A sidecar that changed behind
-/// the session is never overwritten (Ruling 80). By Ruling 122 a file has
+/// the session is never overwritten. A file has
 /// changed only when its stamp differs and its bytes differ too, so a
 /// program that wrote the very same sidecar (as `negg batch` does after an
 /// export) has not changed it.
@@ -165,7 +162,7 @@ impl Seen {
     }
 }
 
-/// What pass 1 keeps of a frame (Ruling 87): its whole-frame analysis
+/// What pass 1 keeps of a frame: its whole-frame analysis
 /// grid, its step 7 matrix, its size and the decoder's notes.
 #[derive(Debug)]
 struct Pass1 {
@@ -181,7 +178,7 @@ struct Pass1 {
 type PoolKey = [u32; 14];
 
 /// A plan or thumbnail is cached under the pooled values and the settings
-/// hash it was made with (Ruling 124), so a re-pool that changes nothing
+/// hash it was made with, so a re-pool that changes nothing
 /// keeps every cache.
 type PlanKey = (PoolKey, ContentHash);
 
@@ -229,8 +226,8 @@ struct Frame {
     estimates_missing: bool,
     /// `None` until pass 1 has reached it.
     pass1: Option<Result<Pass1, String>>,
-    /// What decoding the frame for its negative before pass 1 made
-    /// (Ruling 140): the very data pass 1 makes, with the rig in use then.
+    /// What decoding the frame for its negative before pass 1 made:
+    /// the very data pass 1 makes, with the rig in use then.
     /// Pass 1 takes it instead of decoding the frame again; a change of
     /// profiles drops it.
     pre: Option<Pass1>,
@@ -252,7 +249,7 @@ struct Frame {
     /// the key of the thumbnail it was made from and its look; only those
     /// of the latest thumbnail key are kept.
     preset_thumbs: Vec<(PlanKey, LookKey, Vec<u8>)>,
-    /// The negative display's scale (Ruling 134), once worked out.
+    /// The negative display's scale, once worked out.
     negative_scale: Option<f32>,
     /// The negative thumbnail, once made.
     negative_thumb: Option<Vec<u8>>,
@@ -285,7 +282,7 @@ impl Frame {
     }
 }
 
-/// One recorded edit (Ruling 79): the value before and after, and the
+/// One recorded edit: the value before and after, and the
 /// content hash of the settings after.
 #[derive(Clone, Debug)]
 enum Edit {
@@ -330,7 +327,7 @@ struct Profiles {
 }
 
 /// The open frame: level 0 (its full linear image after decode, prepare
-/// and rig) and the pyramid levels 1 to L (Ruling 73).
+/// and rig) and the pyramid levels 1 to L.
 #[derive(Debug)]
 struct OpenFrame {
     index: usize,
@@ -383,10 +380,10 @@ pub struct Session {
     /// An edit changed what the pool sees; the pool is made again in the
     /// next `analyse_next`, or before a flush, lock or export.
     pool_pending: bool,
-    /// An analysis area or crop changed since the last pool (Ruling 138).
+    /// An analysis area or crop changed since the last pool.
     area_moved: bool,
     /// The last area change took the roll's Dmin pool off the clear film
-    /// edge (Ruling 138); see [`BORDER_LOST_WARNING`].
+    /// edge; see [`BORDER_LOST_WARNING`].
     pool_warning: Option<String>,
     generation: u32,
     history: Vec<Edit>,
@@ -529,7 +526,7 @@ impl Session {
         })
     }
 
-    /// One step of pass 1 or of a pending re-pool (Rulings 81 and 124).
+    /// One step of pass 1 or of a pending re-pool.
     ///
     /// During pass 1 the next frame is decoded (one at a time), prepared
     /// with the rig and analysed, and its grid is cached; after the last
@@ -544,7 +541,7 @@ impl Session {
     /// Done after opening a roll and after every call whose returned view
     /// reports `pool_pending` (`RollView`, `FrameView` and `HistoryView`
     /// all carry it, so `commit_frame`, `commit_roll`, `lock_frame`,
-    /// `undo` and `redo` each tell the host; Ruling 126), then fetches its
+    /// `undo` and `redo` each tell the host), then fetches its
     /// views again (the generation has moved when the pool changed).
     ///
     /// # Errors
@@ -580,7 +577,7 @@ impl Session {
         self.cursor += 1;
         if self.frames[i].blocked.is_none() {
             // The decode the negative view made with these profiles is
-            // pass 1's own data (Ruling 140).
+            // pass 1's own data.
             let pre = self.frames[i].pre.take();
             let (pass1, analysis) = match &self.profiles {
                 Some(Ok(p)) => {
@@ -645,7 +642,7 @@ impl Session {
     /// film profile that gives no correction, one measured with another
     /// rig), then [`BORDER_LOST_WARNING`] when the last analysis area or
     /// crop change took the roll's film base pool off the clear film edge
-    /// (Ruling 138; also in [`RollView::pool_warning`]).
+    /// (also in [`RollView::pool_warning`]).
     pub fn warnings(&self) -> Vec<String> {
         let mut all = self.warnings.clone();
         all.extend(self.pool_warning.iter().cloned());
@@ -666,8 +663,8 @@ impl Session {
         }
     }
 
-    /// Opens frame `frame` (decode, prepare with the rig, pyramid;
-    /// Ruling 73), closing any other open frame, and returns its view.
+    /// Opens frame `frame` (decode, prepare with the rig, pyramid),
+    /// closing any other open frame, and returns its view.
     ///
     /// # Errors
     ///
@@ -681,7 +678,7 @@ impl Session {
         Ok(self.make_view(i))
     }
 
-    /// One preview tile of the frame (Rulings 73 and 74): level `level` of
+    /// One preview tile of the frame: level `level` of
     /// its pyramid (0 = level 0), the 512-pixel tile at column `tile_x` and
     /// row `tile_y`, rendered with the frame's plan (the previewed
     /// overrides when a drag is in progress) and the rig density model,
@@ -807,7 +804,7 @@ impl Session {
         matches!(self.gpu, GpuPreview::On(..))
     }
 
-    /// The frame's thumbnail (Ruling 76): its cached analysis grid rendered
+    /// The frame's thumbnail: its cached analysis grid rendered
     /// with its plan, its geometry applied, turned to sRGB and encoded as
     /// a JPEG at [`THUMB_QUALITY`] with the sRGB profile. Kept in memory
     /// until the frame's settings or the pooled values change. Does not
@@ -919,7 +916,7 @@ impl Session {
         )?)
     }
 
-    /// The frame's scopes (Ruling 75) as the scopes wire format: measured
+    /// The frame's scopes as the scopes wire format: measured
     /// on the 8-bit sRGB render of the first pyramid level whose long side
     /// is at most [`SCOPES_LONG_SIDE`], with the geometry applied. The
     /// frame is opened when it is not.
@@ -955,7 +952,7 @@ impl Session {
         Ok(encode_scopes(frame, self.generation, &scopes))
     }
 
-    /// Previews `overrides` on the frame (a drag, Ruling 79): tiles,
+    /// Previews `overrides` on the frame (a drag): tiles,
     /// thumbnails and scopes draw with them until the next commit; no
     /// history, no sidecar, no re-pool (the pool is refreshed after the
     /// commit). Returns the new generation.
@@ -979,12 +976,12 @@ impl Session {
         Ok(self.bump())
     }
 
-    /// Commits `overrides` as the frame's overrides (Ruling 79): recorded
+    /// Commits `overrides` as the frame's overrides: recorded
     /// in the history unless equal to the current value (a commit after an
     /// undo drops the redo tail), the frame marked dirty and any preview
     /// cleared. A new crop or analysis buffer rebuilds the frame's pool
     /// input from its cached grid at once; when the edit changes what the
-    /// pool sees, the pool is marked pending (Rulings 81 and 124) and the
+    /// pool sees, the pool is marked pending and the
     /// returned view has the frame planned on the current pool.
     ///
     /// # Errors
@@ -1015,9 +1012,9 @@ impl Session {
         Ok(self.make_view(i))
     }
 
-    /// Commits `roll` as the roll settings (Ruling 79). A change of a
+    /// Commits `roll` as the roll settings. A change of a
     /// frame's analysis area, a pool flag or a pool input marks the pool
-    /// pending (Rulings 81 and 124); the frames' analyses are rebuilt with
+    /// pending; the frames' analyses are rebuilt with
     /// it. A change of `shared.profiles` starts pass 1 again: the returned
     /// view has `analysed = false` and the host drives
     /// [`Session::analyse_next`] to the end before the next edit.
@@ -1044,18 +1041,18 @@ impl Session {
         Ok(self.roll_view())
     }
 
-    /// Sets the roll's analysis area (Ruling 134), `shared.geometry.
+    /// Sets the roll's analysis area, `shared.geometry.
     /// analysis_area`, at any time, before pass 1 too: the pre-analysis
     /// step of the app draws it on a frame's negative
     /// ([`Session::negative_tile`]) and then drives
     /// [`Session::analyse_next`]. Recorded in the history like a
     /// [`Session::commit_roll`] of the same roll settings with only the
-    /// analysis area changed, and refreshed by the same rules (Ruling 81):
+    /// analysis area changed, and refreshed by the same rules:
     /// frames pass 1 has not reached yet are analysed under it; a frame
     /// already analysed has its pool input rebuilt from its cached grid and
     /// the pool is marked pending. A frame whose overrides carry their own
-    /// geometry keeps its own (the geometry is overridden as a whole,
-    /// Ruling 92). `None` removes the area. Nothing is written until a
+    /// geometry keeps its own (the geometry is overridden as a whole).
+    /// `None` removes the area. Nothing is written until a
     /// flush.
     ///
     /// # Errors
@@ -1127,7 +1124,7 @@ impl Session {
     /// [`RollPresetScope::FramesWithoutOwnLook`] every writable frame with
     /// its own look has the whole look it renders with now pinned into its
     /// overrides (the five look fields and its resolved preset label;
-    /// Ruling 5, a label of `None` pinned as `""`, Ruling 8), so it looks
+    /// a label of `None` pinned as `""`), so it looks
     /// and is labelled exactly as before. A frame whose sidecar changed on
     /// disk turns read-only (as before any frame edit) and is left alone.
     /// The whole apply is one history entry; nothing is recorded when
@@ -1163,7 +1160,7 @@ impl Session {
                 continue;
             }
             let before = &self.frames[i].overrides;
-            // Ruling 5 and 7: the rule `negg batch --preset` uses too.
+            // The rule `negg batch --preset` uses too.
             let after = preset_frame_overrides(&self.roll.shared.print, before, scope);
             if after == *before {
                 continue;
@@ -1192,7 +1189,7 @@ impl Session {
         Ok(self.roll_view())
     }
 
-    /// Opens frame `frame` for the pre-analysis step (Ruling 134): decodes
+    /// Opens frame `frame` for the pre-analysis step: decodes
     /// it and builds its pyramid as [`Session::frame_view`] does (closing
     /// any other open frame), without pass 1, and returns its size and
     /// levels for [`Session::negative_tile`]. Loads the roll's profiles
@@ -1219,7 +1216,7 @@ impl Session {
         })
     }
 
-    /// One tile of the frame's decoded negative (Ruling 134), not inverted:
+    /// One tile of the frame's decoded negative, not inverted:
     /// level `level` of its pyramid, the tile at column `tile_x` and row
     /// `tile_y`, made viewable by `negg_render::negative_display` (one
     /// exposure scale for the frame, the step 7 matrix), turned to sRGB for
@@ -1270,7 +1267,7 @@ impl Session {
         ))
     }
 
-    /// The frame's negative as a thumbnail (Ruling 134), for the
+    /// The frame's negative as a thumbnail, for the
     /// pre-analysis filmstrip: the block medians of its analysis grid made
     /// viewable by `negg_render::negative_display`, not inverted, in source
     /// orientation and uncropped, turned to sRGB and encoded as a JPEG at
@@ -1278,7 +1275,7 @@ impl Session {
     /// it uses pass 1's cached grid when there is one, else the grid an
     /// earlier negative view kept, else the open frame, else decodes the
     /// frame (without opening it) and keeps its grid as the frame's pass 1
-    /// data (Ruling 140). Kept in memory until the roll's profiles change.
+    /// data. Kept in memory until the roll's profiles change.
     ///
     /// # Errors
     ///
@@ -1297,7 +1294,7 @@ impl Session {
             && self.frames[i].pre.is_none()
             && !self.open.as_ref().is_some_and(|o| o.index == i)
         {
-            // Decoded once: kept as the frame's pass 1 data (Ruling 140)
+            // Decoded once: kept as the frame's pass 1 data
             // when the profiles loaded, else used for this thumbnail only.
             let prepared = prepare_frame(&self.frames[i].path, self.rig())?;
             let pre = pass1_of(prepared);
@@ -1343,7 +1340,7 @@ impl Session {
         Ok(jpeg)
     }
 
-    /// Lock (Ruling 89): the frame's current Dmin, gamma and cast estimates
+    /// Lock: the frame's current Dmin, gamma and cast estimates
     /// written into its overrides as Fixed ([`lock_overrides`], the
     /// function `negg lock` uses), committed as one edit. A pending re-pool
     /// runs first, so the locked values are those the export would use.
@@ -1446,14 +1443,14 @@ impl Session {
     /// True when a flush has something to write for an edit: a commit
     /// changed a frame or the roll since the last flush, or a frame written
     /// before pass 1 reached it now has its estimates. (A flush may also
-    /// bring an unedited frame's sidecar up to date, Ruling 139; that is
+    /// bring an unedited frame's sidecar up to date; that is
     /// found only by the flush itself.)
     pub fn is_dirty(&self) -> bool {
         let pooled = self.pooled();
         self.roll_dirty || self.frames.iter().any(|f| f.needs_write(pooled))
     }
 
-    /// Writes the session's state to disk (Rulings 80, 122, 139 and 141).
+    /// Writes the session's state to disk.
     ///
     /// A pending re-pool runs first. Then every dirty frame's sidecar is
     /// written: the resolved settings, the overrides, `roll =
@@ -1468,21 +1465,21 @@ impl Session {
     /// are written.
     ///
     /// Once the pool is final, every other writable frame that pass 1
-    /// analysed is brought up to date too (Ruling 139): a roll edit (an
+    /// analysed is brought up to date too: a roll edit (an
     /// analysis area, a crop, a pool flag) or another frame's edit can
     /// change its resolved settings or its estimates, so its sidecar is
     /// rewritten when it differs from the record the flush would write
     /// (the negg version that wrote it aside), exactly as `negg batch`
     /// would write it. This happens only when the session writes the roll
     /// at all (the roll has a `roll.negg.json`, or an edit was made), so a
-    /// session that only browsed a folder never batched writes nothing
-    /// (Ruling 141), and never while `roll.negg.json` changed behind the
+    /// session that only browsed a folder never batched writes nothing,
+    /// and never while `roll.negg.json` changed behind the
     /// session: then only the frames edited in the session are written.
     ///
     /// Then the roll sidecar, when its settings, pool or frame list differ
     /// from `roll.negg.json` (or it is absent) and either an edit happened
     /// since the last flush, or the roll has a `roll.negg.json` that the
-    /// final pool has made out of date (Ruling 141): the committed roll
+    /// final pool has made out of date: the committed roll
     /// settings, the current pool when it has frames (else no pool), and
     /// the pool's frame list (else the frames `negg batch` would take). So
     /// committed roll settings are never lost, also while pass 1 runs again
@@ -1503,8 +1500,8 @@ impl Session {
         let mut first: Option<SessionError> = None;
         let roll_path = negg_io::roll_sidecar_path(&self.dir);
         let roll_stale = !self.roll_seen.unchanged(&roll_path);
-        // Whether the session writes the roll's sidecars at all (Ruling
-        // 141): a folder never batched and only browsed gets none.
+        // Whether the session writes the roll's sidecars at all: a
+        // folder never batched and only browsed gets none.
         let engaged = self.roll_dirty
             || self.roll_disk.is_some()
             || self.frames.iter().any(|f| f.dirty && !f.read_only());
@@ -1584,7 +1581,7 @@ impl Session {
     }
 
     /// Whether a flush, on the final pool, brings frame `i`'s sidecar up
-    /// to date although it was not edited (Ruling 139): the frame is
+    /// to date although it was not edited: the frame is
     /// writable and in the roll, and pass 1 analysed it, so `negg batch`
     /// would write its sidecar.
     fn refreshable(&self, i: usize) -> bool {
@@ -1595,11 +1592,11 @@ impl Session {
             && matches!(f.analysis, Some(Ok(_)))
     }
 
-    /// Exports by the CLI's own flows (Ruling 82).
+    /// Exports by the CLI's own flows.
     ///
     /// First every sidecar the session may write (each writable frame's
     /// and `roll.negg.json`) is checked against what the session last read
-    /// or wrote (Ruling 122): a frame whose sidecar changed turns read-only
+    /// or wrote: a frame whose sidecar changed turns read-only
     /// with its overrides read again from disk, a changed roll sidecar is
     /// reported, and nothing is exported; the user sees what the export
     /// would use and can export again. Then the session flushes (running a
@@ -1640,7 +1637,7 @@ impl Session {
         self.flush()?;
         // The flows decode every frame again at full size, so the open
         // frame (its full-size level 0 and pyramid) and the cached plans
-        // are dropped first (Ruling 140): the export's peak is the flows'
+        // are dropped first: the export's peak is the flows'
         // own, plus the analysis grids the session keeps.
         self.open = None;
         for f in &mut self.frames {
@@ -1736,7 +1733,7 @@ impl Session {
         self.phase == Phase::Done && !self.pool_pending
     }
 
-    /// Edits wait for pass 1 (Ruling 81).
+    /// Edits wait for pass 1.
     fn check_analysed(&self) -> Result<(), SessionError> {
         if self.phase == Phase::Done {
             Ok(())
@@ -1764,8 +1761,8 @@ impl Session {
         Ok(())
     }
 
-    /// Checks every sidecar the session may write against what it last saw
-    /// (Ruling 122). Changed frames turn read-only; the first change is
+    /// Checks every sidecar the session may write against what it last saw.
+    /// Changed frames turn read-only; the first change is
     /// returned.
     fn check_disk(&mut self) -> Result<(), SessionError> {
         let mut first = None;
@@ -1857,7 +1854,7 @@ impl Session {
     }
 
     /// Records an applied edit: drops the redo tail, appends, keeps at most
-    /// [`HISTORY_LIMIT`] (Ruling 79).
+    /// [`HISTORY_LIMIT`].
     fn record(&mut self, edit: Edit) {
         self.history.truncate(self.applied);
         self.history.push(edit);
@@ -1903,7 +1900,7 @@ impl Session {
         }
     }
 
-    /// Whether a decode of frame `i` now is kept for pass 1 (Ruling 140):
+    /// Whether a decode of frame `i` now is kept for pass 1:
     /// pass 1 has not reached it, nothing is kept yet, and the profiles
     /// loaded, so the decode used the rig pass 1 uses.
     fn keeps_pre(&self, i: usize) -> bool {
@@ -1919,7 +1916,7 @@ impl Session {
         }
     }
 
-    /// Opens the frame for its negative (Ruling 134): as
+    /// Opens the frame for its negative: as
     /// [`Session::open_frame`] but without waiting for pass 1.
     fn open_negative(&mut self, i: usize) -> Result<(), SessionError> {
         self.check_decodable(i)?;
@@ -1945,8 +1942,8 @@ impl Session {
         Ok(scale)
     }
 
-    /// Whether the frame's Dmax in effect is pinned at the density cap
-    /// (Ruling 133): its own analysed Dmax, or its fixed one, as the roll
+    /// Whether the frame's Dmax in effect is pinned at the density cap:
+    /// its own analysed Dmax, or its fixed one, as the roll
     /// pool judges it. False before pass 1 reached it or when it failed.
     /// It reflects the last completed analysis: while a re-pool is pending
     /// (`pool_pending`) after an analysis area edit, a stale analysis is
@@ -1999,7 +1996,7 @@ impl Session {
 
     /// The density of the frame's whole grid (with the rig density model):
     /// the pool input's own density when it was made without a crop, else
-    /// rebuilt from the grid (Ruling 125).
+    /// rebuilt from the grid.
     fn whole_density(&self, i: usize) -> Result<Cow<'_, Image>, SessionError> {
         self.pass1(i)?;
         Ok(frame_whole_density(&self.frames[i], self.density()).expect("pass 1 checked above"))
@@ -2053,11 +2050,11 @@ impl Session {
         k
     }
 
-    /// The frame's plan (Ruling 73) for its committed overrides, or the
+    /// The frame's plan for its committed overrides, or the
     /// previewed ones when `shown`: [`plan_frame`] on the cached grid with
     /// the rig density model, the film correction and the pool filtered by
     /// the roll's flags, as `negg batch` renders it. Cached per pooled
-    /// values and settings (Ruling 124).
+    /// values and settings.
     fn plan(&mut self, i: usize, shown: bool) -> Result<(PlanKey, FramePlan), SessionError> {
         let settings = if shown {
             self.shown_settings(i)
@@ -2093,7 +2090,7 @@ impl Session {
     }
 
     /// Decodes the frame again and builds its pyramid, unless it is the
-    /// open frame. The previous open frame is dropped first (Ruling 87).
+    /// open frame. The previous open frame is dropped first.
     fn open_frame(&mut self, i: usize) -> Result<(), SessionError> {
         // Checked first: a frame the negative path opened before pass 1 is
         // open already, but is not available to the converted views.
@@ -2103,7 +2100,7 @@ impl Session {
 
     /// Decodes frame `i` with the rig in use and makes it the open frame
     /// with its pyramid, unless it is open already. Before pass 1 the
-    /// decode is also kept as the frame's pass 1 data (Ruling 140).
+    /// decode is also kept as the frame's pass 1 data.
     fn decode_open(&mut self, i: usize) -> Result<(), SessionError> {
         if self.open.as_ref().is_some_and(|o| o.index == i) {
             return Ok(());
@@ -2295,7 +2292,7 @@ impl Session {
         }
     }
 
-    /// Ruling 138: when an analysis area or crop change took the roll's
+    /// When an analysis area or crop change took the roll's
     /// Dmin pool from the clear film edge (Border frames) to percentile
     /// estimates, [`BORDER_LOST_WARNING`] is set (shown by
     /// [`Session::warnings`] and [`RollView::pool_warning`]); a pool back
@@ -2326,13 +2323,13 @@ impl Session {
         self.area_moved = false;
     }
 
-    /// Sets the frame's committed overrides and refreshes by Rulings 81 and
-    /// 124: a change of the resolved crop or analysis buffer rebuilds its
-    /// pool input from the cached grid; that, or a change of its resolved
-    /// `film`, `colour.auto_colour` or `colour.cast`, marks the pool
-    /// pending. With `strict` (a new commit) invalid settings or a crop too
-    /// small to analyse are refused with nothing changed; an undo or redo
-    /// applies them and the frame shows as failed.
+    /// Sets the frame's committed overrides and refreshes: a change of the
+    /// resolved crop or analysis buffer rebuilds its pool input from the
+    /// cached grid; that, or a change of its resolved `film`,
+    /// `colour.auto_colour` or `colour.cast`, marks the pool pending.
+    /// With `strict` (a new commit) invalid settings or a crop too small to
+    /// analyse are refused with nothing changed; an undo or redo applies
+    /// them and the frame shows as failed.
     fn apply_frame(
         &mut self,
         i: usize,
@@ -2376,17 +2373,17 @@ impl Session {
             self.pool_pending = true;
             self.area_moved |= moved;
         }
-        // Any frame edit makes the roll worth writing (Ruling 141): the
+        // Any frame edit makes the roll worth writing: the
         // frame's sidecar names `roll.negg.json`.
         self.roll_dirty = true;
         Ok(())
     }
 
-    /// Sets the committed roll settings and refreshes by Rulings 81 and
-    /// 124: new profiles start pass 1 again; a frame whose resolved crop or
-    /// buffer changed has its pool input marked for rebuilding; any of
-    /// that, a pool flag, or a change of a frame's resolved `film`,
-    /// `colour.auto_colour` or `colour.cast` marks the pool pending.
+    /// Sets the committed roll settings and refreshes: new profiles start
+    /// pass 1 again; a frame whose resolved crop or buffer changed has its
+    /// pool input marked for rebuilding; any of that, a pool flag, or a
+    /// change of a frame's resolved `film`, `colour.auto_colour` or
+    /// `colour.cast` marks the pool pending.
     fn apply_roll(&mut self, roll: RollSettings) {
         let old = std::mem::replace(&mut self.roll, roll);
         self.roll_dirty = true;
@@ -2420,7 +2417,7 @@ impl Session {
     }
 
     /// Drops every analysis and the open frame and starts pass 1 again
-    /// (new profiles change what every frame's analysis saw, Ruling 81).
+    /// (new profiles change what every frame's analysis saw).
     fn restart_analysis(&mut self) {
         self.phase = Phase::Frames;
         self.cursor = 0;
@@ -2464,7 +2461,7 @@ impl Session {
         let same = self.roll_disk.as_ref().is_some_and(|d| {
             d.settings == self.roll && d.pool.as_ref() == pool && d.frames == frames
         });
-        // Ruling 141: written for an edit, or when the final pool made an
+        // Written for an edit, or when the final pool made an
         // existing roll sidecar out of date; never for browsing alone.
         let out_of_date = self.roll_disk.is_some() && pooled && pool.is_some();
         if same || (!self.roll_dirty && !out_of_date) {
@@ -2500,7 +2497,7 @@ impl Session {
 
 /// Whether the frame sidecar `on_disk` (its bytes as last seen) records
 /// what `record` records, the negg version that wrote it aside: then a
-/// refresh (Ruling 139) leaves it alone. A file that does not parse
+/// refresh leaves it alone. A file that does not parse
 /// differs.
 fn same_record(on_disk: Option<&[u8]>, record: &Sidecar) -> bool {
     let Some(bytes) = on_disk else {
@@ -2523,7 +2520,7 @@ fn decode_pass1(path: &Path, profiles: &Profiles) -> Result<Pass1, String> {
     Ok(pass1_of(prepared))
 }
 
-/// What pass 1 keeps of a prepared frame (Ruling 87): its whole-frame
+/// What pass 1 keeps of a prepared frame: its whole-frame
 /// analysis grid, its step 7 matrix, its size and the decoder's notes.
 fn pass1_of(prepared: crate::convert::PreparedInput) -> Pass1 {
     Pass1 {
@@ -2538,7 +2535,7 @@ fn pass1_of(prepared: crate::convert::PreparedInput) -> Pass1 {
 /// The analysis half of pass 1: the grid's density (with the rig density
 /// model `density`), then the pool input under `settings`
 /// ([`analyse_grid`]), as `analyse_frame` builds them. The grid density is
-/// not kept: without a crop it lives on in the pool input (Ruling 125).
+/// not kept: without a crop it lives on in the pool input.
 fn analyse_pass1(
     pass1: &Pass1,
     settings: &Settings,
@@ -2560,7 +2557,7 @@ fn analyse_pass1(
 
 /// The density of the frame's whole grid (with the rig density model
 /// `density`): its pool input's own density when that was made without an
-/// analysis area or a crop, else rebuilt from the grid (Ruling 125). `None` before pass 1 or
+/// analysis area or a crop, else rebuilt from the grid. `None` before pass 1 or
 /// when it failed.
 fn frame_whole_density<'a>(f: &'a Frame, density: Option<&DensityModel>) -> Option<Cow<'a, Image>> {
     let Some(Ok(pass1)) = &f.pass1 else {
@@ -2597,14 +2594,14 @@ fn frame_analysis(
     }
 }
 
-/// Whether the analysis area changed (Rulings 81 and 134): the analysis
+/// Whether the analysis area changed: the analysis
 /// rectangle (the analysis area, else the crop), or its buffer (without
-/// either the buffer is ignored, Ruling 90).
+/// either the buffer is ignored).
 fn area_changed(a: &Geometry, b: &Geometry) -> bool {
     !a.same_analysis(b)
 }
 
-/// Whether a frame's pool input settings changed (Ruling 81).
+/// Whether a frame's pool input settings changed.
 fn pool_inputs_changed(a: &Settings, b: &Settings) -> bool {
     a.film != b.film
         || a.colour.auto_colour != b.colour.auto_colour
@@ -2618,7 +2615,7 @@ fn validate(settings: &Settings) -> Result<(), SessionError> {
         .map_err(|e| SessionError::Invalid(e.to_string()))
 }
 
-/// The geometry applied to a render (crop, rotate, flip; Ruling 70),
+/// The geometry applied to a render (crop, rotate, flip),
 /// skipped for the identity.
 fn apply_geometry(geometry: &Geometry, image: Image) -> Result<Image, SessionError> {
     if geometry.is_identity() {
@@ -2628,8 +2625,8 @@ fn apply_geometry(geometry: &Geometry, image: Image) -> Result<Image, SessionErr
     }
 }
 
-/// Pyramid levels including level 0 for a `width` by `height` frame
-/// (Ruling 73), by `negg_render::pyramid`'s own rule: halving rounds up, so
+/// Pyramid levels including level 0 for a `width` by `height` frame,
+/// by `negg_render::pyramid`'s own rule: halving rounds up, so
 /// the level sizes of the long side alone decide when a level fits a tile,
 /// and the pyramid of a one-row image of the long side has the same number
 /// of levels.
@@ -2638,7 +2635,7 @@ fn level_count(width: usize, height: usize) -> u32 {
     index_u32(upper + 1)
 }
 
-/// RGB8 to RGBA8 with alpha 255 (a layout move, Ruling 70).
+/// RGB8 to RGBA8 with alpha 255 (a layout move).
 fn rgb_to_rgba(rgb: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgb.len() / 3 * 4);
     for px in rgb.as_chunks::<3>().0 {

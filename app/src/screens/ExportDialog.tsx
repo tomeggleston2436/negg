@@ -2,8 +2,8 @@
 // The export dialog: scope, what to export (the original, a Web/Instagram
 // copy or both), format, folder and output space. Format and output space are
 // the original's; the web copy is always an sRGB JPEG. The output space is a
-// roll setting, so a change is committed as a roll edit before the export
-// (Ruling 82); exports then run as the CLI would and are followed on the
+// roll setting, so a change is committed as a roll edit before the export;
+// exports then run as the CLI would and are followed on the
 // batch screen.
 
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";

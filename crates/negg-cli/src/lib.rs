@@ -3,7 +3,7 @@
 //! The library behind the `negg` command-line tool: argument types, the
 //! printing of `convert`, `batch`, `lock` and `preset list`, `profile rig` and
 //! `profile film`, the corpus manifest and `eval`. The convert, batch,
-//! roll and lock flows themselves live in `negg-session` (Ruling 68),
+//! roll and lock flows themselves live in `negg-session`,
 //! re-exported from [`convert`] and [`roll`] so that callers keep their
 //! paths. The binary in `main.rs` parses arguments and maps results to
 //! exit statuses; the library is public so that integration tests (the

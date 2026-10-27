@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The binary wire formats a [`crate::Session`] answers with (Rulings 74
-//! and 75): a preview tile is a 48-byte little-endian header followed by
-//! RGBA8 pixels, scopes are a 32-byte header followed by the histogram,
-//! parade and vectorscope arrays. Thumbnails are raw JPEG bytes with no
-//! header. The desktop app's frontend and the C ABI read these; pixels are
-//! never sent as JSON.
+//! The binary wire formats a [`crate::Session`] answers with: a preview
+//! tile is a 48-byte little-endian header followed by RGBA8 pixels, scopes
+//! are a 32-byte header followed by the histogram, parade and vectorscope
+//! arrays. Thumbnails are raw JPEG bytes with no header. The desktop app's
+//! frontend and the C ABI read these; pixels are never sent as JSON.
 //!
 //! Only byte layout lives here: the pixels and the scope counts come from
 //! `negg-render`.
@@ -14,8 +13,8 @@ use negg_render::{SCOPE_BINS, Scopes};
 
 use crate::error::SessionError;
 
-/// Side of a square preview tile in pixels (Ruling 73). The value is
-/// `negg_render::TILE_SIZE`, the single source (Ruling 118), as `u32`.
+/// Side of a square preview tile in pixels. The value is
+/// `negg_render::TILE_SIZE`, the single source, as `u32`.
 pub const TILE_SIZE: u32 = {
     assert!(negg_render::TILE_SIZE <= u32::MAX as usize);
     negg_render::TILE_SIZE as u32
@@ -42,7 +41,7 @@ pub const SCOPES_LEN: usize = SCOPES_HEADER_LEN
     + 3 * SCOPE_BINS * SCOPE_BINS * 2
     + SCOPE_BINS * SCOPE_BINS * 2;
 
-/// The fields of a tile header (Ruling 74), as [`parse_tile`] reads them.
+/// The fields of a tile header, as [`parse_tile`] reads them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TileHeader {
     /// Tile width in pixels, 1 to [`TILE_SIZE`].
@@ -61,7 +60,7 @@ pub struct TileHeader {
     pub generation: u32,
 }
 
-/// A tile response (Ruling 74): the 48-byte little-endian header followed
+/// A tile response: the 48-byte little-endian header followed
 /// by `rgba`, which must hold `width * height * 4` bytes of RGBA8 sRGB,
 /// row-major from the top-left with alpha 255.
 #[allow(clippy::too_many_arguments)]
@@ -98,7 +97,7 @@ pub fn encode_tile(
     out
 }
 
-/// Reads a tile response (Ruling 74): its header and its RGBA8 pixels.
+/// Reads a tile response: its header and its RGBA8 pixels.
 ///
 /// # Errors
 ///
@@ -141,7 +140,7 @@ pub fn parse_tile(bytes: &[u8]) -> Result<(TileHeader, &[u8]), SessionError> {
     Ok((header, &bytes[TILE_HEADER_LEN..]))
 }
 
-/// A scopes response (Ruling 75): the 32-byte little-endian header (magic,
+/// A scopes response: the 32-byte little-endian header (magic,
 /// version, reserved, frame, generation, byte offset 32, measured width and
 /// height), then the histogram as 4 x 256 `u32` (R, G, B, luma), the
 /// parade as 3 x 256 x 256 `u16` (`[c][value][col]`) and the vectorscope as

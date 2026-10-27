@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The exposure anchor of step 5 of `docs/MATHS.md`, per ADR 0008
-//! (R-anchor).
+//! The exposure anchor of step 5 of `docs/MATHS.md`, per ADR 0008.
 //!
 //! The anchor is one scalar: the luma of normalised log exposure that
 //! `negg-render` solves `x_0` to print at `P = 0.75`. It is taken from the
@@ -18,21 +17,20 @@ use crate::stats::{median, percentile, trimmed_mean};
 const TEXTURED_CV: f32 = 0.03;
 
 /// Lower and upper luma percentiles, over the textured cells, that bound
-/// the midtones (R-anchor, ADR 0008).
+/// the midtones (ADR 0008).
 const MIDTONE_LOW: f32 = 25.0;
 const MIDTONE_HIGH: f32 = 75.0;
 
 /// Fraction trimmed from each end of the midtone luma before the mean
-/// (R-anchor, ADR 0008).
+/// (ADR 0008).
 const TRIM: f32 = 0.10;
 
 /// Fewer midtone cells than this and the anchor falls back to the median of
-/// luma over every cell (R-anchor, ADR 0008).
+/// luma over every cell (ADR 0008).
 const MIN_MIDTONE_CELLS: usize = 16;
 
 /// The exposure anchor of step 5 of `docs/MATHS.md`
-/// (`docs/MATHS.md#step-5-print-stage-the-tone-curve`), per ADR 0008
-/// (R-anchor).
+/// (`docs/MATHS.md#step-5-print-stage-the-tone-curve`), per ADR 0008.
 ///
 /// `grid` supplies the texture measure `cv` of each cell and `e_grid` is
 /// the same grid after step 4 (normalised log exposure `e_c`, in `[-1, 0]`

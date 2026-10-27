@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Pure helpers for the tone presets in the app: which preset a look shows
-// (with "(modified)" once a slider has moved, Ruling 9), cycling, the P and
-// Shift+P keys (Ruling 10), the roll preset question, the export dialog's
+// (with "(modified)" once a slider has moved), cycling, the P and
+// Shift+P keys, the roll preset question, the export dialog's
 // Original and Web/Instagram choices, and the cache of preset previews.
 
 import type { FrameView, Preset, PrintLook, RollPresetScope, Settings, WebOutput } from "./ipc/types";
@@ -36,7 +36,7 @@ function sameLook(a: PrintLook, b: PrintLook): boolean {
 
 /**
  * The preset label of `settings` and whether the look has moved from it. An
- * absent, null or "" label (Ruling 8) is no preset; a label no longer in
+ * absent, null or "" label is no preset; a label no longer in
  * `presets` is shown as modified.
  */
 export function presetState(settings: Settings, presets: readonly Preset[]): PresetState | null {
@@ -98,7 +98,7 @@ export interface KeyFacts {
 }
 
 /**
- * The preset cycle keys (Ruling 10): P for the next preset, Shift+P for the
+ * The preset cycle keys: P for the next preset, Shift+P for the
  * previous one. Null while typing in a text field, with Cmd, Ctrl or Alt
  * held, and for every other key (`[` and `]` move between frames).
  */

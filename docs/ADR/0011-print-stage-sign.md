@@ -2,11 +2,11 @@
 
 ## Status
 
-Proposed, 2026-10-20 (controller ruling pending owner review).
+Proposed, 2026-10-20.
 
 ## Context
 
-The plan's step 5 (`IMPLEMENTATION_PLAN.md`, transcribed into `docs/MATHS.md`) writes the print exposure as
+Step 5 of the original model, as first transcribed into `docs/MATHS.md`, writes the print exposure as
 
 ```
 x_c = -log10(T_c) * k + x_0 + cmy_c
@@ -29,8 +29,8 @@ equivalently `x_c = e_c * k + x_0 + cmy_c`. The paper's exposure is the negative
 - `print_pixel` is non-increasing in `e_c`: `e_c = 0` (film base) is the darkest print value and `e_c = -1` (Dmax) the brightest. With the defaults and `a = -0.5`, `x_0 = 1.966`, `e = 0` gives `out = 0.011`, `e = -1` gives `out = 0.78`, and the anchor itself gives `out = 10^-0.75 = 0.178`, which is the property test for the sign and for the solve.
 - The user's `exposure` control still adds to `x_0`, with positive meaning more print density, that is a darker print. `cmy_c` is unchanged. Nothing else in step 5 changes: the two softplus terms, the paper constants, black point compensation and the grade of ADR 0006 are as they were.
 - ADR 0008 keeps its anchor definition and its `x_target` solve; only the last line of its solve, `x_0 = x_target + a * k`, and its statement of the anchor equation `x = -a * k + x_0` are superseded by this ADR's sign. ADR 0008 should be amended to match when this ADR is accepted.
-- The plan's formula is a sign error against its own step 4, not a second convention. Under the "stop and ask" rule of `docs/MATHS.md` this is recorded for the owner to confirm rather than silently corrected; until it is confirmed the code follows this ADR, because the alternative renders negatives.
-- If the owner instead wants the plan's sign kept, step 4 would have to define `e_c` with the opposite sign, which changes the span of `e_c` to [0, 1] and touches ADRs 0006, 0008 and 0009; that is the more invasive fix and is why it was not chosen.
+- The original formula is a sign error against its own step 4, not a second convention. It is recorded here rather than silently corrected, because a disagreement in the model is a decision and not a patch; until this ADR is Accepted the code follows it, because the alternative renders negatives.
+- If the original sign were kept instead, step 4 would have to define `e_c` with the opposite sign, which changes the span of `e_c` to [0, 1] and touches ADRs 0006, 0008 and 0009; that is the more invasive fix and is why it was not chosen.
 
 ## Eval delta
 

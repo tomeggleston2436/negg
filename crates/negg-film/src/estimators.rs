@@ -3,7 +3,7 @@
 //! Film base (Dmin), Dmax and no-profile gamma estimators: steps 3 and 4
 //! of `docs/MATHS.md`.
 //!
-//! The border rule follows ADR 0007 (R-border): the unexposed border of a
+//! The border rule follows ADR 0007: the unexposed border of a
 //! frame is trusted as the film base only when enough flat cells sit in the
 //! outer band of the grid and those cells are no denser than the least
 //! dense part of the whole frame. A flat wall or sky is flat but not the
@@ -22,16 +22,16 @@ const BORDER_BAND: f64 = 0.15;
 const FLAT_CV: f32 = 0.03;
 
 /// Minimum number of flat cells in the border band before the border path
-/// is trusted (R-border, ADR 0007).
+/// is trusted (ADR 0007).
 const MIN_FLAT_CELLS: u32 = 20;
 
 /// Minimum fraction of the border band's cells that must be flat before
-/// the border path is trusted (R-border, ADR 0007).
+/// the border path is trusted (ADR 0007).
 const MIN_FLAT_FRACTION: f64 = 0.05;
 
 /// The flat border cells' median density may exceed the grid's 0.5th
 /// percentile by at most this much, per channel, before the border is
-/// judged not to be the least dense region (R-border, ADR 0007).
+/// judged not to be the least dense region (ADR 0007).
 const BORDER_ABOVE_FLOOR: f32 = 0.05;
 
 /// Percentile of grid density that is the fallback Dmin. Step 3.
@@ -80,7 +80,7 @@ fn in_border_band(x: usize, y: usize, w: usize, h: usize) -> bool {
 /// Estimates Dmin, the film base density per channel, from the analysis
 /// grid: step 3 of `docs/MATHS.md`
 /// (`docs/MATHS.md#step-3-density-and-film-base`), with the border rule of
-/// ADR 0007 (R-border).
+/// ADR 0007.
 ///
 /// The border path is taken when both hold:
 ///

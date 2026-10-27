@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Roll mode, profile loading and lock (ADR 0017, R-roll, R-pool, R-lock;
-//! ADR 0018, R-paths).
+//! Roll mode, profile loading and lock (ADR 0017;
+//! ADR 0018).
 //!
 //! A roll is the set of batch inputs of one directory. `negg batch` renders
 //! it in two passes: pass 1 decodes one frame at a time, applies the rig's
@@ -16,8 +16,7 @@
 //!
 //! Profile paths in `Settings.profiles` resolve relative to the directory
 //! of the sidecar holding them, which is the frames' directory; paths
-//! given with `--rig` and `--film` are made absolute before they are stored
-//! (R-paths).
+//! given with `--rig` and `--film` are made absolute before they are stored.
 //!
 //! Owns orchestration only; the maths is in `negg-render`, `negg-film` and
 //! `negg-calib`.
@@ -69,7 +68,7 @@ pub(crate) fn file_name(path: &Path) -> String {
 }
 
 /// A stored profile path resolved against `base_dir`, the directory of the
-/// file that holds it (R-paths). Absolute paths are kept as they are.
+/// file that holds it. Absolute paths are kept as they are.
 pub fn profile_path(base_dir: &Path, stored: &str) -> PathBuf {
     let p = Path::new(stored);
     if p.is_absolute() {
@@ -80,7 +79,7 @@ pub fn profile_path(base_dir: &Path, stored: &str) -> PathBuf {
 }
 
 /// `path` made absolute against the current directory, as a string for
-/// `Settings.profiles` (R-paths).
+/// `Settings.profiles`.
 pub(crate) fn absolute_string(path: &Path) -> Result<String, ConvertError> {
     std::path::absolute(path)
         .map(|p| p.to_string_lossy().into_owned())
@@ -92,7 +91,7 @@ pub(crate) fn absolute_string(path: &Path) -> Result<String, ConvertError> {
 
 /// Decodes a rig measurement frame (flat, band or wedge) and checks it is
 /// linear, `Transfer::Linear` (RAW or float TIFF), with the same step 1
-/// scaling as the frames (R-rig-decode). Returns the image and the camera
+/// scaling as the frames. Returns the image and the camera
 /// name when the decoder reports one.
 ///
 /// # Errors
@@ -114,7 +113,7 @@ pub fn decode_linear(path: &Path) -> Result<(Image, Option<String>), ConvertErro
 
 /// Loads a rig profile and builds its runtime correction: reads and
 /// validates the TOML, decodes the flat frame named by its `[flat_field]`
-/// table (relative to the profile file, linear only, R-rig-decode) and
+/// table (relative to the profile file, linear only) and
 /// calls [`negg_calib::rig_correction`].
 ///
 /// # Errors
@@ -137,7 +136,7 @@ pub fn load_rig(path: &Path) -> Result<RigCorrection, ConvertError> {
 
 /// Loads a film profile and returns its film correction, or `None` when the
 /// profile has no `[gamma]` table or its method is `none` (a profile that
-/// gives no correction, R-film-profile).
+/// gives no correction).
 ///
 /// # Errors
 ///
@@ -152,11 +151,10 @@ pub fn load_film(path: &Path) -> Result<Option<FilmCorrection>, ConvertError> {
 }
 
 /// Builds the roll context from `roll`: loads the profiles named in
-/// `roll.shared.profiles`, resolved against `base_dir` (R-paths). Returns
+/// `roll.shared.profiles`, resolved against `base_dir`. Returns
 /// with it the warnings to report (the CLI prints each as
 /// `<who>: warning: <text>`): a film profile that gives no correction, and
-/// a film profile measured with a different rig than the one in use
-/// (R-film-profile).
+/// a film profile measured with a different rig than the one in use.
 ///
 /// # Errors
 ///
@@ -192,7 +190,7 @@ pub fn build_context(
 
 /// The warning to print when the film profile was measured with a
 /// different rig (by name, or with one rig and without the other) than the
-/// one in use (R-film-profile), else `None`.
+/// one in use, else `None`.
 pub fn rig_mismatch(film: &FilmCorrection, rig: Option<&RigCorrection>) -> Option<String> {
     let in_use = rig.map(|r| r.name.as_str());
     (film.rig.as_deref() != in_use).then(|| {
@@ -208,7 +206,7 @@ pub fn rig_mismatch(film: &FilmCorrection, rig: Option<&RigCorrection>) -> Optio
 }
 
 /// Decodes `path`, brings it to linear light ([`prepare_input`]) and
-/// applies the rig's flat field and unmix (step 2, R-rig-order) when `rig`
+/// applies the rig's flat field and unmix (step 2) when `rig`
 /// is given.
 ///
 /// # Errors
@@ -299,8 +297,8 @@ pub fn analyse_roll(
 /// Pass 2 of roll mode for one frame: renders the prepared frame with its
 /// resolved `settings`, the rig density model, the film correction and the
 /// pooled values of `pool` filtered by the roll's `pool_*` flags
-/// ([`negg_render::render_frame_with`]; the precedence of R-lock is applied
-/// there). With no rig, film or pool this renders exactly as phase 1.
+/// ([`negg_render::render_frame_with`]; the lock precedence of ADR 0017 is
+/// applied there). With no rig, film or pool this renders exactly as phase 1.
 ///
 /// # Errors
 ///
@@ -325,7 +323,7 @@ pub fn render_in_roll(
     )?)
 }
 
-/// The overrides recorded in `input`'s existing sidecar (R-lock), or none
+/// The overrides recorded in `input`'s existing sidecar, or none
 /// when it has no sidecar.
 ///
 /// # Errors
@@ -388,9 +386,9 @@ pub(crate) fn roll_from_bytes(
 /// the shared analysis rectangle (the analysis area, else the crop) and
 /// analysis buffer equal those the pool was computed with (`stored`). The
 /// pooled Dmin and gamma are in the density space of the stored rig, so
-/// another rig or film profile makes them meaningless (Ruling 63); another
+/// another rig or film profile makes them meaningless; another
 /// analysis area, crop or buffer changes what every frame's analysis saw
-/// (Rulings 90 and 134, [`negg_types::Geometry::same_analysis`]). Rotation
+/// ([`negg_types::Geometry::same_analysis`]). Rotation
 /// and flip do not touch the analysis, so they leave the pool current, as
 /// does a crop that an analysis area overrides.
 pub fn pool_is_current(stored: &RollSettings, effective: &RollSettings) -> bool {
@@ -418,7 +416,7 @@ pub(crate) fn read_roll(path: &Path) -> Result<Option<RollSidecar>, ConvertError
         })
 }
 
-/// Which estimates `negg lock` fixes (R-lock). All `false` means all three.
+/// Which estimates `negg lock` fixes. All `false` means all three.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LockWhich {
     /// The film base (Dmin).
@@ -444,8 +442,8 @@ impl LockWhich {
     }
 }
 
-/// `overrides` with the selected `estimates` written in as Fixed values
-/// (R-lock): Dmin as the film base, gamma, and the cast. Overrides that are
+/// `overrides` with the selected `estimates` written in as Fixed values:
+/// Dmin as the film base, gamma, and the cast. Overrides that are
 /// not selected are kept as they are.
 pub fn lock_overrides(
     overrides: &FrameOverrides,
@@ -484,8 +482,8 @@ pub struct Locked {
     pub sidecar: PathBuf,
     /// The estimates locked.
     pub locked: Vec<&'static str>,
-    /// The frame's Dmax in its sidecar is pinned at the density cap
-    /// (Ruling 133): its analysed area held the film holder, so the values
+    /// The frame's Dmax in its sidecar is pinned at the density cap:
+    /// its analysed area held the film holder, so the values
     /// just locked come from that analysis, and a locked gamma keeps the
     /// frame out of the gamma pool for good. `negg lock` warns; it does
     /// not refuse, since the user may mean it.
@@ -493,8 +491,8 @@ pub struct Locked {
 }
 
 /// `negg lock`: writes the frame's current Dmin, gamma and cast estimates
-/// from its sidecar into the sidecar's overrides as Fixed (R-lock,
-/// [`lock_overrides`]). The sidecar's settings are updated to match (the
+/// from its sidecar into the sidecar's overrides as Fixed
+/// ([`lock_overrides`]). The sidecar's settings are updated to match (the
 /// locked values are the estimates the image was rendered with, so the
 /// image stays valid), and its hash recomputed.
 ///

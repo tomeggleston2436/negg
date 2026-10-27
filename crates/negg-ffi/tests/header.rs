@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The committed header `include/negg.h` is the one cbindgen generates
-//! (Ruling 88). `NEGG_BLESS=1 cargo test -p negg-ffi --test header`
+//! The committed header `include/negg.h` is the one cbindgen generates.
+//! `NEGG_BLESS=1 cargo test -p negg-ffi --test header`
 //! rewrites it.
 
 use std::path::PathBuf;

@@ -181,7 +181,7 @@ describe("presetCycleStep", () => {
     expect(presetCycleStep(key("p", { metaKey: true }), false)).toBeNull();
     expect(presetCycleStep(key("p", { ctrlKey: true }), false)).toBeNull();
     expect(presetCycleStep(key("p", { altKey: true }), false)).toBeNull();
-    // [ and ] move between frames (Ruling 10).
+    // [ and ] move between frames.
     expect(presetCycleStep(key("]"), false)).toBeNull();
     expect(presetCycleStep(key("["), false)).toBeNull();
   });

@@ -10,7 +10,7 @@ license = "Apache-2.0"
 description = "The negg desktop app: the Tauri backend over negg-session"
 publish = false
 
-# Its own workspace (Ruling 69): `cargo test --workspace` at the repository
+# Its own workspace: `cargo test --workspace` at the repository
 # root never builds Tauri, Node or the system GUI libraries.
 [workspace]
 
@@ -23,10 +23,10 @@ path = "src/lib.rs"
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
-# Every third-party crate is pinned here and nowhere else (Ruling 69).
+# Every third-party crate is pinned here and nowhere else.
 [dependencies]
 # negg-io only for the roll sidecar's path (whether a roll was opened
-# before, Ruling 136); the session reads and writes every sidecar.
+# before); the session reads and writes every sidecar.
 negg-io = { path = "../../crates/negg-io", version = "0.0.0" }
 negg-session = { path = "../../crates/negg-session", version = "0.0.0", features = ["gpu"] }
 negg-types = { path = "../../crates/negg-types", version = "0.0.0" }

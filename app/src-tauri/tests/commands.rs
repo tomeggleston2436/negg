@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The command bodies driven without a webview (Ruling 84) on synthetic
+//! The command bodies driven without a webview on synthetic
 //! rolls in a scratch directory: the analyse loop and its events, pending
-//! re-pools after edits (Ruling 124), the debounced flush, data safety
-//! (Rulings 80 and 122) and export.
+//! re-pools after edits, the debounced flush, data safety
+//! and export.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -171,7 +171,7 @@ fn open_runs_analysis_in_the_background_and_writes_nothing() {
     let (st, rec) = state();
     let view = commands::open_roll(&st, dir.dir()).unwrap();
     assert_eq!(view.frames.len(), 3);
-    // No roll.negg.json: the roll waits for Analyse (Ruling 136).
+    // No roll.negg.json: the roll waits for Analyse.
     assert!(view.awaiting_analysis);
     assert!(!st.is_analysing());
     let started = commands::start_analysis(&st).unwrap();

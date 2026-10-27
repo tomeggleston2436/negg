@@ -2,7 +2,7 @@
 
 Committed rig and film profiles for `negg`. This directory is empty of
 profiles on purpose: no measured profile is committed until frames and a rig
-exist to measure (Ruling 54, ADR 0019). Nothing here is a typical value for
+exist to measure (ADR 0019). Nothing here is a typical value for
 any stock or camera.
 
 ## Layout
@@ -14,7 +14,7 @@ profiles/film/<name>.film.negg.toml
 
 The `*.negg.toml` suffix is fixed by decision 4 (`docs/ADR/0004-naming.md`).
 Profiles are found only by explicit path (`--rig FILE`, `--film FILE`, or
-`Settings.profiles`); there is no search path (Ruling 46), so this directory
+`Settings.profiles`); there is no search path, so this directory
 is a place to keep them, not a lookup location. A rig profile with a
 `[flat_field]` table also needs its flat frame at the path stored in that
 table (relative to the profile file) alongside it; `profiles_dir.rs` does

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // The crop overlay. The crop lives in source coordinates (normalised, before
-// any quarter turn or flip, Ruling 70) and is mapped through the same
+// any quarter turn or flip) and is mapped through the same
 // placement as the tiles, so it turns and mirrors with the picture. In crop
 // mode a drag outside the crop draws a new one, a drag inside moves it, and
 // the eight handles resize it. Each drag step is reported with `onDrag`
-// (preview) and the release with `onCommit` (Ruling 79). A release that
+// (preview) and the release with `onCommit`. A release that
 // leaves no valid crop (a click, or a resize below the minimum side) and a
 // cancelled pointer commit nothing: `onCancel` reverts any preview the drag
 // sent, so no uncommitted crop lingers in the store.
@@ -35,7 +35,7 @@ export interface CropOverlayProps {
   onCancel: () => void;
   /**
    * "crop" (the output crop, dimming what it leaves out) or "area" (the
-   * analysis area, Ruling 134: its own colour, nothing dimmed, as it does not
+   * analysis area: its own colour, nothing dimmed, as it does not
    * crop the photo).
    */
   variant?: "crop" | "area";

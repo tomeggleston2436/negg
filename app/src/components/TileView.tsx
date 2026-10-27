@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// The tiled preview (Ruling 73). Tiles arrive in source orientation and are
+// The tiled preview. Tiles arrive in source orientation and are
 // drawn with putImageData; the stage holding them is placed, turned and
 // mirrored with one CSS transform. The coarsest level stays loaded underneath
 // as a backdrop while finer tiles arrive. A tile is drawn only when its
 // generation is at least the one already drawn in its slot, and each new
 // generation re-requests the visible tiles. The view shows either the
-// rendered positive or the frame's negative (Ruling 134); both use the same
+// rendered positive or the frame's negative; both use the same
 // tile header, so each mode has its own slots and a tile of the other mode
 // is never drawn. While a slider is dragged the view draws one level coarser
 // and hides the finer one, then asks for the finer one again on release over

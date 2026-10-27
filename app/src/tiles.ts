@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Tile placement for the preview (Ruling 73): which pyramid level to show and
+// Tile placement for the preview: which pyramid level to show and
 // which tiles cover the viewport. Positions and sizes only; no pixel values
 // are computed here.
 
@@ -150,7 +150,7 @@ export interface ViewPlacement {
 /**
  * CSS transform for a stage in source pixels (transform-origin 0 0): move the
  * centre to the origin, rotate clockwise, mirror left-right (rotate then flip,
- * as Ruling 70 orders export), scale, then centre in the viewport.
+ * as export does), scale, then centre in the viewport.
  */
 export function stageTransform(p: ViewPlacement): string {
   const flip = p.flip ? " scaleX(-1)" : "";
@@ -403,7 +403,7 @@ export interface TileSlot {
 }
 
 /**
- * Which tiles the preview asks for (Ruling 73): each visible slot once per
+ * Which tiles the preview asks for: each visible slot once per
  * generation, the coarsest level first, in a queue rebuilt on every pass so
  * tiles scrolled away are never fetched. The requests belong to one view (a
  * frame in one mode, positive or negative, whose tiles share a header): a

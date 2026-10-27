@@ -21,10 +21,10 @@ use crate::sidecar::{schema_version_of, write_atomic};
 pub const ROLL_SIDECAR_NAME: &str = "roll.negg.json";
 
 /// Schema version of the roll sidecar. It started at 1, independent of the
-/// frame sidecar's version (Ruling 51); version 2 holds settings of schema
-/// 3, with `geometry` (Ruling 71); version 3 holds settings of schema 4,
+/// frame sidecar's version; version 2 holds settings of schema
+/// 3, with `geometry`; version 3 holds settings of schema 4,
 /// with `geometry.analysis_area`, and pool records that may carry
-/// `needs_analysis_area` (Rulings 133 and 134); version 4 holds settings of
+/// `needs_analysis_area`; version 4 holds settings of
 /// schema 5, with `print.saturation` and `print.preset` (ADR 0033).
 pub const ROLL_SIDECAR_SCHEMA_VERSION: u32 = 4;
 
@@ -80,13 +80,13 @@ pub fn read_roll_sidecar(path: &Path) -> Result<RollSidecar, IoError> {
     migrate_roll(value)
 }
 
-/// Turns a parsed roll sidecar JSON value into the current [`RollSidecar`]
-/// (Ruling 71), a ladder like [`crate::migrate`]: version 1 becomes 2 by
+/// Turns a parsed roll sidecar JSON value into the current [`RollSidecar`],
+/// a ladder like [`crate::migrate`]: version 1 becomes 2 by
 /// setting `schema_version = 2` and both `settings.schema_version` and
 /// `settings.shared.schema_version` to 3, nothing else (the shared
 /// `geometry` takes its default); version 2 becomes 3 by setting
 /// `schema_version = 3` and both settings versions to 4, nothing else (no
-/// analysis area, no frame flagged, Ruling 134); version 3 becomes 4 by
+/// analysis area, no frame flagged); version 3 becomes 4 by
 /// setting `schema_version = 4` and both settings versions to 5, nothing
 /// else (saturation 1, no preset, ADR 0033). A missing
 /// `schema_version` is read as the current version, so `{}` loads as the
@@ -125,12 +125,12 @@ pub fn migrate_roll(value: Value) -> Result<RollSidecar, IoError> {
     Ok(sidecar)
 }
 
-/// Upgrades a version 1 roll sidecar value to version 2 (Ruling 71).
+/// Upgrades a version 1 roll sidecar value to version 2.
 fn upgrade_roll_v1_to_v2(value: Value) -> Value {
     set_roll_versions(value, 2, 3)
 }
 
-/// Upgrades a version 2 roll sidecar value to version 3 (Ruling 134).
+/// Upgrades a version 2 roll sidecar value to version 3.
 fn upgrade_roll_v2_to_v3(value: Value) -> Value {
     set_roll_versions(value, 3, 4)
 }

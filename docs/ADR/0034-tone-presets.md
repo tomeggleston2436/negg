@@ -25,13 +25,13 @@ Phase 4 adds tone presets: named looks that set the print stage's grade, toe, sh
 | Linear | 115 | 12.0 | 6.0 | off | 1.0 |
 
 - Standard equals the default settings, so choosing it is a no-op on the render.
-- User presets are TOML files named `<slug>.preset.negg.toml` (`negg_io::PRESET_SUFFIX`), where the slug is the name in lower case with each space turned into `-` and every character that is not a letter or digit dropped ("My Look!" is `my-look.preset.negg.toml`); saving reuses the file of an existing user preset of the same name, and refuses when the slug's file already exists and holds another preset or cannot be read. A file holds `schema_version = 1`, `name` and the five look keys. They are written atomically like profiles, validated both ways, and a file with a newer schema is refused with an "upgrade negg" message (Ruling 144).
+- User presets are TOML files named `<slug>.preset.negg.toml` (`negg_io::PRESET_SUFFIX`), where the slug is the name in lower case with each space turned into `-` and every character that is not a letter or digit dropped ("My Look!" is `my-look.preset.negg.toml`); saving reuses the file of an existing user preset of the same name, and refuses when the slug's file already exists and holds another preset or cannot be read. A file holds `schema_version = 1`, `name` and the five look keys. They are written atomically like profiles, validated both ways, and a file with a newer schema is refused with an "upgrade negg" message.
 
 ## Consequences
 
 - Presets add no render path: they only set existing settings, so a frame with no preset renders as before.
-- The `preset` label is not checked against the preset list. Editing a look value by hand keeps the label, and the app shows it as "<name> (modified)" (Ruling 9).
-- Applying a roll preset never edits a read-only frame, as with every roll edit, so such a frame takes the new roll look on its next export unless it has its own full look (Ruling 12).
+- The `preset` label is not checked against the preset list. Editing a look value by hand keeps the label, and the app shows it as "<name> (modified)".
+- Applying a roll preset never edits a read-only frame, as with every roll edit, so such a frame takes the new roll look on its next export unless it has its own full look.
 - Cost: the built-in numbers may change after review; changing them affects only frames that pick a preset afterwards.
 
 ## Eval delta

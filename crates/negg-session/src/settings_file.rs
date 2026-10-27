@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Settings files (`--settings`, Rulings 33, 142 and 144): a JSON file in
+//! Settings files (`--settings`): a JSON file in
 //! the `Settings` schema, a frame sidecar whose `settings` are used, or a
 //! roll sidecar (`roll.negg.json`) whose shared settings are used.
 
@@ -31,8 +31,7 @@ pub enum SettingsError {
     /// `settings` key, or a sidecar whose `settings` have none of them, so
     /// it is neither a settings file nor a sidecar.
     Unrecognised,
-    /// The settings' `schema_version` is newer than this build reads
-    /// (Ruling 144).
+    /// The settings' `schema_version` is newer than this build reads.
     Newer(u32),
     /// The settings failed [`Settings::validate`].
     Invalid(negg_types::Error),
@@ -83,7 +82,7 @@ fn settings_keys() -> Vec<String> {
 }
 
 /// A parsed `--settings` file: its settings and whether it gave a
-/// geometry of its own (Ruling 143: in roll mode the stored geometry is
+/// geometry of its own (in roll mode the stored geometry is
 /// kept unless it did).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SettingsFile {
@@ -93,7 +92,7 @@ pub struct SettingsFile {
     pub has_geometry: bool,
 }
 
-/// Parses the text of a `--settings` file (Ruling 33): see
+/// Parses the text of a `--settings` file: see
 /// [`parse_settings_file`]; only the settings.
 ///
 /// # Errors
@@ -103,7 +102,7 @@ pub fn parse_settings(text: &str) -> Result<Settings, SettingsError> {
     parse_settings_file(text).map(|f| f.settings)
 }
 
-/// Parses the text of a `--settings` file (Rulings 33, 142 and 144):
+/// Parses the text of a `--settings` file:
 ///
 /// - a JSON object with `settings.shared` (or a roll's top-level `frames`
 ///   or `pool`) is a roll sidecar, loaded through
@@ -117,9 +116,9 @@ pub fn parse_settings(text: &str) -> Result<Settings, SettingsError> {
 ///   is the defaults);
 /// - anything else is rejected.
 ///
-/// A settings file of an older schema is migrated to the current version
-/// (Ruling 51); one of a newer schema than this build reads is rejected
-/// (Ruling 144). The result is validated.
+/// A settings file of an older schema is migrated to the current version;
+/// one of a newer schema than this build reads is rejected.
+/// The result is validated.
 ///
 /// # Errors
 ///
@@ -180,9 +179,9 @@ pub fn parse_settings_file(text: &str) -> Result<SettingsFile, SettingsError> {
     if settings.schema_version > SETTINGS_SCHEMA_VERSION {
         return Err(SettingsError::Newer(settings.schema_version));
     }
-    // An older settings file is migrated to the current schema (Ruling 51,
-    // R-schema): v2, v3 and v4 only add fields, which take their defaults,
-    // so the version number is the one thing to change.
+    // An older settings file is migrated to the current schema:
+    // v2, v3 and v4 only add fields, which take their defaults, so the
+    // version number is the one thing to change.
     settings.schema_version = SETTINGS_SCHEMA_VERSION;
     settings.validate().map_err(SettingsError::Invalid)?;
     Ok(SettingsFile {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Every committed `profiles/**/*.negg.toml` must load and validate
-//! (Ruling 54). Zero files passes: no measured profile is committed yet.
+//! Every committed `profiles/**/*.negg.toml` must load and validate.
+//! Zero files passes: no measured profile is committed yet.
 
 use std::fs;
 use std::path::{Path, PathBuf};

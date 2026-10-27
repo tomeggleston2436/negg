@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `negg convert` and `negg batch`: the conversion itself lives in
-//! [`negg_session`] (Ruling 68) and is re-exported here, so that the CLI's
+//! [`negg_session`] and is re-exported here, so that the CLI's
 //! tests and callers keep their paths. This module keeps what only the CLI
 //! needs: the `--dump-stats` block and the wrappers that take the clap
 //! [`Format`].
@@ -82,9 +82,8 @@ pub fn convert_frame_with(
 
 /// The `--dump-stats` block for one frame: the estimates of steps 3 to 6
 /// (with a `needs analysis area` line when Dmax is pinned at the density
-/// cap, Ruling 133),
-/// whether the step 5 black-point floor raised `x0` (ADR 0030), the grid
-/// and image sizes, and whether the step 7 matrix was applied.
+/// cap), whether the step 5 black-point floor raised `x0` (ADR 0030), the
+/// grid and image sizes, and whether the step 7 matrix was applied.
 pub fn format_stats(input: &Path, converted: &Converted) -> String {
     let r = &converted.render;
     let e = &r.estimates;

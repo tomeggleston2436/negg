@@ -8,7 +8,7 @@ Core types for negg: image buffers, settings, roll settings and errors.
   iteration helpers (`Tile`, `CHANNELS`)
 - `Settings` (with `FilmSettings`, `PrintSettings`, `ColourSettings`,
   `ChannelEstimate`, `OutputSpace`) and `RollSettings`, serde structs that
-  load with the plan's defaults and ignore unknown fields
+  load with the documented defaults and ignore unknown fields
   Schema version 2 adds `colour.cast` (`CastEstimate`) and `profiles`
   (`ProfileRefs`); a version 1 settings value still loads with both at their
   defaults. Version 3 adds `geometry`, and version 4 adds

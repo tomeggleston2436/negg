@@ -23,7 +23,7 @@ use crate::full::{Region, check_estimates};
 use crate::print::PrintCoefficients;
 
 /// The largest difference per channel the GPU positive may have from the
-/// CPU positive (the plan's 1/4096).
+/// CPU positive (1/4096).
 pub const TOLERANCE: f32 = 1.0 / 4096.0;
 
 /// Threads per workgroup, as `@workgroup_size` in `render.wgsl`.

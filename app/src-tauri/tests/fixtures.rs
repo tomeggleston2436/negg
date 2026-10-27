@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The frontend's IPC fixtures (app/src/ipc/__fixtures__/*.json) are the
-//! real serde output of sample values ("### Tauri backend (P3-T)"): this
+//! real serde output of sample values: this
 //! test fails when they differ, and `NEGG_BLESS=1` rewrites them.
 
 use std::path::PathBuf;
@@ -49,7 +49,7 @@ fn frame_overrides() -> FrameOverrides {
     o.print.cmy = Some([0.0, 0.01, -0.02]);
     o.print.black_point_compensation = Some(true);
     o.print.saturation = Some(1.15);
-    // Pinned "no preset" (Ruling 8).
+    // Pinned "no preset".
     o.print.preset = Some(String::new());
     o.geometry = Some(Geometry {
         crop: Some(CropRect {

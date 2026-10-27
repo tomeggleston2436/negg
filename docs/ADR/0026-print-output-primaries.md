@@ -10,7 +10,7 @@ Accepted, 2026-10-24.
 
 The first real camera scans showed the consequence. Neutrals stay neutral, because the matrix is white-normalised, which is why every synthetic test (untagged TIFF input, no matrix) passed. Colours, however, came out with roughly double the chroma, and the matrix's negative off-diagonal terms drove the green channel negative on saturated blues, so blue skies and seas clipped to violet.
 
-Controller Ruling 96 settles the choice until a measured print characterisation exists (the rig and print work, ADR 0015 and later).
+This choice stands until a measured print characterisation exists (the rig and print work, ADR 0015 and later).
 
 ## Decision
 

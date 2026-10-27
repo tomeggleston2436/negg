@@ -44,11 +44,11 @@ drive.
   disk behind the session (`SessionError::ReadOnly`, `SessionError::Stale`;
   an edit of a frame whose sidecar changed is refused up front). Once the
   pool is final it also rewrites every unedited frame sidecar a roll edit
-  made out of date, as `negg batch` would (Ruling 139); a session that only
-  browsed writes nothing (Ruling 141). See ADR 0023
+  made out of date, as `negg batch` would; a session that only
+  browsed writes nothing. See ADR 0023
 - Warnings: `Session::warnings` and `RollView::pool_warning` say when an
   analysis area or crop change took the film base pool off the clear film
-  edge (Ruling 138)
+  edge
 - Tone presets (ADR 0034): the preset list (built-in plus the user's folder,
   `$NEGG_PRESETS_DIR` else the platform config `negg/presets`), applying a
   preset to a frame or the roll (with the "All frames / Only frames without

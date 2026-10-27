@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The preview pyramid of Step 8 of docs/MATHS.md (preview), Ruling 73
-//! (R-preview, ADR 0022).
+//! The preview pyramid of Step 8 of docs/MATHS.md (preview)
+//! (ADR 0022).
 //!
 //! The open frame keeps its full linear image as level 0; levels 1 to L
 //! are successive halvings by [`downscale_half`], a 2 x 2 box mean in
@@ -16,13 +16,13 @@ use negg_types::image::CHANNELS;
 
 use crate::par::for_each_row_mut;
 
-/// Side of a square preview tile in pixels (Ruling 73, `TILE_SIZE`): the
+/// Side of a square preview tile in pixels (`TILE_SIZE`): the
 /// pyramid stops at the first level whose long side is at most this, and
-/// a tile covers at most this many pixels in each direction. Controller
+/// a tile covers at most this many pixels in each direction. Provisional
 /// choice.
 pub const TILE_SIZE: usize = 512;
 
-/// One pyramid step of Step 8 of docs/MATHS.md (preview), Ruling 73: the
+/// One pyramid step of Step 8 of docs/MATHS.md (preview): the
 /// 2 x 2 box mean of `image` in linear light, `ceil(w / 2)` by
 /// `ceil(h / 2)` pixels.
 ///
@@ -60,7 +60,7 @@ pub fn downscale_half(image: &Image) -> Image {
     out
 }
 
-/// The preview pyramid of Step 8 of docs/MATHS.md (preview), Ruling 73:
+/// The preview pyramid of Step 8 of docs/MATHS.md (preview):
 /// levels 1 to L of `level0`, each [`downscale_half`] of the one before,
 /// where L is the smallest `n` with `max(w_n, h_n) <= tile`. Level 0 is
 /// the caller's own image and is not copied; the result is empty when
@@ -148,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn level_counts_follow_the_ruling() {
+    fn level_counts_follow_the_halving_rule() {
         // 6000 x 4000: 3000, 1500, 750, 375; L = 4.
         let levels = pyramid(&Image::new(6000, 4000), TILE_SIZE);
         let sizes: Vec<_> = levels.iter().map(|l| (l.width(), l.height())).collect();

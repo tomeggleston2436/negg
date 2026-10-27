@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-10-20. Decision 1 in `IMPLEMENTATION_PLAN.md`.
+Accepted, 2026-10-20. Decision 1 in `ROADMAP.md`.
 
 ## Context
 

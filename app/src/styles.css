@@ -15,7 +15,7 @@
   --bad: #d97a6c;
   --good: #8cc29a;
   --focus: #b8d4ff;
-  /* The analysis area (Ruling 134): its own colour, never the crop's. */
+  /* The analysis area: its own colour, never the crop's. */
   --area: #e08fd0;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 13px;
@@ -562,7 +562,7 @@ button[aria-pressed="true"] {
   flex-wrap: wrap;
 }
 
-/* Analysis area (Rulings 134 and 136) */
+/* Analysis area */
 
 .crop-rect.area {
   border: 2px dashed var(--area);

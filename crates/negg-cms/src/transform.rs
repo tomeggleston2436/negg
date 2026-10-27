@@ -319,7 +319,7 @@ pub fn working_to_output_matrix(space: OutputSpace) -> Result<Matrix3, CmsError>
 
 /// The step 1 path for a TIFF with an embedded matrix/TRC ICC profile
 /// (`docs/MATHS.md` step 1, "honour the embedded ICC if matrix/TRC,
-/// linearise with its TRC"; ADR 0012, Ruling 29).
+/// linearise with its TRC"; ADR 0012).
 ///
 /// Each channel of `encoded` (values nominally in `[0, 1]`; negatives are
 /// read as 0) is put through the profile's own TRC for that channel,
@@ -379,8 +379,8 @@ pub fn icc_linearise_native(icc: &[u8], encoded: &Image) -> Result<(Image, Matri
     Ok((linear, matrix))
 }
 
-/// The step 1 fallback for 16-bit integer TIFFs with no ICC profile
-/// (R-decode): assume a gamma 2.2 encoding and undo it per channel with
+/// The step 1 fallback for 16-bit integer TIFFs with no ICC profile:
+/// assume a gamma 2.2 encoding and undo it per channel with
 /// `v^2.2`. Negative inputs are clipped to 0 first (a fractional power of a
 /// negative number is undefined); values above 1 pass through the same
 /// power.

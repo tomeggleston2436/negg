@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-10-20 (controller ruling pending owner review).
+Proposed, 2026-10-20.
 
 ## Context
 
@@ -12,7 +12,7 @@ Step 1 says "use `rawler` for RAW; run demosaic and active-area crop only" and l
 
 Step 8 lists the TIFF, JPEG and sidecar outputs and carried the line "TODO(spec): the plan does not fix the resolution tag values, the JPEG quality default or chroma subsampling, or the full sidecar field list beyond the items above."
 
-This ADR records both rulings (contract items R-decode and R-export).
+This ADR records both decisions.
 
 ## Decision
 
@@ -25,7 +25,7 @@ Export: TIFF resolution tags are 300 pixels per inch with `ResolutionUnit` inch.
 - Bilinear demosaic is the simplest correct interpolation and is enough for phase 1, whose gates measure colour accuracy on grey cards and roll consistency, not resolution. A better demosaic (and X-Trans support) is a later ADR with an eval delta; it changes pixels, so it cannot slip in silently.
 - Writing the demosaic in `negg-decode` rather than taking `rawler`'s keeps the step 1 rule that nothing but demosaic and crop is applied: the decoder hands over the CFA data and the levels, and `negg-decode` owns what happens next.
 - Moving TIFF linearisation into `negg-cms` keeps the ICC handling in one crate (ground rule 3: one implementation of each colour operation). The step 1 rule "honour the embedded ICC profile" still holds; it is honoured by the caller through `negg-cms` (`icc_linearise_native` since ADR 0012, which linearises in the profile's own primaries), and the gamma 2.2 fallback by `negg-cms::gamma22_to_linear`. `negg-decode` never guesses a transfer silently: the gamma 2.2 case always carries the warning.
-- 300 pixels per inch is the conventional print resolution and is metadata only; it does not change pixels. Quality 92 with default subsampling is a conventional high-quality setting; it is a controller choice and has no corpus measurement behind it, but it affects only the lossy JPEG output and never the TIFF or the eval metrics, so it is not marked `TODO(measure)`.
+- 300 pixels per inch is the conventional print resolution and is metadata only; it does not change pixels. Quality 92 with default subsampling is a conventional high-quality setting; it is a design choice and has no corpus measurement behind it, but it affects only the lossy JPEG output and never the TIFF or the eval metrics, so it is not marked `TODO(measure)`.
 - The sidecar `source` holds a file name and never a directory, so a sidecar is portable with its frame and never leaks a path. `settings_hash` lets a tool detect a sidecar whose settings were edited by hand. `estimates` is optional so that a sidecar written before a render (settings only) is valid.
 - The estimate sources are the `DminSource` (`border`, `percentile`, `fixed`, `roll`, `profile`) and `GammaSource` (`range`, `fixed`, `neutral_fit`, `roll`, `profile`) enums in `negg-types`, serialised in snake case; this is the "source of each estimate" that step 8 asks for.
 - `schema_version` is 1; `migrate` accepts only version 1 and rejects anything else, so a version 2 can be added with a migration rather than a silent reinterpretation. Adding a field to `Estimates` or `Sidecar` after phase 1 bumps the version.

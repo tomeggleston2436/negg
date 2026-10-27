@@ -2,7 +2,8 @@
 
 //! Compiles tests/smoke.c against the static library with the system `cc`
 //! and runs it on a synthetic roll. Skipped (with a note) when `cc` is not
-//! on PATH.
+//! on PATH, and on Windows, where the MSVC static library is `negg_ffi.lib`
+//! and the `cc` on PATH, if any, is MinGW, which cannot link it.
 
 mod common;
 
@@ -13,6 +14,10 @@ use common::{TempDir, write_roll};
 
 #[test]
 fn c_smoke_test() {
+    if cfg!(windows) {
+        eprintln!("skipped: the smoke test links with a Unix `cc`, not MSVC");
+        return;
+    }
     if Command::new("cc").arg("--version").output().is_err() {
         eprintln!("skipped: no `cc` on PATH");
         return;

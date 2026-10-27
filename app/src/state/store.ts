@@ -94,7 +94,7 @@ export interface Actions {
   requestNegativeThumb(frame: number): void;
   /** Fetches the negative's size and pyramid of `frame` (the Negative toggle). */
   loadNegative(frame: number): Promise<void>;
-  /** The Analyse button: starts the analysis of a roll that awaits it (Ruling 136). */
+  /** The Analyse button: starts the analysis of a roll that awaits it. */
   startAnalysis(): Promise<void>;
   /**
    * Sets (or with null removes) the roll's analysis area, before or after
@@ -298,7 +298,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // answered yet: a close waits for them too.
     const inflight = { n: 0 };
 
-    // A frame pass 1 has not reached shows its negative (Ruling 134); its
+    // A frame pass 1 has not reached shows its negative; its
     // view is asked for only once it is analysed.
     const reloadFrame = async (index: number) => {
       const info = stateRef.current.roll?.frames[index];

@@ -16,7 +16,7 @@
 //! - RAW (`Linear`): linear camera RGB through steps 3 to 6. Step 7
 //!   reads the print channels as Rec.709 primaries with a D65 white and
 //!   enters Rec.2020 with [`negg_cms::REC709_TO_REC2020`] (BT.2087;
-//!   ADR 0026, Ruling 96). The camera's scene matrix is not applied: the
+//!   ADR 0026). The camera's scene matrix is not applied: the
 //!   print channels are tone curves of dye densities, not camera
 //!   responses. The decoder still records it in `Decoded` for the rig and
 //!   print characterisation work.
@@ -156,7 +156,7 @@ pub fn prepare_input(decoded: Decoded) -> Result<PreparedInput, CmsError> {
             );
             (linear, None, None)
         }
-        // RAW (Ruling 96, ADR 0026): the print channels are synthetic tone
+        // RAW (ADR 0026): the print channels are synthetic tone
         // curves of dye densities, not camera responses to scene light, so
         // the camera's scene matrix does not describe them. They are read
         // as Rec.709 primaries with a D65 white. The decoder's camera
@@ -313,7 +313,7 @@ pub struct Converted {
 
 /// Checks, before anything is decoded or written, that converting `input`
 /// to `output` cannot write over the source and that its sidecar is not
-/// the roll sidecar (R-roll). The conversion calls it for each file it
+/// the roll sidecar. The conversion calls it for each file it
 /// writes, the web copy ([`web_output_path`]) included.
 ///
 /// # Errors
@@ -347,7 +347,7 @@ pub struct FrameOptions<'a> {
     pub ctx: Option<&'a RollContext>,
     /// The roll pool, filtered by the roll's `pool_*` flags at render.
     pub pool: Option<&'a RollPool>,
-    /// The frame's overrides, kept in the sidecar written (R-lock).
+    /// The frame's overrides, kept in the sidecar written.
     pub overrides: Option<&'a FrameOverrides>,
     /// Recorded as the sidecar's `roll` (the roll sidecar's file name) when
     /// the frame is rendered in roll mode.
@@ -377,8 +377,8 @@ pub fn convert_frame(
     convert_frame_with(input, out_dir, settings, format, &FrameOptions::default())
 }
 
-/// [`convert_frame`] with a roll context, pool and overrides (R-roll,
-/// R-lock): the frame is prepared with [`prepare_frame`] (the rig's flat
+/// [`convert_frame`] with a roll context, pool and overrides (ADR
+/// 0017): the frame is prepared with [`prepare_frame`] (the rig's flat
 /// field and unmix applied) and rendered with [`render_in_roll`] when
 /// `opts.ctx` is given, else exactly as phase 1. `settings.geometry` is
 /// then applied with [`negg_types::Geometry::apply`] (crop, rotate, flip;
@@ -442,7 +442,7 @@ pub(crate) fn convert_frame_noting(
         None => render_frame(&prepared.linear, settings, prepared.camera_to_working)?,
     };
     drop(prepared);
-    // Step 8 geometry (Ruling 70): crop, rotate, flip after the render and
+    // Step 8 geometry: crop, rotate, flip after the render and
     // before the output transform. The identity skips the copy, so a frame
     // with no geometry exports exactly as before.
     if !settings.geometry.is_identity() {

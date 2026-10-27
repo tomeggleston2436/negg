@@ -5,8 +5,8 @@
 //! [`render_frame_with`] is the one pipeline of ground rule 3: it builds
 //! the analysis grid and its density (step 3, with the rig density model
 //! when the [`RenderContext`] carries one), runs [`estimate_frame`] (Dmin,
-//! Dmax and gamma by the R-lock precedence, the film correction's neutral
-//! offset, the cast by R-cast-source, the exposure anchor and `x_0`), then
+//! Dmax and gamma by the lock precedence of ADR 0017, the film correction's
+//! neutral offset, the cast by its source (ADR 0018), the exposure anchor and `x_0`), then
 //! renders the full-resolution frame in one fused pass with
 //! [`render_full`] (steps 3 to 7: the density is taken per pixel inside the
 //! kernel). [`render_frame`] is the same with the default context, which
@@ -15,7 +15,7 @@
 //! no colour management: the matrix of step 7 is chosen by the
 //! caller with `negg-cms` and passed in. The linear part of step 2 (flat
 //! field, unmix) is applied by the caller beforehand with
-//! [`crate::apply_rig_linear`] (R-rig-order).
+//! [`crate::apply_rig_linear`].
 //!
 //! Memory: besides the input, one full-size `f32` image is allocated, the
 //! output of [`render_full`]; no full-size density image is made. The
@@ -57,8 +57,7 @@ pub struct FrameRender {
     /// to the sidecar (step 8).
     pub estimates: Estimates,
     /// Number of cells in the analysis grid of step 3: the whole grid
-    /// without an analysis area or a crop, else the buffered analysis grid
-    /// (Rulings 90 and 134).
+    /// without an analysis area or a crop, else the buffered analysis grid.
     pub grid_cells: u32,
     /// Step 5 (ADR 0030): true when the black-point floor raised `x_0`
     /// above the anchor's, so the frame prints darker than the anchor alone
@@ -73,13 +72,12 @@ pub struct FrameRender {
 /// optional; the default context renders exactly as phase 1.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RenderContext<'a> {
-    /// The rig density model replacing the step 3 density
-    /// (R-density-use).
+    /// The rig density model replacing the step 3 density.
     pub density: Option<&'a DensityModel>,
-    /// The film correction: gamma ratios and neutral offsets (R-contrast).
+    /// The film correction: gamma ratios and neutral offsets.
     pub film: Option<&'a FilmCorrection>,
     /// The roll's pooled Dmin, gamma and cast, already filtered by the
-    /// roll's `pool_*` flags (R-pool, R-cast-pool).
+    /// roll's `pool_*` flags.
     pub pooled: Option<&'a PooledEstimates>,
 }
 
@@ -127,12 +125,12 @@ fn model_grid<'a>(
     }
 }
 
-/// Fewest cells the analysis grid of a cropped frame may have (Ruling 90).
-/// Controller choice.
+/// Fewest cells the analysis grid of a cropped frame may have.
+/// Provisional choice.
 pub const MIN_ANALYSIS_CELLS: usize = 64;
 
 /// The analysis area of step 3 of `docs/MATHS.md` for a frame with an
-/// analysis rectangle, its analysis area or else its crop (Rulings 90, 91
+/// analysis rectangle, its analysis area or else its crop (91
 /// and 134): the crop grid (cells whose centres lie in the unbuffered
 /// rectangle) and the analysis grid (cells whose centres lie in the
 /// rectangle shrunk by the analysis buffer), each with its part of the grid
@@ -165,7 +163,7 @@ fn cut(
     Ok((sub, density))
 }
 
-/// The analysis area of `grid` under `geometry` (Rulings 90, 91 and 134),
+/// The analysis area of `grid` under `geometry`,
 /// on [`Geometry::analysis_rect`] (the analysis area when set, else the
 /// crop), or `None` when there is neither: the whole grid is then used
 /// with no copy and the analysis buffer is ignored.
@@ -218,7 +216,7 @@ pub(crate) fn analysis_area(
     }))
 }
 
-/// Step 3 Dmin and Dmax of `grid` under `geometry` (Rulings 90, 91 and
+/// Step 3 Dmin and Dmax of `grid` under `geometry` (91 and
 /// 134): with no analysis rectangle, [`estimate_dmin_dmax`] on the whole
 /// grid exactly as before; with one, Dmin on the unbuffered rectangle's
 /// grid and Dmax on the buffered analysis grid.
@@ -255,12 +253,11 @@ fn check_film(film: &FilmCorrection) -> Result<()> {
 
 /// Step 3 of `docs/MATHS.md`, roll mode: the Dmin a frame whose film base
 /// is not fixed renders with, given its own estimate `own` and the roll's
-/// pooled Dmin `pooled` (R-pool, Ruling 59 as amended by Ruling 105, ADR
-/// 0029).
+/// pooled Dmin `pooled` (ADR 0029).
 ///
 /// - No pooled Dmin: the frame's own estimate and source.
 /// - A frame whose own source is not `Percentile` (a Border frame, Rejected
-///   or not): the pooled value, source `Roll` (Ruling 59).
+///   or not): the pooled value, source `Roll`.
 /// - A `Percentile` frame: per channel `min(own_c, pooled_c)`, so the pool
 ///   never lifts its base above its own estimate. The source is `Roll`
 ///   when every channel took the pooled value (ties count as pooled),
@@ -296,15 +293,16 @@ pub(crate) fn dmin_with_pool(
 }
 
 /// Steps 3 to 6 of `docs/MATHS.md` for one frame on its analysis grid:
-/// every estimate the render needs, by the precedence of R-lock (ADR 0017),
-/// R-contrast (ADR 0016) and R-cast-source (ADR 0018).
+/// every estimate the render needs, by the precedence rules of ADR 0017
+/// (locks and overrides), ADR 0016 (film contrast) and ADR 0018 (cast
+/// source).
 ///
 /// `grid_density` must be the density of `grid.median` as step 3 defines
 /// it for this context, that is `density_grid(&grid.median, ctx.density)`.
 ///
 /// - Dmin: settings Fixed (`Fixed`) > `ctx.pooled` Dmin, capped for a
 ///   percentile frame by `dmin_with_pool` (`Roll`, `RollMin` or
-///   `Percentile`, Ruling 105) > the frame's estimate (`Border` or
+///   `Percentile`) > the frame's estimate (`Border` or
 ///   `Percentile`).
 /// - Dmax: settings Fixed > the frame's estimate.
 /// - Gamma: settings Fixed (`Fixed`) > the film correction (`Profile`,
@@ -372,7 +370,7 @@ fn estimate_frame_and_floor(
     }
     let pooled = ctx.pooled.copied().unwrap_or_default();
 
-    // Step 3: the analysis area (Rulings 90, 91 and 134). Without an
+    // Step 3: the analysis area. Without an
     // analysis area or a crop the whole grid is used, with no copy, exactly
     // as before.
     let area = analysis_area(grid, grid_density, &settings.geometry)?;
@@ -497,7 +495,7 @@ fn estimate_frame_and_floor(
 
 /// Number of cells of the analysis grid of `grid` under `geometry`: the
 /// whole grid without an analysis area or a crop, else the buffered
-/// analysis grid (Rulings 90 and 134).
+/// analysis grid.
 fn analysis_cell_count(grid: &AnalysisGrid, geometry: &Geometry) -> usize {
     if geometry.analysis_rect().is_none() {
         return grid.cells();
@@ -515,7 +513,7 @@ fn analysis_cell_count(grid: &AnalysisGrid, geometry: &Geometry) -> usize {
 /// black-point floor flag. Made by [`plan_frame`] from the frame's analysis
 /// grid; [`render_full`] and [`crate::render_region`] render with it, so
 /// the export and every preview tile of the same frame and settings share
-/// one plan (Step 8 of docs/MATHS.md (preview), Ruling 73).
+/// one plan (Step 8 of docs/MATHS.md (preview)).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FramePlan {
     /// Steps 3 to 6: what was estimated or fixed for this frame, as
@@ -525,8 +523,7 @@ pub struct FramePlan {
     /// `estimates.x0`.
     pub coefficients: PrintCoefficients,
     /// Number of cells in the analysis grid of step 3: the whole grid
-    /// without an analysis area or a crop, else the buffered analysis grid
-    /// (Rulings 90 and 134).
+    /// without an analysis area or a crop, else the buffered analysis grid.
     pub grid_cells: u32,
     /// Step 5 (ADR 0030): true when the black-point floor raised `x_0`
     /// above the anchor's. Taken from the same exposure solve that set
@@ -536,7 +533,7 @@ pub struct FramePlan {
 
 /// Steps 3 to 6 of `docs/MATHS.md` for one frame on its analysis grid,
 /// plus the step 5 print coefficients: [`estimate_frame`] (with the same
-/// precedence, errors and analysis area of Ruling 90) followed by
+/// precedence, errors and analysis area) followed by
 /// [`PrintCoefficients::new`] of `settings.print` and the `x_0` it found.
 ///
 /// `grid` must be [`analysis_grid`] of the frame's linear image at
@@ -577,10 +574,10 @@ pub fn plan_frame(
 /// 1. `settings.validate()`.
 /// 2. Step 3: the analysis grid with [`analysis_grid`] at
 ///    [`ANALYSIS_GRID_LONG_SIDE`], and its density with [`density_grid`]
-///    (the rig model `ctx.density` when given, R-density-use).
+///    (the rig model `ctx.density` when given).
 /// 3. Steps 3 to 6 and the step 5 coefficients: [`plan_frame`]
 ///    ([`estimate_frame`]: Dmin, Dmax, gamma, neutral offset, cast, anchor
-///    and `x_0` by the R-lock precedence; then [`PrintCoefficients::new`]).
+///    and `x_0` by the lock precedence of ADR 0017; then [`PrintCoefficients::new`]).
 /// 4. Steps 3 to 7 fused on the full frame: [`render_full`] on `linear`
 ///    with `ctx.density` (the density of step 3 taken per pixel) and
 ///    `camera_to_working`, the step 7 matrix into the working space chosen by
@@ -588,7 +585,7 @@ pub fn plan_frame(
 ///    matrix for RAW input: it holds the BT.2087 Rec.709-to-Rec.2020 matrix
 ///    there (ADR 0026) and the embedded profile's colorant matrix for a
 ///    tagged TIFF. `None` skips step 7, leaving the output in the input's
-///    own RGB; a rig does not change it, R-step7.
+///    own RGB; a rig does not change it.
 ///
 /// # Errors
 ///
@@ -1051,13 +1048,13 @@ mod tests {
             dmin_with_pool(&own, None),
             ([0.2, 0.5, 0.9], DminSource::Percentile)
         );
-        // A Border frame takes the pool even when it is higher (Ruling 59).
+        // A Border frame takes the pool even when it is higher.
         let border = est([0.2, 0.5, 0.7], DminSource::Border);
         assert_eq!(
             dmin_with_pool(&border, pooled),
             ([0.3, 0.6, 0.8], DminSource::Roll)
         );
-        // A percentile frame takes the lower value per channel (Ruling 105).
+        // A percentile frame takes the lower value per channel.
         let below = est([0.2, 0.5, 0.7], DminSource::Percentile);
         assert_eq!(
             dmin_with_pool(&below, pooled),
@@ -1719,7 +1716,7 @@ mod tests {
 
     #[test]
     fn level_0_tiles_assemble_to_render_frame_with() {
-        // Ruling 73: tiles of level 0 rendered with the frame plan are the
+        // Tiles of level 0 rendered with the frame plan are the
         // export render, pixel for pixel, including the ragged last row and
         // column of tiles.
         let img = textured_negative(1100, 700, [0.25, 0.55, 0.8], [1.6, 1.8, 2.0]);

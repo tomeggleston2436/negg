@@ -65,8 +65,8 @@ pub struct Frame {
     pub licence: String,
     /// The physical film roll the frame was cut from, when it is scanned
     /// more than once (for example under several light sources, each scan
-    /// its own `roll`). Groups frames for the Gate 2 three-lights metric
-    /// (Ruling 53). Frames of one film roll share `stock`.
+    /// its own `roll`). Groups frames for the Gate 2 three-lights metric.
+    /// Frames of one film roll share `stock`.
     #[serde(default)]
     pub film_roll: Option<String>,
     /// The rig profile (`*.rig.negg.toml`) the roll is rendered with,
@@ -79,7 +79,7 @@ pub struct Frame {
     pub film_profile: Option<String>,
     /// The frame's geometry (crop, analysis buffer, rotation and flip), as
     /// `Settings.geometry` takes it. `negg eval` renders the frame with it
-    /// as a frame override in roll mode (Ruling 71: the whole geometry), so
+    /// as a frame override in roll mode (the whole geometry), so
     /// the film holder can be cropped away per frame. Absent means the
     /// roll's default geometry, exactly as before the field existed.
     #[serde(default)]
@@ -100,7 +100,7 @@ pub struct FrameGeometry {
     /// side of it for analysis only, in `[0, 0.2]`; defaults to
     /// [`negg_types::ANALYSIS_BUFFER_DEFAULT`]. The manifest has no
     /// analysis area yet, so the analysis rectangle is the crop, and the
-    /// buffer is ignored without one (Rulings 90 and 134).
+    /// buffer is ignored without one.
     #[serde(default = "default_analysis_buffer")]
     pub analysis_buffer: f32,
     /// Clockwise rotation in degrees: 0, 90, 180 or 270.

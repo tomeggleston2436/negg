@@ -71,23 +71,23 @@ pub struct ToleranceTable {
 }
 
 /// Default for [`ToleranceTable::dmin_std`]: a placeholder chosen before
-/// any corpus frame existed (Controller choice, TODO(measure)).
+/// any corpus frame existed (Provisional choice, TODO(measure)).
 pub const DEFAULT_DMIN_STD: f32 = 0.005;
 /// Default for [`ToleranceTable::roll_to_roll_dmin_std`]: a placeholder
-/// (Controller choice, TODO(measure)).
+/// (Provisional choice, TODO(measure)).
 pub const DEFAULT_ROLL_TO_ROLL_DMIN_STD: f32 = 0.01;
 /// Default for [`ToleranceTable::three_lights_de`]: a placeholder
-/// (Controller choice, TODO(measure)).
+/// (Provisional choice, TODO(measure)).
 pub const DEFAULT_THREE_LIGHTS_DE: f32 = 0.10;
 
 /// Default for [`ToleranceTable::tone_l_abs_diff`]: a placeholder chosen
-/// before any registered reference existed (Controller choice,
+/// before any registered reference existed (Provisional choice,
 /// TODO(measure)).
 pub const DEFAULT_TONE_L_ABS_DIFF: f32 = 0.5;
 /// Default for [`ToleranceTable::tone_chroma_abs_diff`]: a placeholder
-/// (Controller choice, TODO(measure)).
+/// (Provisional choice, TODO(measure)).
 pub const DEFAULT_TONE_CHROMA_ABS_DIFF: f32 = 0.5;
-/// Default for [`ToleranceTable::tone_cast_ab`]: a placeholder (Controller
+/// Default for [`ToleranceTable::tone_cast_ab`]: a placeholder (Provisional
 /// choice, TODO(measure)).
 pub const DEFAULT_TONE_CAST_AB: f32 = 0.5;
 

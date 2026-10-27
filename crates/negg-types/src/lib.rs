@@ -8,7 +8,7 @@
 //!
 //! Must not depend on anything beyond serde, and must not contain
 //! image-processing maths or I/O. [`Geometry::apply`] and [`Image::crop`]
-//! only move pixels (Ruling 70).
+//! only move pixels.
 
 pub mod error;
 pub mod estimates;

@@ -181,7 +181,7 @@ fn batch_preset_keeps_frame_looks_unless_all_frames() {
         assert_eq!(s.settings.print, default_plus_rich().print, "{f}");
         assert!(!s.overrides.print.has_own_look(), "{f}");
     }
-    // b keeps the whole look it rendered with before (Ruling 5).
+    // b keeps the whole look it rendered with before.
     let s = sidecar(&b_path);
     assert_eq!(s.overrides.print.grade, Some(100.0));
     let old = Settings::default().print;
@@ -193,7 +193,7 @@ fn batch_preset_keeps_frame_looks_unless_all_frames() {
     );
     assert_eq!(s.overrides.print.saturation, Some(old.saturation));
     // Its resolved print is exactly the old one, the label included: it
-    // had none, pinned as "" (Ruling 8).
+    // had none, pinned as "".
     assert_eq!(s.overrides.print.preset.as_deref(), Some(""));
     assert_eq!(s.settings.print.preset, None);
     assert_eq!(s.settings.print, old_with_grade(100.0));

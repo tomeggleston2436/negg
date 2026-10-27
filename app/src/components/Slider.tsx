@@ -4,7 +4,7 @@
 // reports `onCommit` once. The thumb follows the drag even when the caller
 // does not preview. A value outside the UI range (from a sidecar) is shown
 // clamped on the track and unchanged in the number field, and is never
-// rewritten until the user changes it (Ruling 78).
+// rewritten until the user changes it.
 
 import { useEffect, useId, useRef, useState } from "react";
 import { type SliderSpec, clampToSpec, enteredValue, formatValue, outOfRange, sliderPosition } from "../sliders";

@@ -172,7 +172,7 @@ fn convert_honours_a_settings_file() {
 
 #[test]
 fn convert_takes_a_sidecar_as_settings() {
-    // Ruling 33: a sidecar passed as --settings is read through
+    // A sidecar passed as --settings is read through
     // negg_io::migrate and its settings are used.
     let dir = TempDir::new("sidecar-settings");
     let input = dir.path("frame.tif");

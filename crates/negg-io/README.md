@@ -59,11 +59,11 @@ the raw JSON before deserialising anything else. A missing, non-integer or
 unknown version is `IoError::Schema`; a version newer than this build
 understands says so and asks for an upgrade. Migration is a ladder of
 `upgrade_vN_to_vN+1` steps on the raw `serde_json::Value` ending at the
-current version; `upgrade_v1_to_v2` (Ruling 51) sets both schema versions to 2 and, when
+current version; `upgrade_v1_to_v2` sets both schema versions to 2 and, when
 `estimates` is present, adds `neutral_offset = [0, 0, 0]` and a
 `cast_source` of `fit` (cast `cells_used > 0`) or `identity`;
-`upgrade_v2_to_v3` (Ruling 71, adds `geometry`) and `upgrade_v3_to_v4`
-(Ruling 134, adds `geometry.analysis_area`) set the two version fields and
+`upgrade_v2_to_v3` (adds `geometry`) and `upgrade_v3_to_v4`
+(adds `geometry.analysis_area`) set the two version fields and
 nothing else, because an absent field takes its default. Adding
 the next version means bumping the constant, writing the next
 `upgrade_vN_to_vN+1`, and adding it to the ladder in `migrate`. Within one

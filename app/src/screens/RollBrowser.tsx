@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // The roll browser: open a folder, see the negatives and set the roll's
-// analysis area before pressing Analyse (Ruling 136), watch the analysis
+// analysis area before pressing Analyse, watch the analysis
 // progress, pick frames (thumbnail grid with status badges) and edit the roll
-// settings. Also the re-pooling indicator's polling hook both screens use
-// (Ruling 127).
+// settings. Also the re-pooling indicator's polling hook both screens use.
 
 import { useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -19,7 +18,7 @@ import { AnalysisAreaPanel, AreaSketch } from "../components/AnalysisAreaPanel";
 const REPOOL_POLL_MS = 400;
 
 /**
- * While a re-pool is pending (Rulings 124 and 127), asks for the roll view
+ * While a re-pool is pending, asks for the roll view
  * again every REPOOL_POLL_MS until it clears, then for the frame view of
  * `frame` (when given) so the estimates shown are on the new pool. The
  * `negg://analysis` event already refreshes the roll; polling covers an

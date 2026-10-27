@@ -7,7 +7,7 @@
 //! normalised log exposure triple `e = (e_R, e_G, e_B)`, nominally in
 //! `[-1, 0]`. After ADR 0011 the print is brighter where `e` is more
 //! negative, so luma and hue are read on the print-space orientation
-//! `p = -e` (ADR 0009 as amended by Ruling 30): a cell that prints green
+//! `p = -e` (ADR 0009, amended): a cell that prints green
 //! has `p_G` largest. For a triple `e`:
 //!
 //! ```text
@@ -87,13 +87,13 @@ const MIN_CELLS: usize = 8;
 const SLOPE_RANGE: (f64, f64) = (0.5, 2.0);
 /// Below this standard deviation of `e_G` over the cells of the returned
 /// fit its slopes are not identified and are set to 1 (ADR 0027).
-/// Controller choice, `TODO(measure)`.
+/// Provisional choice, `TODO(measure)`.
 const MIN_G_SPREAD: f64 = 0.03;
 /// In a refinement, a cell whose chroma after the current correction
 /// exceeds this is scene colour, not a neutral, and is dropped (ADR 0027).
-/// Controller choice, `TODO(measure)`.
+/// Provisional choice, `TODO(measure)`.
 const NEUTRAL_CHROMA_MAX: f32 = 0.1;
-/// Most refinements after the provisional fit (ADR 0027). Controller
+/// Most refinements after the provisional fit (ADR 0027). Provisional
 /// choice, `TODO(measure)`.
 const MAX_REFINEMENTS: usize = 4;
 
@@ -742,7 +742,7 @@ mod tests {
 
     #[test]
     fn slope_casts_are_removed_on_a_realistic_green_range() {
-        // ADR 0027 (fix round 1): a grey scene whose e_G spans 0.5 or 0.3
+        // ADR 0027: a grey scene whose e_G spans 0.5 or 0.3
         // of the normalised range, not the whole of [-1, 0], under slope
         // casts of 1.6 and 0.65. The lowest-chroma cells cluster where the
         // fitted lines cross neutral; the provisional fit must still

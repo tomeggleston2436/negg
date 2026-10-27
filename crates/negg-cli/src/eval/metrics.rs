@@ -8,7 +8,7 @@
 //! [`negg_cms::lab::rec2020_linear_to_lab`]. A reference render is taken
 //! to be sRGB-encoded and goes through [`negg_cms::lab::srgb_to_lab`],
 //! both when it is compared with the render and when two references are
-//! compared with each other ([`reference_distance`], Ruling 32);
+//! compared with each other ([`reference_distance`]);
 //! the ICC profile embedded in a reference TIFF is read by `negg-decode`
 //! but not honoured here. TODO(phase 2): linearise references through
 //! their embedded profile with `negg-cms`.
@@ -50,9 +50,9 @@ pub struct Neutrality {
     pub a_mean_abs: f32,
     /// Mean of |b*| over the patch.
     pub b_mean_abs: f32,
-    /// The neutrality error the plan's Gate 1 bounds ("grey-card neutrality
+    /// The neutrality error Gate 1 bounds ("grey-card neutrality
     /// error is under dE 4"): the chroma of the patch's mean colour,
-    /// `sqrt(mean(a*)^2 + mean(b*)^2)` with signed means (Ruling 32).
+    /// `sqrt(mean(a*)^2 + mean(b*)^2)` with signed means.
     /// Absent from reports written before this field existed, which read
     /// back as zero.
     #[serde(default)]
@@ -82,7 +82,7 @@ pub fn de2000_stats(render: &Image, reference: &Image) -> Result<DeStats, EvalEr
 }
 
 /// CIEDE2000 between two reference renders, both sRGB-encoded: the
-/// per-frame reference-to-reference distance of Ruling 32 (negadoctor
+/// per-frame reference-to-reference distance (negadoctor
 /// against NegPy), with the same statistics as [`de2000_stats`].
 ///
 /// # Errors

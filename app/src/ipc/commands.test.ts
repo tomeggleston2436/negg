@@ -85,7 +85,7 @@ describe("commands", () => {
     ]);
   });
 
-  it("calls the analysis area commands (Rulings 134 and 136)", async () => {
+  it("calls the analysis area commands", async () => {
     const replies: Record<string, unknown> = {
       start_analysis: rollView,
       negative_view: negativeView,

@@ -1,12 +1,12 @@
 # negg: rig and film profiles
 
-This document is the schema for the two profile files `negg` reads: a rig profile (`<name>.rig.negg.toml`) describing the scanning setup, and a film profile (`<name>.film.negg.toml`) describing a film stock. Both use the `*.negg.toml` suffix fixed by decision 4 (`docs/ADR/0004-naming.md`). The maths each table feeds is in `docs/MATHS.md`; this document only says how the numbers are stored and where they came from. The rulings behind it are in ADRs 0014 to 0019 (all Proposed). The Rust types are in `negg-types` (`profile.rs`) and the TOML reader and writer are in `negg-io`.
+This document is the schema for the two profile files `negg` reads: a rig profile (`<name>.rig.negg.toml`) describing the scanning setup, and a film profile (`<name>.film.negg.toml`) describing a film stock. Both use the `*.negg.toml` suffix fixed by decision 4 (`docs/ADR/0004-naming.md`). The maths each table feeds is in `docs/MATHS.md`; this document only says how the numbers are stored and where they came from. The decisions behind it are in ADRs 0014 to 0019 (all Proposed). The Rust types are in `negg-types` (`profile.rs`) and the TOML reader and writer are in `negg-io`.
 
 Licence: Apache-2.0 (see `docs/LICENSE`). Profile data committed to this repository is also Apache-2.0 (decision 1).
 
 ## Provenance rules
 
-These rules follow ground rule 6 of the plan ("measured, not guessed") and are not negotiable.
+These rules follow ground rule 6 in `ROADMAP.md` ("measured, not guessed") and are not negotiable.
 
 1. Every numeric value in a profile needs a `source`: free text saying how it was measured, in the table that holds the value or in the file header when the whole file comes from one measurement. A value with no traceable source does not get committed.
 2. No stock-specific constants may be committed without a measurement. There is no "typical Portra 400 Dmin" in this repository. If you cannot cite a measurement, do not ship the number: leave the table out so the fallback applies. Readers reject any `source` that is empty or contains `TODO(measure)`, so a placeholder profile cannot be loaded by mistake.
@@ -20,8 +20,8 @@ These rules follow ground rule 6 of the plan ("measured, not guessed") and are n
 - Per-channel values are three-element arrays in R, G, B order. Matrices are three rows, each a three-element array, in R, G, B order for both rows and columns.
 - All floats must be finite.
 - File names (`frame`, `frame_r`, `frame_g`, `frame_b`) are relative to the directory of the profile file.
-- Profile paths stored in `Settings.profiles` resolve relative to the directory of the file that holds them (the roll or frame sidecar). Paths given on the command line are made absolute before they are stored (Ruling 52). In `negg convert` without a roll sidecar, relative `profiles` paths in a `--settings` file resolve against the frame's directory (where its sidecar will be), not the settings file's directory.
-- Profiles are found only by explicit path: `--rig FILE`, `--film FILE`, or `Settings.profiles`. There is no search path. The `profiles/` directory in the repository holds committed profiles, with the layout `profiles/rig/<name>.rig.negg.toml` and `profiles/film/<name>.film.negg.toml` (Ruling 46).
+- Profile paths stored in `Settings.profiles` resolve relative to the directory of the file that holds them (the roll or frame sidecar). Paths given on the command line are made absolute before they are stored. In `negg convert` without a roll sidecar, relative `profiles` paths in a `--settings` file resolve against the frame's directory (where its sidecar will be), not the settings file's directory.
+- Profiles are found only by explicit path: `--rig FILE`, `--film FILE`, or `Settings.profiles`. There is no search path. The `profiles/` directory in the repository holds committed profiles, with the layout `profiles/rig/<name>.rig.negg.toml` and `profiles/film/<name>.film.negg.toml`.
 
 ## Common header
 
@@ -32,7 +32,7 @@ Both profile kinds start with the same top-level fields.
 | `schema_version` | integer | Always `1` for this schema. Readers reject other values. |
 | `name` | string | Human-readable name of the rig or stock. |
 | `source` | string | Free text: how the profile was measured (equipment, target, procedure). Non-empty, never containing `TODO(measure)`. |
-| `measured_on` | string | Date `YYYY-MM-DD`. `negg profile` defaults it to today's UTC date and `--measured-on` overrides it (Ruling 56). |
+| `measured_on` | string | Date `YYYY-MM-DD`. `negg profile` defaults it to today's UTC date and `--measured-on` overrides it. |
 | `method` | enum string, or array of them for a rig | Which procedure produced the profile; enum below. |
 | `residual_rms` | float | Residual RMS of the governing fit, in log-D. |
 | `camera` | string, optional (rig) | Free text naming the camera and lens. |
@@ -76,7 +76,7 @@ A rig profile may carry any subset of the three tables. Each table has its own `
 | `frame` | string | The blank-light frame `F`, relative to the profile file. It is decoded at run time and must be linear. |
 | `mean` | `[r, g, b]` | `mean(F_c)` recorded by the tool at measurement (informational; the runtime recomputes from the frame). |
 | `blur_sigma` | string | The blur rule, written as `"long_side / 64"`. The divisor is fixed by MATHS.md step 2; the field exists so the rule is recorded with the data. |
-| `width`, `height` | integer | Decoded size of the flat. A frame of any other size is an error (Ruling 37). |
+| `width`, `height` | integer | Decoded size of the flat. A frame of any other size is an error. |
 
 The gain clamp [0.25, 4] is a constant of the model, not a profile field.
 
@@ -97,7 +97,7 @@ The gain clamp [0.25, 4] is a constant of the model, not a profile field.
 | `source`, `measured_on` | as header | Say which wedge, and how its densities were known (for example, the certificate). |
 | `residual_rms` | float | Residual RMS of the least-squares fit, log-D. |
 | `n_patches` | integer | Number of patches `N` in the fit. |
-| `model` | string | `"full"` or `"diagonal"`. The diagonal model is used when a neutral wedge or too few patches cannot identify the cross terms (Ruling 39). |
+| `model` | string | `"full"` or `"diagonal"`. The diagonal model is used when a neutral wedge or too few patches cannot identify the cross terms. |
 | `a` | `[r, g, b]` | Offsets `a_c`. |
 | `b` | `[r, g, b]` | Own-channel slopes `b_c`. Every entry must be negative. |
 | `c` | 3x3 | Cross terms `c_ck`, row `c`, column `k`; the diagonal is zero. |
@@ -136,16 +136,16 @@ At run time the model is `D_c = a_c + sum_k G_ck log10(max(I_k, 1e-6))` with `G 
 | `ratio` | `[r, g, b]` | `gamma_c / gamma_G`; the G entry is exactly 1. Applied at render. |
 | `offset` | `[r, g, b]` | Neutral offset `offset_c` in log-D; the G entry is exactly 0. Applied at render as `offset_c / gamma_G` in `e_c`. |
 | `gamma_source` | string | `"neutral_fit"`, the only value phase 2 writes. |
-| `n_patches` | integer | Points used in the fit (`NeutralFit.patches`): 2 for a roll with one grey patch (that patch plus the film base), `N` for `N >= 2` grey patches (Ruling 58). |
+| `n_patches` | integer | Points used in the fit (`NeutralFit.patches`): 2 for a roll with one grey patch (that patch plus the film base), `N` for `N >= 2` grey patches. |
 | `source` | string | How it was measured. |
 
 ### What is applied at render
 
-Only `[gamma]` `ratio` and `offset` change a render (Ruling 46). `[base]`, `[dmax]` and the absolute `gamma` are informational, because Dmin and Dmax depend on the rig and the light; the engine keeps estimating them from the frame or roll, with `gamma_G` taken from the frame or the pooled roll (Ruling 45). A profile with no `[gamma]` table, or with `method = "none"`, gives no film correction. `load_film` in `negg-cli` returns an optional correction: a valid profile with `method = "none"` or no `[gamma]` table gives none, and the CLI then warns and renders without a film correction. With a film correction a frame's `gamma_source` is `"profile"` (Ruling 57) and no cast is pooled (the cast is the identity). `"neutral_fit"` appears only in this table, written by `negg profile film`. Using a film profile whose header `rig` differs from the rig profile in use (by name, or one with a rig and the other without) prints a warning.
+Only `[gamma]` `ratio` and `offset` change a render. `[base]`, `[dmax]` and the absolute `gamma` are informational, because Dmin and Dmax depend on the rig and the light; the engine keeps estimating them from the frame or roll, with `gamma_G` taken from the frame or the pooled roll. A profile with no `[gamma]` table, or with `method = "none"`, gives no film correction. `load_film` in `negg-cli` returns an optional correction: a valid profile with `method = "none"` or no `[gamma]` table gives none, and the CLI then warns and renders without a film correction. With a film correction a frame's `gamma_source` is `"profile"` and no cast is pooled (the cast is the identity). `"neutral_fit"` appears only in this table, written by `negg profile film`. Using a film profile whose header `rig` differs from the rig profile in use (by name, or one with a rig and the other without) prints a warning.
 
 ## Input CSV files
 
-Both files are UTF-8, comma separated, with no quoting. Blank lines and lines starting with `#` are ignored; the first other line is the header. A malformed line is an error that names its line number. Rectangles `x, y, width, height` are fractions of the frame, as in the manifest `grey_card`, and must lie inside [0, 1] (Ruling 42).
+Both files are UTF-8, comma separated, with no quoting. Blank lines and lines starting with `#` are ignored; the first other line is the header. A malformed line is an error that names its line number. Rectangles `x, y, width, height` are fractions of the frame, as in the manifest `grey_card`, and must lie inside [0, 1].
 
 `wedge.csv`, for `negg profile rig --wedge W --densities CSV`. The header is exactly `patch,x,y,width,height,density` for a neutral wedge, or `patch,x,y,width,height,density_r,density_g,density_b` for coloured patches. `patch` is a unique label and densities are certified transmission densities, finite and at least 0. Only coloured patches can fit the full density model.
 

@@ -150,7 +150,7 @@ describe("geometry helpers", () => {
   });
 });
 
-describe("typed entry (Ruling 78: never rewrite until the user changes it)", () => {
+describe("typed entry (never rewrite until the user changes it)", () => {
   it("does not commit when the text is unchanged since focus", () => {
     const g = spec("grade");
     // Tabbing through an out-of-range sidecar value.

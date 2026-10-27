@@ -178,8 +178,8 @@ pub struct OutputArgs {
     pub dump_stats: bool,
 }
 
-/// Parses `--crop x,y,w,h` (Ruling 92) and `--analysis-area x,y,w,h`
-/// (Ruling 134): four comma-separated numbers that form a valid
+/// Parses `--crop x,y,w,h` and `--analysis-area x,y,w,h`:
+/// four comma-separated numbers that form a valid
 /// [`CropRect`].
 ///
 /// # Errors
