@@ -20,8 +20,12 @@ impl Scratch {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        // The counter keeps names unique when tests start within the
+        // clock's resolution (microseconds on macOS).
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "negg-session-s-{tag}-{}-{nanos}",
+            "negg-session-s-{tag}-{}-{nanos}-{n}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -231,6 +235,42 @@ fn level_0_tiles_equal_the_render_and_headers_are_right() {
     ));
 }
 
+#[cfg(feature = "gpu")]
+#[test]
+fn gpu_tiles_are_within_one_step_of_cpu_tiles_and_off_gives_the_cpu_bytes() {
+    let gpu = match negg_render::gpu::Gpu::new() {
+        Ok(g) => Arc::new(g),
+        Err(e) if !std::env::var("NEGG_REQUIRE_GPU").is_ok_and(|v| v == "1") => {
+            eprintln!("skipped, {e}");
+            return;
+        }
+        Err(e) => panic!("NEGG_REQUIRE_GPU is 1 but {e}"),
+    };
+    let dir = Scratch::new("gpu-tiles");
+    write_roll(&dir, 2, 600, 400);
+    let mut s = analysed(&dir);
+    s.frame_view(1).unwrap();
+    let cpu = s.render_tile(1, 0, 1, 0).unwrap();
+    s.set_gpu(Some(gpu)).unwrap();
+    assert!(s.uses_gpu());
+    let ours = s.render_tile(1, 0, 1, 0).unwrap();
+    let (h_cpu, p_cpu) = parse_tile(&cpu).unwrap();
+    let (h_gpu, p_gpu) = parse_tile(&ours).unwrap();
+    assert_eq!(h_cpu, h_gpu);
+    assert_eq!(p_cpu.len(), p_gpu.len());
+    for (a, b) in p_cpu.iter().zip(p_gpu) {
+        assert!(a.abs_diff(*b) <= 1, "CPU {a} GPU {b}");
+    }
+    // Errors are the CPU path's.
+    assert!(matches!(
+        s.render_tile(1, 0, 2, 0),
+        Err(SessionError::Invalid(_))
+    ));
+    s.set_gpu(None).unwrap();
+    assert!(!s.uses_gpu());
+    assert!(s.render_tile(1, 0, 1, 0).unwrap() == cpu);
+}
+
 #[test]
 fn scopes_and_thumbnails() {
     let dir = Scratch::new("scopes");
@@ -407,6 +447,7 @@ fn an_unreadable_sidecar_is_read_only_and_never_rewritten() {
                 scope: ExportScope::Roll,
                 format: ExportFormat::Jpeg,
                 out_dir: Some(dir.path("out").to_string_lossy().into_owned()),
+                web: crate::WebOutput::None,
             },
             &mut |e| events.push(e),
         )
@@ -597,6 +638,7 @@ fn export_refuses_external_edits_and_never_overwrites_them() {
         scope: ExportScope::Roll,
         format: ExportFormat::Jpeg,
         out_dir: Some(dir.path("out").to_string_lossy().into_owned()),
+        web: crate::WebOutput::None,
     };
     let err = a.export(&req, &mut |_| {}).unwrap_err();
     assert!(matches!(err, SessionError::Stale(_)), "{err}");
@@ -789,6 +831,7 @@ fn export_size_after_rotate_90_and_crop() {
                 scope: ExportScope::Frames { frames: vec![0, 1] },
                 format: ExportFormat::Tiff16,
                 out_dir: Some(out.to_string_lossy().into_owned()),
+                web: crate::WebOutput::None,
             },
             &mut |_| {},
         )
@@ -1454,10 +1497,236 @@ fn export_drops_the_open_frame_and_the_plans() {
             scope: ExportScope::Roll,
             format: ExportFormat::Jpeg,
             out_dir: Some(dir.path("out").to_string_lossy().into_owned()),
+            web: crate::WebOutput::None,
         },
         &mut |_| {},
     )
     .unwrap();
     assert!(s.open.is_none());
     assert!(s.frames.iter().all(|f| f.plans.is_empty()));
+}
+
+fn preset(name: &str) -> negg_types::Preset {
+    negg_types::builtin_presets()
+        .into_iter()
+        .find(|p| p.name == name)
+        .unwrap()
+}
+
+/// Exposure and CMY overrides only.
+fn corrections() -> FrameOverrides {
+    let mut o = FrameOverrides::default();
+    o.print.exposure = Some(0.25);
+    o.print.cmy = Some([0.02, 0.0, -0.01]);
+    o
+}
+
+/// The resolved look of frame `i`.
+fn look_of(s: &Session, i: usize) -> (negg_types::PrintLook, Option<String>) {
+    let r = resolve(&s.roll, &s.frames[i].overrides);
+    (negg_types::PrintLook::of(&r.print), r.print.preset)
+}
+
+/// Four analysed frames: 0 with a grade nudge only, 1 with the frame
+/// preset "Soft", 2 with exposure and CMY only, 3 with nothing.
+fn preset_roll(dir: &Scratch) -> Session {
+    write_roll(dir, 4, 96, 64);
+    let mut s = analysed(dir);
+    s.commit_frame(0, grade(120.0)).unwrap();
+    s.apply_frame_preset(1, &preset("Soft")).unwrap();
+    s.commit_frame(2, corrections()).unwrap();
+    s
+}
+
+#[test]
+fn frame_preset_sets_only_look_fields() {
+    let dir = Scratch::new("preset-frame");
+    write_roll(&dir, 2, 96, 64);
+    let mut s = analysed(&dir);
+    s.commit_frame(0, corrections()).unwrap();
+    let hard = preset("Hard");
+    let before = s.history_view().len;
+    let view = s.apply_frame_preset(0, &hard).unwrap();
+    assert_eq!(s.history_view().len, before + 1);
+    assert_eq!(look_of(&s, 0), (hard.look, Some("Hard".to_owned())));
+    let r = resolve(&s.roll, &s.frames[0].overrides);
+    assert_eq!(view.settings, r);
+    assert_eq!(r.print.exposure, 0.25);
+    assert_eq!(r.print.cmy, [0.02, 0.0, -0.01]);
+    assert!(s.frames[0].dirty);
+    // The other frame and the roll are untouched.
+    assert_eq!(s.frames[1].overrides, FrameOverrides::default());
+    assert_eq!(s.roll, RollSettings::default());
+}
+
+#[test]
+fn roll_preset_scopes_touch_only_look_fields() {
+    let rich = preset("Rich");
+    let rich_look = (rich.look, Some("Rich".to_owned()));
+
+    let dir = Scratch::new("preset-roll-keep");
+    let mut s = preset_roll(&dir);
+    let soft = look_of(&s, 1);
+    let nudged = look_of(&s, 0);
+    let thumb0 = s.thumbnail_jpeg(0).unwrap();
+    let before0 = s.frames[0].overrides.clone();
+    let print0 = resolve(&s.roll, &before0).print;
+    assert_eq!(print0.preset, None);
+    s.apply_roll_preset(&rich, RollPresetScope::FramesWithoutOwnLook)
+        .unwrap();
+    // Ruling 5: a frame with any look override looks exactly as before.
+    // Frame 0's whole look was pinned into its overrides, its label of
+    // None as "" (Ruling 8), so its resolved print is unchanged, label
+    // included.
+    assert_eq!(resolve(&s.roll, &s.frames[0].overrides).print, print0);
+    assert_eq!(s.frames[0].overrides.print.preset.as_deref(), Some(""));
+    assert_eq!(look_of(&s, 0), nudged);
+    assert_eq!(s.frames[0].overrides.print.grade, Some(120.0));
+    assert!(s.frames[0].overrides.print.toe.is_some());
+    assert!(s.frames[0].overrides.print.saturation.is_some());
+    assert_eq!(s.thumbnail_jpeg(0).unwrap(), thumb0, "render unchanged");
+    assert_eq!(look_of(&s, 1), soft);
+    assert_eq!(look_of(&s, 2), rich_look);
+    assert_eq!(look_of(&s, 3), rich_look);
+    assert_eq!(s.frames[2].overrides, corrections());
+    assert!(s.roll_dirty);
+    // One undo step restores frame 0's overrides exactly.
+    s.undo().unwrap();
+    assert_eq!(s.frames[0].overrides, before0);
+    assert_eq!(s.roll, RollSettings::default());
+
+    let dir = Scratch::new("preset-roll-all");
+    let mut s = preset_roll(&dir);
+    for f in &mut s.frames {
+        f.dirty = false;
+    }
+    let view = s
+        .apply_roll_preset(&rich, RollPresetScope::AllFrames)
+        .unwrap();
+    assert_eq!(view.roll, s.roll);
+    for i in 0..4 {
+        assert_eq!(look_of(&s, i), rich_look, "frame {i}");
+    }
+    assert_eq!(s.frames[2].overrides, corrections());
+    assert!(!s.frames[0].overrides.print.has_own_look());
+    assert!(!s.frames[1].overrides.print.has_own_look());
+    assert_eq!(s.frames[0].overrides, FrameOverrides::default());
+    assert!(s.frames[0].dirty && s.frames[1].dirty);
+    assert!(!s.frames[2].dirty && !s.frames[3].dirty);
+}
+
+#[test]
+fn frames_with_own_look_lists_look_overrides_only() {
+    let dir = Scratch::new("preset-own");
+    let s = preset_roll(&dir);
+    assert_eq!(s.frames_with_own_look(), [0, 1]);
+}
+
+#[test]
+fn roll_preset_waits_for_pass_1_and_records_nothing_unchanged() {
+    let dir = Scratch::new("preset-busy");
+    write_roll(&dir, 2, 96, 64);
+    let mut s = Session::open_roll(&dir.0).unwrap();
+    assert!(matches!(
+        s.apply_roll_preset(&preset("Rich"), RollPresetScope::AllFrames),
+        Err(SessionError::Busy)
+    ));
+    s.analyse_all().unwrap();
+    s.apply_roll_preset(&preset("Rich"), RollPresetScope::AllFrames)
+        .unwrap();
+    let len = s.history_view().len;
+    s.apply_roll_preset(&preset("Rich"), RollPresetScope::AllFrames)
+        .unwrap();
+    assert_eq!(
+        s.history_view().len,
+        len,
+        "nothing changed, nothing recorded"
+    );
+}
+
+#[test]
+fn roll_preset_is_one_undo_step() {
+    let dir = Scratch::new("preset-undo");
+    let mut s = preset_roll(&dir);
+    let roll = s.roll.clone();
+    let overrides: Vec<FrameOverrides> = s.frames.iter().map(|f| f.overrides.clone()).collect();
+    let len = s.history_view().len;
+    s.apply_roll_preset(&preset("Rich"), RollPresetScope::AllFrames)
+        .unwrap();
+    let after_roll = s.roll.clone();
+    let after: Vec<FrameOverrides> = s.frames.iter().map(|f| f.overrides.clone()).collect();
+    assert_eq!(s.history_view().len, len + 1);
+    s.undo().unwrap();
+    assert_eq!(s.roll, roll);
+    let now: Vec<FrameOverrides> = s.frames.iter().map(|f| f.overrides.clone()).collect();
+    assert_eq!(now, overrides);
+    s.redo().unwrap();
+    assert_eq!(s.roll, after_roll);
+    let now: Vec<FrameOverrides> = s.frames.iter().map(|f| f.overrides.clone()).collect();
+    assert_eq!(now, after);
+}
+
+#[test]
+fn roll_preset_undo_skips_a_frame_that_turned_read_only() {
+    let dir = Scratch::new("preset-ro");
+    let mut s = preset_roll(&dir);
+    s.flush().unwrap();
+    let roll = s.roll.clone();
+    let frame0 = s.frames[0].overrides.clone();
+    s.apply_roll_preset(&preset("Rich"), RollPresetScope::AllFrames)
+        .unwrap();
+    let len = s.history_view().len;
+    let path = dir.path("f1.negg.json");
+    std::fs::write(&path, b"{ this is not json").unwrap();
+    assert!(matches!(
+        s.commit_frame(1, grade(100.0)),
+        Err(SessionError::Stale(_))
+    ));
+    assert!(s.frames[1].read_only());
+    // The preset edit stays (its roll part and frame 0), frame 1's own
+    // edit left the history.
+    assert_eq!(s.history_view().len, len - 1);
+    assert!(s.frames_with_own_look().iter().all(|&f| f != 1));
+    s.undo().unwrap();
+    assert_eq!(s.roll, roll);
+    assert_eq!(s.frames[0].overrides, frame0);
+    s.flush().unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"{ this is not json");
+}
+
+#[test]
+fn preset_thumbnail_ignores_a_drag_preview() {
+    let dir = Scratch::new("preset-thumb-preview");
+    write_roll(&dir, 2, 96, 64);
+    let mut s = analysed(&dir);
+    let rich = preset("Rich");
+    let committed = s.preset_thumbnail_jpeg(0, &rich.look).unwrap();
+    // A fresh session too, so the bytes do not come from the cache.
+    let mut fresh = analysed(&dir);
+    let mut dragged = s.frames[0].overrides.clone();
+    dragged.print.exposure = Some(1.5);
+    fresh.preview_frame(0, dragged.clone()).unwrap();
+    assert_eq!(
+        fresh.preset_thumbnail_jpeg(0, &rich.look).unwrap(),
+        committed
+    );
+    s.preview_frame(0, dragged).unwrap();
+    assert_eq!(s.preset_thumbnail_jpeg(0, &rich.look).unwrap(), committed);
+}
+
+#[test]
+fn preset_thumbnail_equals_thumbnail_after_applying() {
+    let dir = Scratch::new("preset-thumb");
+    write_roll(&dir, 2, 96, 64);
+    let mut s = analysed(&dir);
+    s.commit_frame(0, corrections()).unwrap();
+    let rich = preset("Rich");
+    let plain = s.thumbnail_jpeg(0).unwrap();
+    let preview = s.preset_thumbnail_jpeg(0, &rich.look).unwrap();
+    assert_ne!(preview, plain);
+    // Cached: the same bytes again, and the frame's own thumbnail is kept.
+    assert_eq!(s.preset_thumbnail_jpeg(0, &rich.look).unwrap(), preview);
+    assert_eq!(s.thumbnail_jpeg(0).unwrap(), plain);
+    s.apply_frame_preset(0, &rich).unwrap();
+    assert_eq!(s.thumbnail_jpeg(0).unwrap(), preview);
 }

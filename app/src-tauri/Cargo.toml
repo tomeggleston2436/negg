@@ -28,7 +28,7 @@ tauri-build = { version = "2", features = [] }
 # negg-io only for the roll sidecar's path (whether a roll was opened
 # before, Ruling 136); the session reads and writes every sidecar.
 negg-io = { path = "../../crates/negg-io", version = "0.0.0" }
-negg-session = { path = "../../crates/negg-session", version = "0.0.0" }
+negg-session = { path = "../../crates/negg-session", version = "0.0.0", features = ["gpu"] }
 negg-types = { path = "../../crates/negg-types", version = "0.0.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

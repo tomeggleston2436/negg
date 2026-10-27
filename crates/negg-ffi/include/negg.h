@@ -8,9 +8,10 @@
 #include <stddef.h>
 
 /*
- The version of this C ABI; bumped on any incompatible change.
+ The version of this C ABI; bumped on any incompatible change. Version 2
+ added [`negg_export_web`].
  */
-#define NEGG_ABI_VERSION 1
+#define NEGG_ABI_VERSION 2
 
 /*
  The result of every fallible call. `Ok` is zero.
@@ -217,7 +218,8 @@ NeggStatus negg_set_roll_settings(struct NeggSession *s, const char *roll_json);
  [`negg_string_free`]), also when some frames failed. If any frame
  failed the status is [`NeggStatus::Session`] and the first error is the
  last error. An unknown `format` is also [`NeggStatus::Session`], and a
- `frame` below -1 or above `u32::MAX` is [`NeggStatus::NotFound`].
+ `frame` below -1 or above `u32::MAX` is [`NeggStatus::NotFound`]. No
+ web copy is written; [`negg_export_web`] writes one.
 
  # Safety
 
@@ -232,7 +234,27 @@ NeggStatus negg_export(struct NeggSession *s,
                        char **report_json);
 
 /*
- Frees a string returned by negg ([`negg_get_stats`], [`negg_export`]).
+ [`negg_export`] with the web copy (ADR 0035): `web` is 0 for none (as
+ [`negg_export`]), 1 for the original and the web copy (`--web`) and 2
+ for the web copy only (`--web-only`). The web copy is an sRGB JPEG, 2048
+ px on the long edge and never upscaled, at
+ `<out_dir>/web/<stem>.negg.jpg`; the report's `outputs` list it after
+ its original. An unknown `web` is [`NeggStatus::Session`].
+
+ # Safety
+
+ As [`negg_export`].
+ */
+NeggStatus negg_export_web(struct NeggSession *s,
+                           int64_t frame,
+                           uint32_t format,
+                           uint32_t web,
+                           const char *out_dir,
+                           char **report_json);
+
+/*
+ Frees a string returned by negg ([`negg_get_stats`], [`negg_export`],
+ [`negg_export_web`]).
  NULL is a no-op. Never pass any other pointer.
 
  # Safety

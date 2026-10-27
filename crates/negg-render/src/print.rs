@@ -224,23 +224,25 @@ pub fn solve_exposure(anchor_e: f32, print: &PrintSettings) -> ExposureSolve {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PrintCoefficients {
     /// Grade `k`, from [`grade_k`].
-    k: f32,
+    pub(crate) k: f32,
     /// `x_0 + exposure + cmy_c` per channel.
-    x0_total: [f32; 3],
+    pub(crate) x0_total: [f32; 3],
     /// Paper white density `Dmin_p`.
-    dmin_p: f32,
+    pub(crate) dmin_p: f32,
     /// Paper black density `Dmax_p`.
-    dmax_p: f32,
+    pub(crate) dmax_p: f32,
     /// Shoulder steepness `a_hl`.
-    a_hl: f32,
+    pub(crate) a_hl: f32,
     /// Toe steepness `a_sh`.
-    a_sh: f32,
+    pub(crate) a_sh: f32,
     /// Whether black point compensation is applied.
-    bpc: bool,
+    pub(crate) bpc: bool,
     /// `10^-Dmax_p`, the reflectance of paper black.
-    floor: f32,
+    pub(crate) floor: f32,
     /// `1 - 10^-Dmax_p`, the black point compensation denominator.
-    bpc_denominator: f32,
+    pub(crate) bpc_denominator: f32,
+    /// Step 7 saturation `s` (ADR 0033), applied by the fused kernel.
+    pub(crate) saturation: f32,
 }
 
 impl PrintCoefficients {
@@ -279,6 +281,7 @@ impl PrintCoefficients {
             bpc: print.black_point_compensation,
             floor,
             bpc_denominator: 1.0 - floor,
+            saturation: print.saturation,
         })
     }
 
@@ -292,6 +295,13 @@ impl PrintCoefficients {
     #[must_use]
     pub fn x0_total(&self) -> [f32; 3] {
         self.x0_total
+    }
+
+    /// Step 7 of `docs/MATHS.md`: the saturation in use (ADR 0033), 1 for
+    /// none.
+    #[must_use]
+    pub fn saturation(&self) -> f32 {
+        self.saturation
     }
 
     /// Step 5 of `docs/MATHS.md`: whether black point compensation is

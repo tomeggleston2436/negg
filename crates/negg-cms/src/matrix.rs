@@ -300,6 +300,19 @@ pub fn icc_colorants_to_rec2020(red: [f64; 3], green: [f64; 3], blue: [f64; 3]) 
     to_f32(mul_64(mul_64(xyz_to_rec2020, adapt), c))
 }
 
+/// The matrix a Little-CMS matrix/TRC transform applies between the
+/// linearised channels of two RGB profiles, from their colorant tags (the
+/// columns of each profile's RGB-to-PCS matrix): `inverse(dst) * src`.
+///
+/// # Errors
+///
+/// [`CmsError::Singular`] when the destination colorants are singular.
+pub fn colorants_to_colorants(src: [[f64; 3]; 3], dst: [[f64; 3]; 3]) -> Result<Matrix3, CmsError> {
+    let columns = |c: [[f64; 3]; 3]| transpose_64(c);
+    let inv = inverse_64(columns(dst)).ok_or(CmsError::Singular)?;
+    Ok(to_f32(mul_64(inv, columns(src))))
+}
+
 /// The step 7 entry matrix of `docs/MATHS.md`: camera RGB to linear
 /// Rec.2020 (D65), to be applied **after** inversion to `out_c`,
 /// white-normalised per ADR 0012 (Ruling 28).

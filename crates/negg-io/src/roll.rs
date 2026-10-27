@@ -24,8 +24,9 @@ pub const ROLL_SIDECAR_NAME: &str = "roll.negg.json";
 /// frame sidecar's version (Ruling 51); version 2 holds settings of schema
 /// 3, with `geometry` (Ruling 71); version 3 holds settings of schema 4,
 /// with `geometry.analysis_area`, and pool records that may carry
-/// `needs_analysis_area` (Rulings 133 and 134).
-pub const ROLL_SIDECAR_SCHEMA_VERSION: u32 = 3;
+/// `needs_analysis_area` (Rulings 133 and 134); version 4 holds settings of
+/// schema 5, with `print.saturation` and `print.preset` (ADR 0033).
+pub const ROLL_SIDECAR_SCHEMA_VERSION: u32 = 4;
 
 /// Everything negg records about one roll.
 ///
@@ -85,7 +86,9 @@ pub fn read_roll_sidecar(path: &Path) -> Result<RollSidecar, IoError> {
 /// `settings.shared.schema_version` to 3, nothing else (the shared
 /// `geometry` takes its default); version 2 becomes 3 by setting
 /// `schema_version = 3` and both settings versions to 4, nothing else (no
-/// analysis area, no frame flagged, Ruling 134). A missing
+/// analysis area, no frame flagged, Ruling 134); version 3 becomes 4 by
+/// setting `schema_version = 4` and both settings versions to 5, nothing
+/// else (saturation 1, no preset, ADR 0033). A missing
 /// `schema_version` is read as the current version, so `{}` loads as the
 /// default, as it always has.
 ///
@@ -101,8 +104,9 @@ pub fn migrate_roll(value: Value) -> Result<RollSidecar, IoError> {
         _ => schema_version_of(&value)?,
     };
     let value = match version {
-        1 => upgrade_roll_v2_to_v3(upgrade_roll_v1_to_v2(value)),
-        2 => upgrade_roll_v2_to_v3(value),
+        1 => upgrade_roll_v3_to_v4(upgrade_roll_v2_to_v3(upgrade_roll_v1_to_v2(value))),
+        2 => upgrade_roll_v3_to_v4(upgrade_roll_v2_to_v3(value)),
+        3 => upgrade_roll_v3_to_v4(value),
         ROLL_SIDECAR_SCHEMA_VERSION => value,
         v if v > ROLL_SIDECAR_SCHEMA_VERSION => {
             return Err(IoError::Schema(format!(
@@ -129,6 +133,12 @@ fn upgrade_roll_v1_to_v2(value: Value) -> Value {
 /// Upgrades a version 2 roll sidecar value to version 3 (Ruling 134).
 fn upgrade_roll_v2_to_v3(value: Value) -> Value {
     set_roll_versions(value, 3, 4)
+}
+
+/// Upgrades a version 3 roll sidecar value to version 4 (ADR 0033): roll
+/// version 4, settings version 5, nothing else (saturation 1, no preset).
+fn upgrade_roll_v3_to_v4(value: Value) -> Value {
+    set_roll_versions(value, 4, 5)
 }
 
 /// Sets a roll sidecar value's `schema_version` to `roll`, and both its
@@ -269,7 +279,7 @@ mod tests {
         write_roll_sidecar(&path, &sample()).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.ends_with('\n'));
-        assert!(text.contains("\n  \"schema_version\": 3"));
+        assert!(text.contains("\n  \"schema_version\": 4"));
         assert_eq!(read_roll_sidecar(&path).unwrap(), sample());
         assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1, "no temp file");
     }
@@ -287,12 +297,12 @@ mod tests {
         let dir = TempDir::new("reject");
         let path = roll_sidecar_path(&dir.0);
         let mut s = sample();
-        s.schema_version = 4;
+        s.schema_version = 5;
         assert!(matches!(
             write_roll_sidecar(&path, &s),
             Err(IoError::Schema(_))
         ));
-        for bad in [r#"{"schema_version": 4}"#, r#"{"schema_version": 0}"#] {
+        for bad in [r#"{"schema_version": 5}"#, r#"{"schema_version": 0}"#] {
             fs::write(&path, bad).unwrap();
             assert!(
                 matches!(read_roll_sidecar(&path), Err(IoError::Schema(_))),

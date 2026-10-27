@@ -9,11 +9,13 @@ import {
   type State,
   analysing,
   awaitingAnalysis,
+  dragging,
   exportBlocked,
   historyBlocked,
   initialState,
   neighbour,
   reducer,
+  previewKey,
   shownOverrides,
 } from "./reducer";
 
@@ -105,6 +107,29 @@ describe("reducer", () => {
     expect(shownOverrides(s)).toBe(frame.overrides);
     // Generations never go backwards.
     expect(s.generation).toBe(12);
+  });
+
+  it("counts only a drag's draft as dragging, not a commit's", () => {
+    const a = emptyOverrides();
+    a.print.grade = 100;
+    const b = emptyOverrides();
+    b.print.black_point_compensation = true;
+    let s = run([
+      { type: "roll/loaded", roll },
+      { type: "frame/open", index: 0 },
+      { type: "frame/loaded", frame },
+      { type: "frame/draft", overrides: a, drag: true },
+    ]);
+    expect(dragging(s)).toBe(true);
+    // The release commits the same values as a new draft: no longer a drag.
+    s = reducer(s, { type: "frame/draft", overrides: { ...a } });
+    expect(dragging(s)).toBe(false);
+    // A tick box commits straight away.
+    s = run([{ type: "frame/loaded", frame }, { type: "frame/draft", overrides: b }], s);
+    expect(s.draft).toBe(b);
+    expect(dragging(s)).toBe(false);
+    s = reducer(s, { type: "frame/discard-draft" });
+    expect(dragging(s)).toBe(false);
   });
 
   it("keeps the newest scopes for the open frame", () => {
@@ -253,5 +278,32 @@ describe("reopening", () => {
       { type: "thumbs/loaded", frame: 1, url: "blob:b" },
     ]);
     expect(s.thumbUrls).toEqual({ 1: "blob:b", 2: null });
+  });
+});
+
+describe("presets in the store", () => {
+  const list = {
+    presets: [{ name: "Soft", look: { grade: 95, toe: 4, shoulder: 2, black_point_compensation: false, saturation: 0.95 } }],
+    builtins: 1,
+    warnings: ["broken.preset.negg.toml: unreadable"],
+  };
+
+  it("keeps the preset list and its warnings, across opening another roll", () => {
+    const s = run([{ type: "presets/loaded", list }, { type: "roll/opening" }, { type: "roll/loaded", roll }]);
+    expect(s.presets).toEqual(list.presets);
+    expect(s.presetWarnings).toEqual(list.warnings);
+    expect(s.presetBuiltins).toBe(1);
+  });
+
+  it("records preview URLs per frame and preset, and drops them for a new roll", () => {
+    let s = run([
+      { type: "roll/loaded", roll },
+      { type: "presets/preview", frame: 0, name: "Soft", url: "blob:1" },
+      { type: "presets/preview", frame: 1, name: "Soft", url: null },
+    ]);
+    expect(s.presetUrls[previewKey(0, "Soft")]).toBe("blob:1");
+    expect(s.presetUrls[previewKey(1, "Soft")]).toBeNull();
+    s = run([{ type: "roll/opening" }], s);
+    expect(s.presetUrls).toEqual({});
   });
 });

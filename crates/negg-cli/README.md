@@ -14,9 +14,10 @@ paths. The output, stderr text and exit codes are unchanged by the move.
 ## Owns
 
 - The `negg` binary and its subcommands: `convert`, `batch`, `profile`
-  (`rig` and `film`), `lock` and `eval` (`src/cli.rs`, `src/main.rs`). Exit
-  status: 0 ok, 1 conversion, measurement or I/O failure (for `batch`, any
-  frame), 2 usage, settings, profile or manifest error, 3 eval regression
+  (`rig` and `film`), `lock`, `preset list` and `eval` (`src/cli.rs`,
+  `src/main.rs`). Exit status: 0 ok, 1 conversion, measurement or I/O
+  failure (for `batch`, any frame), 2 usage, settings, profile or manifest
+  error, 3 eval regression
 - `negg convert` and `negg batch` (`src/roll.rs`, `src/convert.rs`): each
   maps its arguments to a `negg_session::OutputRequest` and calls
   `negg_session::convert_one` or `batch_dir`, which decode with `negg-decode`,
@@ -60,7 +61,39 @@ paths. The output, stderr text and exit codes are unchanged by the move.
   file replaces the stored look (film, print, colour, profiles) and keeps
   the stored geometry (crop, analysis area, buffer, rotation, flip) unless
   it has a `geometry` key of its own; `negg batch` warns, naming the parts
-  it replaced, and stores the result
+  it replaced, and stores the result. `--preset` applies after it
+- Tone presets (ADR 0034, Ruling 7), shared by `convert` and `batch`:
+  - `--preset NAME|FILE`: a built-in or user preset name (case-insensitive)
+    or a `*.preset.negg.toml` file. It sets grade, toe, shoulder, black point
+    compensation, saturation and the preset label, and nothing else. An
+    unknown name (the message lists the available ones) or an unreadable
+    file is a usage error (exit 2). Without roll mode it sets the frame's
+    settings, and a frame whose sidecar overrides set its own look keeps it
+    with a warning naming the frame. `negg convert` of a roll frame writes
+    it into the frame's sidecar overrides, as the app's frame preset does.
+    `negg batch` in roll mode makes it the roll's look, stored in
+    `roll.negg.json`; a frame with its own look keeps rendering and being
+    labelled exactly as before, its whole current look being written into
+    its sidecar overrides (a frame with no label gets the label override
+    `""`, which means none), as the app's roll preset does for "Frames
+    without their own look"
+  - `--preset-all-frames`: with `--preset`, `negg batch` in roll mode only
+    (a usage error elsewhere): frames with their own look have it cleared,
+    so every frame takes the preset, as the app's "All frames". Their other
+    overrides stay
+  - `negg preset list`: one line per preset, the name, a tab, then
+    `(built-in)` or the file it was read from. User presets live in
+    `$NEGG_PRESETS_DIR` when set, else `negg/presets` in the platform config
+    folder; a file that cannot be used is skipped with a
+    `negg preset: warning:` line on stderr
+- Web output (ADR 0035), shared by `convert` and `batch`: `--web` also
+  writes a web copy of each frame to `<out>/web/<stem>.negg.jpg` (beside the
+  sources when there is no `--out`), and `--web-only` writes only that (the
+  two conflict, exit 2). The web copy is made from the same render, after
+  geometry: an sRGB JPEG with the profile embedded whatever `--space` says,
+  quality 85, 2048 px on the long edge and never upscaled. Sidecars are
+  written as for any conversion, and `negg batch` never takes the `web/`
+  folder's files as inputs
 - Roll mode (`negg-session`'s `roll.rs`, printed from `src/roll.rs`):
   `negg batch <dir>` treats the batch inputs of one directory as a roll.
   Pass 1 decodes one frame at a time, applies
@@ -131,8 +164,10 @@ paths. The output, stderr text and exit codes are unchanged by the move.
   and exits with status 3 on a regression
 - `tests/`: end-to-end tests on synthetic data. Among them `crop.rs` and
   `analysis_area.rs` (the crop, the analysis area and the pinned-frame pool
-  guard), and `app_parity.rs` (Gate 3's automatic half: `Session` exports are
-  byte-equal to this binary's `batch` and `convert`, ADR 0024)
+  guard), `presets.rs` (`--preset`, `--preset-all-frames` and
+  `preset list`), and `app_parity.rs` (Gate 3's automatic half: `Session`
+  exports are byte-equal to this binary's `batch` and `convert`, ADR 0024,
+  with the roll and frame presets too)
 
 ## Must not
 

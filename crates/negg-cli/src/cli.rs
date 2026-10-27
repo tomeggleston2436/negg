@@ -33,6 +33,21 @@ pub enum Command {
     /// Lock a converted frame's current estimates into its sidecar
     /// overrides, so later renders keep them.
     Lock(LockArgs),
+    /// Tone presets: the built-in ones and the user's
+    /// `*.preset.negg.toml` files in the presets folder.
+    #[command(subcommand)]
+    Preset(PresetCommand),
+}
+
+/// `negg preset` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum PresetCommand {
+    /// List the presets `--preset` can name, one per line: the name, a tab,
+    /// then `(built-in)` or the file it was read from. The user presets
+    /// folder is `$NEGG_PRESETS_DIR` when set, else `negg/presets` in the
+    /// platform config folder. Files that cannot be used are skipped with a
+    /// warning.
+    List,
 }
 
 /// Output file formats.
@@ -101,12 +116,39 @@ pub struct OutputArgs {
     /// the stored look (film, print, colour, profiles) and keeps the stored
     /// geometry (crop, analysis area, buffer, rotation, flip) unless it has
     /// a `geometry` key; `negg batch` warns when it replaces stored
-    /// settings and stores the result in `roll.negg.json`.
+    /// settings and stores the result in `roll.negg.json`. `--preset`
+    /// applies after it.
     #[arg(long, value_name = "FILE")]
     pub settings: Option<PathBuf>,
+    /// A tone preset: a built-in or user preset name (case-insensitive;
+    /// `negg preset list` shows them) or a `*.preset.negg.toml` file. It
+    /// sets grade, toe, shoulder, black point compensation and saturation,
+    /// and the preset label, after `--settings`. Without roll mode it sets
+    /// them on the frame's settings. `negg convert` of a frame in a roll
+    /// sets them as the frame's own look, in its sidecar overrides. `negg
+    /// batch` in roll mode sets them as the roll's look, stored in
+    /// `roll.negg.json`; a frame with its own look keeps rendering exactly
+    /// as before (its whole current look is written into its sidecar
+    /// overrides) unless `--preset-all-frames` is given.
+    #[arg(long, value_name = "NAME|FILE")]
+    pub preset: Option<String>,
+    /// With `--preset` in `negg batch` roll mode: clear the own look of
+    /// frames that have one, so every frame takes the preset. Their other
+    /// overrides stay.
+    #[arg(long, requires = "preset")]
+    pub preset_all_frames: bool,
     /// Output file format.
     #[arg(long, value_enum, default_value_t = Format::Tiff16)]
     pub format: Format,
+    /// Also write a web copy of each frame to `<out>/web/<stem>.negg.jpg`:
+    /// an sRGB JPEG (whatever `--space` says) at quality 85, 2048 px on the
+    /// long edge and never upscaled, with the same framing as the output.
+    #[arg(long, conflicts_with = "web_only")]
+    pub web: bool,
+    /// Write only the web copy (as `--web`), no full-size output. The
+    /// sidecars are written as for any conversion.
+    #[arg(long)]
+    pub web_only: bool,
     /// Output colour space. Defaults to the settings' `colour.output_space`
     /// (sRGB unless a settings file says otherwise).
     #[arg(long, value_enum)]
@@ -636,6 +678,27 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn preset_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "negg",
+            "batch",
+            "roll",
+            "--preset",
+            "Rich",
+            "--preset-all-frames",
+        ])
+        .unwrap();
+        let Command::Batch(args) = cli.command else {
+            panic!("expected batch");
+        };
+        assert_eq!(args.output.preset.as_deref(), Some("Rich"));
+        assert!(args.output.preset_all_frames);
+        assert!(Cli::try_parse_from(["negg", "batch", "roll", "--preset-all-frames"]).is_err());
+        let cli = Cli::try_parse_from(["negg", "preset", "list"]).unwrap();
+        assert!(matches!(cli.command, Command::Preset(PresetCommand::List)));
     }
 
     #[test]

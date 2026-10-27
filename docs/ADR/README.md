@@ -33,6 +33,10 @@ The directory listing is the index. Notable entries:
 - 0030: the print stage floors `x_0` so that the film base prints at least at `P = 2.0`, a black point (reopens and supersedes in part 0008).
 - 0031: the black point of 0030 moves to the knee of the toe, `P_black = Dmax_p - ln(2) / a_sh` (2.1845 with the defaults), derived from the paper constants; narrows the shadow and midtone gap to reference renders (reopens and supersedes in part 0030).
 - 0032: a frame whose Dmax is pinned at the density cap (a holder in the analysed area) is left out of the gamma and cast pools and flagged "needs analysis area"; an all-pinned roll has no gamma pool (amends 0017 and 0029).
+- 0033: saturation about the Rec.2020 luminance in step 7 (`print.saturation`, default 1, skipped at 1) and a `print.preset` label; settings schema 5, roll sidecar schema 4.
+- 0034: tone presets (`PrintLook`, `Preset`, six built-ins, `*.preset.negg.toml` files); sets only grade, toe, shoulder, black point compensation, saturation and the label.
+- 0035: web export (long edge 2048, JPEG quality 85, sRGB with ICC, area-average downscale in linear light, `web/<stem>.negg.jpg`).
+- 0036: GPU preview kernel (steps 3 to 7 and the sRGB display encoding in WGSL behind the `gpu` feature, within 1/4096 of the CPU positive and one 8-bit step of the CPU tile; the CPU sRGB transform runs tiles on every core; a coarser level while a slider is dragged).
 
 ## Status values
 

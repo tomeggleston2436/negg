@@ -13,7 +13,9 @@
 //! therefore does not share one between threads: [`OutputTransform::apply`]
 //! and [`OutputTransform::apply_u8`] split the image into bands of whole
 //! pixels (whole rows and more, for a wide frame) and run them in parallel with rayon, building one Little-CMS transform per
-//! worker for the same space and intent (ADR 0013). The result is
+//! worker for the same space and intent (ADR 0013). An image smaller than
+//! one full band (a preview tile) is split into about one band per thread
+//! instead, so it also runs on every core. The result is
 //! identical to converting every pixel with a single transform, because
 //! each pixel is converted on its own. [`Clone`] for `OutputTransform`
 //! rebuilds the transforms from the same space and intent.
@@ -33,11 +35,24 @@ use crate::profiles::{output_profile, space_name, working_profile};
 /// copy to stay in cache, large enough that the per-call overhead is lost.
 const CHUNK_PIXELS: usize = 4096;
 
-/// Pixels per parallel band of [`convert`]: whole multiples of
+/// The largest parallel band of [`convert`]: whole multiples of
 /// [`CHUNK_PIXELS`], so that a 24 MP frame splits into about 90 bands for
 /// load balancing while each worker builds its Little-CMS transform once
 /// per rayon job rather than once per band.
 const BAND_PIXELS: usize = CHUNK_PIXELS * 64;
+
+/// Pixels per parallel band of [`convert`] for an image of `pixels`:
+/// [`BAND_PIXELS`] for a large image, and for a smaller one (a 512-pixel
+/// preview tile is exactly one [`BAND_PIXELS`]) about one band per rayon
+/// thread, so that it still runs on every core. Always a whole multiple
+/// of [`CHUNK_PIXELS`]. Building a transform costs about as much as
+/// converting a few thousand pixels, hence the one-chunk floor.
+fn band_pixels(pixels: usize) -> usize {
+    let per_thread = pixels.div_ceil(rayon::current_num_threads().max(1));
+    per_thread
+        .next_multiple_of(CHUNK_PIXELS)
+        .clamp(CHUNK_PIXELS, BAND_PIXELS)
+}
 
 /// The ICC rendering intent for an export. For the matrix/TRC profiles
 /// this crate generates the two are the same transform (matrix/TRC profiles
@@ -134,9 +149,9 @@ fn convert_band<O: Copy + Pod>(
 }
 
 /// Converts every pixel of `image` in parallel over bands of
-/// [`BAND_PIXELS`]. The first band is converted with `transform`; every
-/// other rayon worker builds its own transform with `build` (Little-CMS
-/// transforms are not `Sync`).
+/// [`band_pixels`]. An image of one band is converted with `transform`;
+/// otherwise every rayon worker builds its own transform with `build`
+/// (Little-CMS transforms are not `Sync`).
 fn convert<O, B>(transform: &Transform<[f32; 3], O>, build: B, image: &Image) -> Vec<O>
 where
     O: Copy + Pod + Send,
@@ -145,15 +160,16 @@ where
     let pixels = image.width() * image.height();
     let mut out = vec![O::zeroed(); pixels];
     let channels = image.channels();
-    if pixels <= BAND_PIXELS {
+    let band = band_pixels(pixels);
+    if pixels <= band {
         let mut scratch = Vec::with_capacity(CHUNK_PIXELS.min(pixels));
         convert_band(transform, image.data(), channels, &mut out, &mut scratch);
         return out;
     }
     image
         .data()
-        .par_chunks(BAND_PIXELS * channels)
-        .zip(out.par_chunks_mut(BAND_PIXELS))
+        .par_chunks(band * channels)
+        .zip(out.par_chunks_mut(band))
         .for_each_init(
             || (build(), Vec::with_capacity(CHUNK_PIXELS)),
             |(worker, scratch), (src, dst)| convert_band(worker, src, channels, dst, scratch),
@@ -273,6 +289,32 @@ fn colorant(profile: &Profile, sig: TagSignature) -> Result<[f64; 3], CmsError> 
             "embedded ICC profile has no usable {sig:?}"
         ))),
     }
+}
+
+/// The linear part of [`working_to_output`] for `space` (step 7 of
+/// `docs/MATHS.md`): the 3x3 matrix Little-CMS applies from linear
+/// Rec.2020 to the output space's linear channels, before the output
+/// profile's TRC, computed from the two profiles' colorant tags. The GPU
+/// preview (`negg-render`'s `gpu` feature) encodes the display with it and
+/// the sRGB curve, and is tested against [`OutputTransform::apply_u8`].
+///
+/// # Errors
+///
+/// [`CmsError::Lcms`] if the output profile cannot be built, and
+/// [`CmsError::Unsupported`] or [`CmsError::Singular`] if its colorants
+/// cannot be read or inverted.
+pub fn working_to_output_matrix(space: OutputSpace) -> Result<Matrix3, CmsError> {
+    let colorants = |p: &Profile| -> Result<[[f64; 3]; 3], CmsError> {
+        Ok([
+            colorant(p, TagSignature::RedColorantTag)?,
+            colorant(p, TagSignature::GreenColorantTag)?,
+            colorant(p, TagSignature::BlueColorantTag)?,
+        ])
+    };
+    crate::matrix::colorants_to_colorants(
+        colorants(&working_profile())?,
+        colorants(&output_profile(space)?)?,
+    )
 }
 
 /// The step 1 path for a TIFF with an embedded matrix/TRC ICC profile
@@ -523,6 +565,87 @@ mod tests {
         assert!(image.width() * image.height() > BAND_PIXELS * 3);
         assert_eq!(t.apply(&image), seq16);
         assert_eq!(t.apply_u8(&image), seq8);
+    }
+
+    #[test]
+    fn a_preview_tile_runs_in_bands_and_equals_one_sequential_transform() {
+        // A 512-pixel tile is one BAND_PIXELS; it must still split (on a
+        // machine with more than one rayon thread) and give the same bytes.
+        let (w, h) = (512, 512);
+        let mut data = Vec::with_capacity(w * h * 3);
+        for i in 0..w * h {
+            let v = (i % 1013) as f32 / 1012.0;
+            data.extend_from_slice(&[v, 1.0 - v, (i % 7) as f32 / 6.0]);
+        }
+        let image = Image::from_vec(w, h, data).unwrap();
+        if rayon::current_num_threads() > 1 {
+            assert!(band_pixels(w * h) < w * h);
+        }
+        let t = working_to_output(OutputSpace::Srgb, Intent::Perceptual).unwrap();
+        let src: Vec<[f32; 3]> = image.data().as_chunks::<3>().0.to_vec();
+        let mut seq = vec![[0u8; 3]; src.len()];
+        t.to_u8.transform_pixels(&src, &mut seq);
+        assert_eq!(t.apply_u8(&image), seq.into_flattened());
+    }
+
+    #[test]
+    fn band_sizes_are_whole_chunks_within_bounds() {
+        for pixels in [1, CHUNK_PIXELS - 1, 512 * 512, 6000 * 4000] {
+            let b = band_pixels(pixels);
+            assert_eq!(b % CHUNK_PIXELS, 0, "{pixels}");
+            assert!((CHUNK_PIXELS..=BAND_PIXELS).contains(&b), "{pixels}");
+        }
+        assert_eq!(band_pixels(6000 * 4000), BAND_PIXELS);
+    }
+
+    /// The sRGB encoding of one linear value as Little-CMS packs a float
+    /// pipeline into 8 bits: the IEC 61966-2-1 curve, rounded to 16 bits
+    /// and then to 8 (`FROM_16_TO_8`).
+    fn srgb_u8(v: f64) -> u8 {
+        let e = if v <= 0.0031308 {
+            12.92 * v
+        } else {
+            1.055 * v.powf(1.0 / 2.4) - 0.055
+        };
+        let w = (e * 65535.0 + 0.5).floor().clamp(0.0, 65535.0) as u32;
+        ((w * 65281 + 8_388_608) >> 24) as u8
+    }
+
+    #[test]
+    fn the_srgb_matrix_and_curve_reproduce_the_8_bit_transform() {
+        // The model the GPU preview implements: matrix, clip, sRGB curve,
+        // 16-bit then 8-bit rounding. It must agree with Little-CMS on
+        // in-gamut, out-of-gamut and above-white pixels.
+        let m = working_to_output_matrix(OutputSpace::Srgb).unwrap();
+        let mut data = Vec::new();
+        let n = 40_000;
+        for i in 0..n {
+            let a = (i % 211) as f32 / 210.0;
+            let b = (i % 97) as f32 / 96.0;
+            let c = (i % 13) as f32 / 12.0;
+            data.extend_from_slice(&[a * 1.1, b * a, c * 0.9 + 0.001 * a]);
+        }
+        let image = Image::from_vec(n, 1, data.clone()).unwrap();
+        let lcms = working_to_output(OutputSpace::Srgb, Intent::Perceptual)
+            .unwrap()
+            .apply_u8(&image);
+        let mut worst = 0;
+        let mut differ = 0;
+        for (i, px) in data.as_chunks::<3>().0.iter().enumerate() {
+            for (c, row) in m.iter().enumerate() {
+                let v = f64::from(row[0] * px[0] + row[1] * px[1] + row[2] * px[2]);
+                let ours = srgb_u8(v);
+                let d = ours.abs_diff(lcms[i * 3 + c]);
+                worst = worst.max(d);
+                differ += usize::from(d != 0);
+            }
+        }
+        assert!(worst <= 1, "worst difference {worst}");
+        assert!(
+            differ * 1000 <= n * 3,
+            "{differ} of {} values differ",
+            n * 3
+        );
     }
 
     #[test]

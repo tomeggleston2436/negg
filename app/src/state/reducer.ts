@@ -14,6 +14,8 @@ import type {
   FrameView,
   HistoryView,
   NegativeView,
+  Preset,
+  PresetList,
   RollView,
 } from "../ipc/types";
 
@@ -52,6 +54,8 @@ export interface State {
   negative: NegativeView | null;
   /** Overrides being dragged (sent with preview_frame); null when none. */
   draft: FrameOverrides | null;
+  /** The draft when it came from a drag (preview_frame), not a commit. */
+  dragged: FrameOverrides | null;
   /** Highest session generation seen in any response or event. */
   generation: number;
   history: HistoryView;
@@ -66,6 +70,14 @@ export interface State {
   exportDialog: boolean;
   exportProgress: ExportProgress | null;
   error: string | null;
+  /** The tone presets (built-in, then the user's); kept across rolls. */
+  presets: Preset[];
+  /** How many of `presets` are built-ins (they come first). */
+  presetBuiltins: number;
+  /** A message per user preset file that could not be read. */
+  presetWarnings: string[];
+  /** Preset preview URL per `previewKey(frame, name)`; null when its fetch failed. */
+  presetUrls: Record<string, string | null>;
 }
 
 export type Action =
@@ -79,7 +91,8 @@ export type Action =
   /** `committed`: the overrides this view answers; a newer draft survives it. */
   | { type: "frame/loaded"; frame: FrameView; committed?: FrameOverrides }
   | { type: "negative/loaded"; negative: NegativeView }
-  | { type: "frame/draft"; overrides: FrameOverrides }
+  /** `drag`: a slider or crop drag (previewed), not a commit on its way. */
+  | { type: "frame/draft"; overrides: FrameOverrides; drag?: boolean }
   | { type: "frame/discard-draft" }
   | { type: "frame/previewed"; generation: number }
   | { type: "history/changed"; history: HistoryView }
@@ -96,7 +109,9 @@ export type Action =
   | { type: "export/finished"; report: ExportReport }
   | { type: "export/failed"; error: string }
   | { type: "error/set"; error: string }
-  | { type: "error/clear" };
+  | { type: "error/clear" }
+  | { type: "presets/loaded"; list: PresetList }
+  | { type: "presets/preview"; frame: number; name: string; url: string | null };
 
 export const EMPTY_HISTORY: HistoryView = { can_undo: false, can_redo: false, len: 0, cursor: 0 };
 
@@ -110,6 +125,7 @@ export const initialState: State = {
   frame: null,
   negative: null,
   draft: null,
+  dragged: null,
   generation: 0,
   history: EMPTY_HISTORY,
   scopes: null,
@@ -120,7 +136,16 @@ export const initialState: State = {
   exportDialog: false,
   exportProgress: null,
   error: null,
+  presets: [],
+  presetBuiltins: 0,
+  presetWarnings: [],
+  presetUrls: {},
 };
+
+/** The `presetUrls` key of a frame's preview of a preset. */
+export function previewKey(frame: number, name: string): string {
+  return JSON.stringify([frame, name]);
+}
 
 function frameCount(state: State): number {
   return state.roll?.frames.length ?? 0;
@@ -139,6 +164,9 @@ export function reducer(state: State, action: Action): State {
         ...initialState,
         roll: state.roll,
         opening: true,
+        presets: state.presets,
+        presetBuiltins: state.presetBuiltins,
+        presetWarnings: state.presetWarnings,
       };
     case "roll/loaded": {
       const { roll } = action;
@@ -147,6 +175,9 @@ export function reducer(state: State, action: Action): State {
         const done = roll.frames.filter((f) => f.status !== "pending").length;
         return {
           ...initialState,
+          presets: state.presets,
+          presetBuiltins: state.presetBuiltins,
+          presetWarnings: state.presetWarnings,
           roll,
           generation: roll.generation,
           history: roll.history,
@@ -199,7 +230,7 @@ export function reducer(state: State, action: Action): State {
       if (action.negative.index !== state.current) return state;
       return { ...state, negative: action.negative };
     case "frame/draft":
-      return { ...state, draft: action.overrides };
+      return { ...state, draft: action.overrides, dragged: action.drag === true ? action.overrides : null };
     case "frame/discard-draft":
       return { ...state, draft: null };
     case "frame/previewed":
@@ -277,6 +308,15 @@ export function reducer(state: State, action: Action): State {
       return { ...state, error: action.error };
     case "error/clear":
       return { ...state, error: null };
+    case "presets/loaded":
+      return {
+        ...state,
+        presets: action.list.presets,
+        presetBuiltins: action.list.builtins,
+        presetWarnings: action.list.warnings,
+      };
+    case "presets/preview":
+      return { ...state, presetUrls: { ...state.presetUrls, [previewKey(action.frame, action.name)]: action.url } };
   }
 }
 
@@ -307,6 +347,15 @@ export function exportBlocked(state: State): boolean {
  */
 export function historyBlocked(state: State): boolean {
   return state.roll === null || awaitingAnalysis(state) || analysing(state);
+}
+
+/**
+ * A drag is in progress: the draft came from a drag, not from a commit (a
+ * tick box, a key step or a typed value), which the preview need not draw
+ * at a coarser level for.
+ */
+export function dragging(state: State): boolean {
+  return state.draft !== null && state.draft === state.dragged;
 }
 
 /** Overrides the sliders show: the draft while dragging, else the committed ones. */

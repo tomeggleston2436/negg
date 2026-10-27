@@ -24,6 +24,27 @@ function spec(id: string) {
   return s;
 }
 
+describe("saturation slider", () => {
+  it("reads an absent saturation as 1, the override first", () => {
+    const o = emptyOverrides();
+    expect(settings.print.saturation).toBeUndefined();
+    expect(spec("saturation").get(o, settings)).toBe(1);
+    o.print.saturation = 0.4;
+    expect(spec("saturation").get(o, settings)).toBe(0.4);
+    const s = structuredClone(settings);
+    s.print.saturation = 1.5;
+    expect(spec("saturation").get(emptyOverrides(), s)).toBe(1.5);
+  });
+
+  it("sets a whole value without touching the input or the preset label", () => {
+    const o = emptyOverrides();
+    const a = spec("saturation").set(o, 1.25, settings);
+    expect(a.print.saturation).toBe(1.25);
+    expect(o.print.saturation ?? null).toBeNull();
+    expect(a.print.preset ?? null).toBeNull();
+  });
+});
+
 describe("slider table", () => {
   it("lists the table in order with its ranges and defaults", () => {
     expect(SLIDERS.map((s) => [s.id, s.min, s.max, s.step, s.defaultValue])).toEqual([
@@ -34,6 +55,7 @@ describe("slider table", () => {
       ["yellow", -0.3, 0.3, 0.005, 0],
       ["toe", 1, 20, 0.1, 6],
       ["shoulder", 0.5, 10, 0.1, 3],
+      ["saturation", 0, 2, 0.01, 1],
       ["analysis_buffer", 0, 0.2, 0.01, 0.05],
     ]);
   });

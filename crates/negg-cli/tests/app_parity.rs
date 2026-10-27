@@ -21,11 +21,11 @@ use std::process::Command;
 
 use common::{TempDir, negative_linear, write_float_tiff};
 use negg_session::{
-    ExportFormat, ExportReport, ExportRequest, ExportScope, FrameView, LockWhich, Session,
-    build_context, parse_tile, prepare_frame, render_in_roll,
+    ExportFormat, ExportReport, ExportRequest, ExportScope, FrameView, LockWhich, RollPresetScope,
+    Session, WebOutput, build_context, parse_tile, prepare_frame, render_in_roll,
 };
 use negg_types::settings::OutputSpace;
-use negg_types::{CropRect, FrameOverrides, Geometry, RollSettings};
+use negg_types::{CropRect, FrameOverrides, Geometry, RollSettings, builtin_presets};
 
 const W: usize = 576;
 const H: usize = 384;
@@ -105,10 +105,21 @@ fn export(
     format: ExportFormat,
     out: &Path,
 ) -> ExportReport {
+    export_web(session, scope, format, WebOutput::None, out)
+}
+
+fn export_web(
+    session: &mut Session,
+    scope: ExportScope,
+    format: ExportFormat,
+    web: WebOutput,
+    out: &Path,
+) -> ExportReport {
     let req = ExportRequest {
         scope,
         format,
         out_dir: Some(out.to_string_lossy().into_owned()),
+        web,
     };
     let report = session.export(&req, &mut |_| {}).unwrap();
     assert_eq!(report.failed, 0, "{:?}", report.errors);
@@ -399,4 +410,227 @@ fn app_exports_equal_cli_outputs_byte_for_byte() {
     o.print.grade = Some(100.0);
     s.commit_frame(0, o).unwrap();
     s.flush().unwrap();
+}
+
+/// `negg` with `NEGG_PRESETS_DIR` set to `presets` (on the child only), so
+/// that the user's own presets folder is never read.
+fn negg_with_presets(presets: &Path, args: &[&str]) {
+    let o = Command::new(env!("CARGO_BIN_EXE_negg"))
+        .env("NEGG_PRESETS_DIR", presets)
+        .args(args)
+        .output()
+        .expect("run negg");
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "negg {args:?}\n{}\n{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+/// Copies the files of `from` (not recursive) into a new `to`.
+fn copy_files(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_file() {
+            std::fs::copy(&p, to.join(p.file_name().unwrap())).unwrap();
+        }
+    }
+}
+
+/// A preset applied in the app and on the command line (Ruling 7): with
+/// `scope`, the session's roll preset then a roll export against
+/// `negg batch --preset Rich [--preset-all-frames]`; without, the
+/// session's frame preset on frame 3 then its export against
+/// `negg convert frame3.tif --preset Rich`. Both start from the same
+/// flushed roll, where frames 1 and 2 have their own look and frame 2
+/// other overrides too.
+fn preset_parity(tag: &str, scope: Option<RollPresetScope>) {
+    let tmp = TempDir::new(tag);
+    let app_dir = tmp.path("app");
+    let cli_dir = tmp.path("cli");
+    let presets = tmp.path("presets");
+    write_roll(&app_dir);
+    let mut s = Session::open_roll(&app_dir).unwrap();
+    s.analyse_all().unwrap();
+    s.commit_frame(1, with_grade(&FrameOverrides::default(), 100.0))
+        .unwrap();
+    let mut o = FrameOverrides::default();
+    o.print.toe = Some(8.0);
+    o.print.exposure = Some(0.1);
+    o.print.cmy = Some([0.02, 0.0, -0.01]);
+    s.commit_frame(2, o).unwrap();
+    s.flush().unwrap();
+    copy_files(&app_dir, &cli_dir);
+
+    let rich = builtin_presets()
+        .into_iter()
+        .find(|p| p.name == "Rich")
+        .unwrap();
+    let arg = |p: &Path| p.to_string_lossy().into_owned();
+    let (app_out, cli_out) = (tmp.path("app-out"), tmp.path("cli-out"));
+    let expected = match scope {
+        Some(scope) => {
+            if scope == RollPresetScope::FramesWithoutOwnLook {
+                assert_eq!(s.frames_with_own_look(), [1, 2]);
+            }
+            s.apply_roll_preset(&rich, scope).unwrap();
+            export(&mut s, ExportScope::Roll, ExportFormat::Tiff16, &app_out);
+            let mut args = vec![
+                "batch".to_owned(),
+                arg(&cli_dir),
+                "--preset".into(),
+                "Rich".into(),
+                "--format".into(),
+                "tiff16".into(),
+                "--out".into(),
+                arg(&cli_out),
+            ];
+            if scope == RollPresetScope::AllFrames {
+                args.push("--preset-all-frames".into());
+            }
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            negg_with_presets(&presets, &args);
+            6
+        }
+        None => {
+            s.apply_frame_preset(3, &rich).unwrap();
+            export(
+                &mut s,
+                ExportScope::Frame { frame: 3 },
+                ExportFormat::Tiff16,
+                &app_out,
+            );
+            negg_with_presets(
+                &presets,
+                &[
+                    "convert",
+                    &arg(&cli_dir.join("frame3.tif")),
+                    "--preset",
+                    "Rich",
+                    "--format",
+                    "tiff16",
+                    "--out",
+                    &arg(&cli_out),
+                ],
+            );
+            1
+        }
+    };
+    assert_same_files(&app_out, &cli_out, expected);
+    let (a, c) = (sidecars(&app_dir), sidecars(&cli_dir));
+    assert_eq!(a.keys().collect::<Vec<_>>(), c.keys().collect::<Vec<_>>());
+    for (name, bytes) in &a {
+        assert!(*bytes == c[name], "{name}: the app and the CLI differ");
+    }
+    // The preset took effect: frame 3 renders with Rich's look.
+    let s3 = negg_io::read_sidecar(&app_dir.join("frame3.negg.json")).unwrap();
+    assert_eq!(s3.settings.print.preset.as_deref(), Some("Rich"));
+    assert_eq!(s3.settings.print.grade, rich.look.grade);
+    // Frame 1 keeps its own grade only when frames keep their own look.
+    let s1 = negg_io::read_sidecar(&app_dir.join("frame1.negg.json")).unwrap();
+    let want = match scope {
+        Some(RollPresetScope::AllFrames) => rich.look.grade,
+        _ => 100.0,
+    };
+    assert_eq!(s1.settings.print.grade, want);
+}
+
+#[test]
+fn app_roll_preset_equals_cli_byte_for_byte() {
+    preset_parity("preset-own", Some(RollPresetScope::FramesWithoutOwnLook));
+    preset_parity("preset-all", Some(RollPresetScope::AllFrames));
+}
+
+#[test]
+fn app_frame_preset_equals_cli_byte_for_byte() {
+    preset_parity("preset-frame", None);
+}
+
+/// The web output in the app and on the command line (ADR 0035): the
+/// session's roll export with `web: Also` against `negg batch --web`, and
+/// one frame with `web: Only` against `negg convert --web-only`, on a roll
+/// whose output space is Adobe RGB (the web copies are sRGB all the same).
+/// Images, web images and sidecars must be equal byte for byte.
+#[test]
+fn app_web_export_equals_cli_byte_for_byte() {
+    let tmp = TempDir::new("web-parity");
+    let app_dir = tmp.path("app");
+    let cli_dir = tmp.path("cli");
+    write_roll(&app_dir);
+    let mut s = Session::open_roll(&app_dir).unwrap();
+    s.analyse_all().unwrap();
+    let mut roll: RollSettings = s.roll_view().roll;
+    roll.shared.colour.output_space = OutputSpace::AdobeRgb;
+    s.commit_roll(roll).unwrap();
+    s.commit_frame(1, with_grade(&FrameOverrides::default(), 120.0))
+        .unwrap();
+    s.flush().unwrap();
+    copy_files(&app_dir, &cli_dir);
+    let arg = |p: &Path| p.to_string_lossy().into_owned();
+
+    // The whole roll, originals and web copies.
+    let (app_roll, cli_roll) = (tmp.path("app-roll"), tmp.path("cli-roll"));
+    let r = export_web(
+        &mut s,
+        ExportScope::Roll,
+        ExportFormat::Tiff16,
+        WebOutput::Also,
+        &app_roll,
+    );
+    assert_eq!(r.converted, 6);
+    assert_eq!(r.outputs.len(), 12, "{:?}", r.outputs);
+    for i in 0..6 {
+        for p in [
+            app_roll.join(format!("frame{i}.negg.tif")),
+            app_roll.join("web").join(format!("frame{i}.negg.jpg")),
+        ] {
+            assert!(r.outputs.contains(&arg(&p)), "{p:?} not in {:?}", r.outputs);
+        }
+    }
+    negg(&[
+        "batch",
+        &arg(&cli_dir),
+        "--format",
+        "tiff16",
+        "--web",
+        "--out",
+        &arg(&cli_roll),
+    ]);
+    assert_same_files(&app_roll, &cli_roll, 6);
+    assert_same_files(&app_roll.join("web"), &cli_roll.join("web"), 6);
+
+    // One frame, the web copy only.
+    let (app_one, cli_one) = (tmp.path("app-one"), tmp.path("cli-one"));
+    let r = export_web(
+        &mut s,
+        ExportScope::Frame { frame: 3 },
+        ExportFormat::Jpeg,
+        WebOutput::Only,
+        &app_one,
+    );
+    assert_eq!(
+        r.outputs,
+        [arg(&app_one.join("web").join("frame3.negg.jpg"))]
+    );
+    negg(&[
+        "convert",
+        &arg(&cli_dir.join("frame3.tif")),
+        "--format",
+        "jpeg",
+        "--web-only",
+        "--out",
+        &arg(&cli_one),
+    ]);
+    assert_same_files(&app_one, &cli_one, 0);
+    assert_same_files(&app_one.join("web"), &cli_one.join("web"), 1);
+
+    let (a, c) = (sidecars(&app_dir), sidecars(&cli_dir));
+    assert_eq!(a.len(), 7);
+    assert_eq!(a.keys().collect::<Vec<_>>(), c.keys().collect::<Vec<_>>());
+    for (name, bytes) in &a {
+        assert!(*bytes == c[name], "{name}: the app and the CLI differ");
+    }
 }

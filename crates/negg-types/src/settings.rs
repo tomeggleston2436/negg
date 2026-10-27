@@ -26,8 +26,9 @@ use crate::hash::{ContentHash, hash_value};
 
 /// Version of the settings schema written into sidecars. Version 3 added
 /// `geometry` (Ruling 71); version 4 adds `geometry.analysis_area`
-/// (Ruling 134), absent meaning none.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
+/// (Ruling 134), absent meaning none; version 5 adds `print.saturation` and
+/// `print.preset` (phase 4, ADR 0033), absent meaning 1 and none.
+pub const SETTINGS_SCHEMA_VERSION: u32 = 5;
 
 /// A per-channel value that is either estimated from the frame (or roll) or
 /// fixed by the user.
@@ -150,6 +151,21 @@ pub struct PrintSettings {
     /// Step 5 of `docs/MATHS.md`: optional black point compensation.
     /// Default off.
     pub black_point_compensation: bool,
+    /// Step 7 of `docs/MATHS.md`: saturation `s` about the Rec.2020
+    /// luminance (ADR 0033). Default 1 (no change), valid range 0 to 2
+    /// inclusive. Omitted from the file when exactly 1.
+    #[serde(skip_serializing_if = "is_unit_saturation")]
+    pub saturation: f32,
+    /// Name of the tone preset the grade, toe, shoulder, black point
+    /// compensation and saturation were last set from. A label only: it
+    /// never affects the render. Omitted from the file when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+}
+
+/// Serde helper: true when saturation is exactly the default of 1.
+fn is_unit_saturation(s: &f32) -> bool {
+    *s == 1.0
 }
 
 impl Default for PrintSettings {
@@ -163,6 +179,8 @@ impl Default for PrintSettings {
             shoulder: 3.0,
             toe: 6.0,
             black_point_compensation: false,
+            saturation: 1.0,
+            preset: None,
         }
     }
 }
@@ -258,7 +276,7 @@ fn require(ok: bool, reason: impl FnOnce() -> String) -> Result<()> {
 
 /// Every `f32` field of [`PrintSettings`] paired with its name, for the
 /// finiteness rule in [`Settings::validate`].
-fn print_floats(p: &PrintSettings) -> [(&'static str, f32); 9] {
+fn print_floats(p: &PrintSettings) -> [(&'static str, f32); 10] {
     [
         ("grade", p.grade),
         ("exposure", p.exposure),
@@ -269,6 +287,7 @@ fn print_floats(p: &PrintSettings) -> [(&'static str, f32); 9] {
         ("paper_dmax", p.paper_dmax),
         ("shoulder", p.shoulder),
         ("toe", p.toe),
+        ("saturation", p.saturation),
     ]
 }
 
@@ -294,9 +313,10 @@ impl Settings {
     /// Returns [`Error::Invalid`] when any `f32` field of [`PrintSettings`]
     /// is non-finite (the error names the field), the grade is outside 50 to
     /// 180, `paper_dmax` is not greater than `paper_dmin`, the shoulder or
-    /// toe is not positive, any fixed channel value is non-finite, or a fixed
-    /// cast has a slope outside 0.5 to 2 or a non-finite offset, or the
-    /// geometry fails [`Geometry::validate`].
+    /// toe is not positive, the saturation is outside 0 to 2, any fixed
+    /// channel value is non-finite, or a fixed cast has a slope outside 0.5
+    /// to 2 or a non-finite offset, or the geometry fails
+    /// [`Geometry::validate`].
     pub fn validate(&self) -> Result<()> {
         let p = &self.print;
         for (name, value) in print_floats(p) {
@@ -319,6 +339,9 @@ impl Settings {
             format!("shoulder {} must be positive", p.shoulder)
         })?;
         require(p.toe > 0.0, || format!("toe {} must be positive", p.toe))?;
+        require((0.0..=2.0).contains(&p.saturation), || {
+            format!("saturation {} must be between 0 and 2", p.saturation)
+        })?;
         require_finite_channels("film_base", self.film.film_base)?;
         require_finite_channels("dmax", self.film.dmax)?;
         require_finite_channels("gamma", self.film.gamma)?;
@@ -495,8 +518,38 @@ mod tests {
         // value here, and bump SETTINGS_SCHEMA_VERSION if sidecars change.
         assert_eq!(
             Settings::default().content_hash().to_hex(),
-            "b1d377e5b6b3aac003645c7f37332cf4735dc5b55de8ed342fe0517b97851a0c"
+            "08c4a97c6ee6c3d98353ec9f4c8a552567d176a9c667c8d69251c3d27fd03c10"
         );
+    }
+
+    #[test]
+    fn default_settings_json_has_no_saturation_or_preset_key() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(!json.contains("saturation") && !json.contains("preset"));
+        let mut s = Settings::default();
+        s.print.saturation = 1.2;
+        s.print.preset = Some("punchy".into());
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("saturation") && json.contains("preset"));
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn saturation_out_of_range_is_invalid() {
+        for bad in [-0.1f32, 2.1, f32::NAN] {
+            let mut s = Settings::default();
+            s.print.saturation = bad;
+            let Err(Error::Invalid(msg)) = s.validate() else {
+                panic!("{bad} should be invalid");
+            };
+            assert!(msg.contains("saturation"), "{msg}");
+        }
+        for ok in [0.0f32, 1.0, 2.0] {
+            let mut s = Settings::default();
+            s.print.saturation = ok;
+            s.validate().unwrap();
+        }
     }
 
     #[test]
@@ -574,7 +627,7 @@ mod tests {
     #[test]
     fn phase2_defaults_are_identity() {
         let s = Settings::default();
-        assert_eq!(s.schema_version, 4);
+        assert_eq!(s.schema_version, 5);
         assert_eq!(s.colour.cast, CastEstimate::Auto);
         assert_eq!(s.profiles, ProfileRefs::default());
         assert!(s.profiles.rig.is_none() && s.profiles.film.is_none());

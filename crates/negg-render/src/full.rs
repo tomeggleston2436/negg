@@ -6,12 +6,14 @@
 //! `negg_film::density_value`, or [`crate::density_model_pixel`] with a rig
 //! density model), inversion (step 4, then the film correction's neutral
 //! offset), the cast correction (step 6),
-//! the print stage (step 5) and the optional step 7 matrix on each
+//! the print stage (step 5), the optional step 7 matrix and the step 7
+//! saturation (skipped at 1) on each
 //! pixel in turn, over row bands in parallel, without materialising the
 //! intermediate images, not even the full-size density image. It calls
 //! the same per-pixel kernels as the separate functions
 //! (`negg_film::density_value`, [`crate::invert_pixel`], [`crate::apply_cast_pixel`],
-//! [`crate::print_pixel`], [`crate::apply_matrix_pixel`]), so the result is
+//! [`crate::print_pixel`], [`crate::apply_matrix_pixel`],
+//! [`crate::saturate_pixel`]), so the result is
 //! identical to their composition.
 
 use negg_film::density_value;
@@ -23,6 +25,7 @@ use crate::matrix::apply_matrix_pixel;
 use crate::par::for_each_pixel_mut;
 use crate::print::{PrintCoefficients, print_pixel};
 use crate::rig::density_model_pixel;
+use crate::saturation::saturate_pixel;
 
 /// Steps 3 to 7 of `docs/MATHS.md` in one pass: for every pixel of
 /// `linear` (linear camera RGB, or linear Rec.2020 for an ICC input), take
@@ -99,7 +102,7 @@ pub fn render_region(
 
 /// The preconditions of [`render_full`] and [`render_region`]: step 4's
 /// Dmin and gamma checks and a finite neutral offset.
-fn check_estimates(est: &Estimates) -> Result<()> {
+pub(crate) fn check_estimates(est: &Estimates) -> Result<()> {
     // Validate step 4's preconditions up front on an empty image so the
     // fused kernel below cannot divide by a zero gamma.
     invert_in_place(&mut Image::new(0, 0), est.dmin, est.gamma)?;
@@ -126,6 +129,7 @@ fn render_in_place(
     let gamma = est.gamma;
     let offset = est.neutral_offset;
     let cast = est.cast;
+    let saturation = print.saturation();
     for_each_pixel_mut(out, |i| {
         let d = match density {
             Some(m) => density_model_pixel(i, m),
@@ -139,9 +143,14 @@ fn render_in_place(
         let e = [e[0] - offset[0], e[1] - offset[1], e[2] - offset[2]];
         let e = apply_cast_pixel(e, &cast);
         let positive = print_pixel(e, print);
-        match matrix {
+        let positive = match matrix {
             Some(m) => apply_matrix_pixel(positive, m),
             None => positive,
+        };
+        if saturation == 1.0 {
+            positive
+        } else {
+            saturate_pixel(positive, saturation)
         }
     });
 }
@@ -293,6 +302,54 @@ mod tests {
             assert_eq!(p[1], q[1]);
         }
         assert_ne!(b, z);
+    }
+
+    #[test]
+    fn fused_render_with_saturation_equals_the_composition() {
+        let linear = random_linear(97, 61, 0x5EED_0001);
+        let mut est = estimates();
+        let mut settings = PrintSettings {
+            saturation: 1.4,
+            ..PrintSettings::default()
+        };
+        est.x0 = solve_x0(est.anchor, &settings);
+        let m = [[0.9, 0.1, 0.0], [0.05, 0.9, 0.05], [0.0, 0.2, 0.8]];
+        for s in [1.4f32, 0.0, 0.6, 2.0] {
+            settings.saturation = s;
+            let c = PrintCoefficients::new(&settings, est.x0).unwrap();
+            for matrix in [None, Some(m)] {
+                let fused = render_full(&linear, &est, &c, None, matrix).unwrap();
+                let mut want = composition(&linear, &est, &c, None, matrix);
+                for px in want.data_mut().as_chunks_mut::<3>().0 {
+                    *px = saturate_pixel(*px, s);
+                }
+                assert_close(&fused, &want);
+            }
+        }
+    }
+
+    #[test]
+    fn default_and_explicit_unit_saturation_render_bitwise_equal() {
+        let linear = random_linear(61, 43, 0x5EED_0002);
+        let mut est = estimates();
+        let defaults = PrintSettings::default();
+        est.x0 = solve_x0(est.anchor, &defaults);
+        let explicit = PrintSettings {
+            saturation: 1.0,
+            ..PrintSettings::default()
+        };
+        let m = [[0.9, 0.1, 0.0], [0.05, 0.9, 0.05], [0.0, 0.2, 0.8]];
+        for matrix in [None, Some(m)] {
+            let a = PrintCoefficients::new(&defaults, est.x0).unwrap();
+            let b = PrintCoefficients::new(&explicit, est.x0).unwrap();
+            let ra = render_full(&linear, &est, &a, None, matrix).unwrap();
+            let rb = render_full(&linear, &est, &b, None, matrix).unwrap();
+            assert_eq!(ra, rb);
+            // The pre-saturation composition, with no saturate call at all
+            // (to the fused kernel's usual tolerance; the golden TIFF test
+            // covers the byte-exact default).
+            assert_close(&ra, &composition(&linear, &est, &a, None, matrix));
+        }
     }
 
     #[test]

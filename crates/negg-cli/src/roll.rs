@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use negg_session::{FlowEvent, OutputRequest};
+use negg_session::{FlowEvent, OutputRequest, WebOutput};
 pub use negg_session::{
     LockWhich, RollAnalysis, RollContext, analyse_roll, analyse_roll_frames, decode_linear,
     load_film, load_rig, lock_overrides, pool_is_current, prepare_frame, profile_path,
@@ -49,9 +49,22 @@ pub fn build_context(
 
 /// The request the flows take for these output and roll arguments. The
 /// `--settings` file is passed by path and read by the flow, at the point
-/// the CLI always read it.
-pub fn output_request(output: &OutputArgs, roll: &RollArgs) -> OutputRequest {
-    OutputRequest {
+/// the CLI always read it. `--preset` is found here
+/// ([`negg_session::find_preset`] in [`negg_session::presets_dir`]).
+///
+/// # Errors
+///
+/// [`ConvertError::Usage`] for an unknown preset name or a preset file that
+/// cannot be read.
+pub fn output_request(output: &OutputArgs, roll: &RollArgs) -> Result<OutputRequest, ConvertError> {
+    let preset = match &output.preset {
+        Some(name) => Some(negg_session::find_preset(
+            name,
+            negg_session::presets_dir().as_deref(),
+        )?),
+        None => None,
+    };
+    Ok(OutputRequest {
         out_dir: output.out.clone(),
         format: output.format.into(),
         settings: None,
@@ -62,7 +75,14 @@ pub fn output_request(output: &OutputArgs, roll: &RollArgs) -> OutputRequest {
         rig: roll.rig.clone(),
         film: roll.film.clone(),
         no_roll: roll.no_roll,
-    }
+        preset,
+        preset_all_frames: output.preset_all_frames,
+        web: match (output.web, output.web_only) {
+            (_, true) => WebOutput::Only,
+            (true, false) => WebOutput::Also,
+            (false, false) => WebOutput::None,
+        },
+    })
 }
 
 fn role_name(role: PoolRole) -> String {
@@ -128,8 +148,9 @@ fn print_common(who: &str, event: FlowEvent) -> Option<FlowEvent> {
     None
 }
 
-/// Prints `wrote <output> and <sidecar>` and, with `--dump-stats`, the
-/// stats block and (when `roll_stats`) the roll lines.
+/// Prints `wrote <output> and <sidecar>` (then `wrote <web copy>` with
+/// `--web`) and, with `--dump-stats`, the stats block and (when
+/// `roll_stats`) the roll lines.
 fn print_converted(
     input: &Path,
     converted: &Converted,
@@ -142,6 +163,11 @@ fn print_converted(
         converted.output.display(),
         converted.sidecar.display()
     );
+    if let Some(web) = &converted.web
+        && *web != converted.output
+    {
+        println!("wrote {}", web.display());
+    }
     if dump_stats {
         print!("{}", format_stats(input, converted));
         if roll_stats {
@@ -159,7 +185,7 @@ fn print_converted(
 /// As [`negg_session::convert_one`].
 pub fn run_convert(args: &ConvertArgs) -> Result<(), ConvertError> {
     let who = "negg convert";
-    let req = output_request(&args.output, &args.roll);
+    let req = output_request(&args.output, &args.roll)?;
     let mut pool_used = false;
     negg_session::convert_one(&args.input, &req, &mut |event| {
         if matches!(event, FlowEvent::UsingRoll(_)) {
@@ -195,7 +221,7 @@ pub fn run_convert(args: &ConvertArgs) -> Result<(), ConvertError> {
 /// returned summary, not returned.
 pub fn run_batch(args: &BatchArgs) -> Result<BatchSummary, ConvertError> {
     let who = "negg batch";
-    let req = output_request(&args.output, &args.roll);
+    let req = output_request(&args.output, &args.roll)?;
     let summary = negg_session::batch_dir(&args.dir, &req, &mut |event| {
         if let Some(FlowEvent::Converted {
             input,
@@ -261,13 +287,17 @@ mod tests {
             crop: None,
             analysis_area: None,
             dump_stats: true,
+            preset: None,
+            preset_all_frames: false,
+            web: true,
+            web_only: false,
         };
         let roll = RollArgs {
             rig: Some(PathBuf::from("rig.negg.toml")),
             film: None,
             no_roll: true,
         };
-        let req = output_request(&output, &roll);
+        let req = output_request(&output, &roll).unwrap();
         assert_eq!(req.out_dir.as_deref(), Some(Path::new("out")));
         assert_eq!(req.format, negg_session::Format::Jpeg);
         assert!(req.settings.is_none());
@@ -275,6 +305,14 @@ mod tests {
         assert_eq!(req.space, Some(negg_types::settings::OutputSpace::Rec2020));
         assert_eq!(req.rig.as_deref(), Some(Path::new("rig.negg.toml")));
         assert!(req.no_roll);
+        assert!(req.preset.is_none() && !req.preset_all_frames);
+        assert_eq!(req.web, WebOutput::Also);
+        let only = OutputArgs {
+            web: false,
+            web_only: true,
+            ..output
+        };
+        assert_eq!(output_request(&only, &roll).unwrap().web, WebOutput::Only);
         assert_eq!(file_name(Path::new("r/f.dng")), "f.dng");
     }
 }

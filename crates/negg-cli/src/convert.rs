@@ -174,6 +174,7 @@ mod tests {
     fn stats_block_names_every_estimate() {
         let converted = Converted {
             output: PathBuf::from("out/f.negg.tif"),
+            web: None,
             sidecar: PathBuf::from("f.negg.json"),
             render: FrameRender {
                 image: Image::new(4, 3),

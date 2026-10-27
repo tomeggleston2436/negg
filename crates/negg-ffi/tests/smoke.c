@@ -67,6 +67,11 @@ int main(int argc, char **argv) {
     CHECK(negg_export(s, 0, 1, argv[2], &report) == NeggStatus_Ok, "export");
     CHECK(report != NULL && strstr(report, "\"converted\":1") != NULL, "report");
     negg_string_free(report);
+    report = NULL;
+    CHECK(negg_export_web(s, 0, 1, 2, argv[2], &report) == NeggStatus_Ok, "export web");
+    CHECK(report != NULL && strstr(report, "/web/") != NULL, "web report");
+    negg_string_free(report);
+    CHECK(negg_export_web(s, 0, 1, 9, argv[2], NULL) == NeggStatus_Session, "unknown web");
 
     negg_session_free(s);
     negg_session_free(NULL);

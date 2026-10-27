@@ -10,13 +10,13 @@
 //! retried by overwriting: a sidecar the session refuses stays as it is and
 //! the error reaches the user (Rulings 80 and 122).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use negg_session::{
     ExportReport, ExportRequest, ExportScope, FlowEvent, FrameView, HistoryView, LockWhich,
-    NegativeView, RollView, Session,
+    NegativeView, PresetList, RollPresetScope, RollView, Session, SessionError,
 };
-use negg_types::{CropRect, FrameOverrides, RollSettings};
+use negg_types::{CropRect, FrameOverrides, PrintLook, RollSettings};
 
 use crate::state::{Access, AppRollView, AppState, CommandError, Event, ExportEvent, ThumbsEvent};
 
@@ -88,6 +88,12 @@ pub fn render_tile(
     tile_y: u32,
 ) -> Result<Vec<u8>, CommandError> {
     state.with_session(Access::Read, |s| {
+        if !s.uses_gpu()
+            && let Some(gpu) = state.gpu()
+        {
+            // Without the display matrix the tile renders on the CPU.
+            let _ = s.set_gpu(Some(gpu));
+        }
         s.render_tile(frame, level, tile_x, tile_y)
     })
 }
@@ -141,6 +147,105 @@ pub fn lock_frame(
     let view = state.with_session(Access::Settle, |s| s.lock_frame(frame, which))?;
     edited(state, vec![frame], view.generation);
     Ok(view)
+}
+
+/// The presets available: the built-ins and the user presets in the
+/// presets folder (`NEGG_PRESETS_DIR`, else the config folder).
+pub fn list_presets() -> PresetList {
+    list_presets_in(negg_session::presets_dir().as_deref())
+}
+
+/// [`list_presets`] for the folder `dir`.
+pub fn list_presets_in(dir: Option<&Path>) -> PresetList {
+    negg_session::list_presets(dir)
+}
+
+/// Saves `look` as the user preset `name` and returns the refreshed list.
+pub fn save_preset(name: &str, look: PrintLook) -> Result<PresetList, CommandError> {
+    let dir = negg_session::presets_dir()
+        .ok_or_else(|| CommandError::new("convert", "no presets folder is known"))?;
+    save_preset_in(&dir, name, look)
+}
+
+/// [`save_preset`] into the folder `dir`.
+pub fn save_preset_in(dir: &Path, name: &str, look: PrintLook) -> Result<PresetList, CommandError> {
+    negg_session::save_preset(dir, name, &look)
+        .map_err(|e| CommandError::from(SessionError::from(e)))?;
+    Ok(negg_session::list_presets(Some(dir)))
+}
+
+/// Sets frame `frame`'s look from the preset `name`: one history entry.
+pub fn apply_frame_preset(
+    state: &AppState,
+    frame: u32,
+    name: &str,
+) -> Result<FrameView, CommandError> {
+    apply_frame_preset_in(state, negg_session::presets_dir().as_deref(), frame, name)
+}
+
+/// [`apply_frame_preset`] with presets from the folder `dir`.
+pub fn apply_frame_preset_in(
+    state: &AppState,
+    dir: Option<&Path>,
+    frame: u32,
+    name: &str,
+) -> Result<FrameView, CommandError> {
+    let preset = find_preset(name, dir)?;
+    let view = state.with_session(Access::Edit, |s| s.apply_frame_preset(frame, &preset))?;
+    edited(state, vec![frame], view.generation);
+    Ok(view)
+}
+
+/// The frames whose overrides set their own look: what a roll preset asks
+/// the user about.
+pub fn frames_with_own_look(state: &AppState) -> Result<Vec<u32>, CommandError> {
+    state.with_session(Access::Read, |s| Ok(s.frames_with_own_look()))
+}
+
+/// Applies the preset `name` to the roll as one history entry; `scope` says
+/// what happens to the frames with their own look.
+pub fn apply_roll_preset(
+    state: &AppState,
+    name: &str,
+    scope: RollPresetScope,
+) -> Result<AppRollView, CommandError> {
+    apply_roll_preset_in(state, negg_session::presets_dir().as_deref(), name, scope)
+}
+
+/// [`apply_roll_preset`] with presets from the folder `dir`.
+pub fn apply_roll_preset_in(
+    state: &AppState,
+    dir: Option<&Path>,
+    name: &str,
+    scope: RollPresetScope,
+) -> Result<AppRollView, CommandError> {
+    let preset = find_preset(name, dir)?;
+    let view = state.with_roll(Access::Edit, |s| s.apply_roll_preset(&preset, scope))?;
+    edited(state, all_frames(&view), view.generation);
+    Ok(view)
+}
+
+/// The frame as the preset `name` would print it, as JPEG bytes. Changes
+/// nothing.
+pub fn preset_thumbnail(state: &AppState, frame: u32, name: &str) -> Result<Vec<u8>, CommandError> {
+    preset_thumbnail_in(state, negg_session::presets_dir().as_deref(), frame, name)
+}
+
+/// [`preset_thumbnail`] with presets from the folder `dir`.
+pub fn preset_thumbnail_in(
+    state: &AppState,
+    dir: Option<&Path>,
+    frame: u32,
+    name: &str,
+) -> Result<Vec<u8>, CommandError> {
+    let preset = find_preset(name, dir)?;
+    state.with_session(Access::Read, |s| {
+        s.preset_thumbnail_jpeg(frame, &preset.look)
+    })
+}
+
+fn find_preset(name: &str, dir: Option<&Path>) -> Result<negg_types::Preset, CommandError> {
+    negg_session::find_preset(name, dir).map_err(|e| CommandError::from(SessionError::from(e)))
 }
 
 /// Undoes the last edit.

@@ -66,6 +66,12 @@ function Shell() {
     };
   }, [actions]);
 
+  // The tone presets are not tied to a roll: fetched once at start (and
+  // again after a save).
+  useEffect(() => {
+    void actions.loadPresets();
+  }, [actions]);
+
   useEffect(() => {
     const onError = (e: unknown) => dispatch({ type: "error/set", error: errorText(e) });
     const subs = [

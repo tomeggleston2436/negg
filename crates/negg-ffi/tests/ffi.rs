@@ -52,9 +52,9 @@ fn roll() -> TempDir {
 }
 
 #[test]
-fn abi_version_is_one() {
-    assert_eq!(negg_abi_version(), 1);
-    assert_eq!(NEGG_ABI_VERSION, 1);
+fn abi_version_is_two() {
+    assert_eq!(negg_abi_version(), 2);
+    assert_eq!(NEGG_ABI_VERSION, 2);
 }
 
 #[test]
@@ -352,6 +352,67 @@ fn export_roll_equals_batch_and_frame_equals_convert() {
     );
     unsafe { negg_session_free(s) };
     let _ = ExportFormat::Jpeg;
+}
+
+#[test]
+fn export_web_writes_the_web_copy() {
+    let a = roll();
+    let s = open(a.path());
+
+    // The original and the web copy.
+    let out = TempDir::new("ffi-web-also");
+    let od = cs(out.path().to_str().unwrap());
+    let mut report = ptr::null_mut();
+    assert_eq!(
+        unsafe { negg_export_web(s, 0, 0, 1, od.as_ptr(), &mut report) },
+        NeggStatus::Ok
+    );
+    let rep: serde_json::Value = serde_json::from_str(&take_string(report)).unwrap();
+    assert_eq!(rep["converted"], 1);
+    let original = out.path().join("frame0.negg.tif");
+    let web = out.path().join("web").join("frame0.negg.jpg");
+    assert!(original.is_file() && web.is_file());
+    assert_eq!(
+        rep["outputs"],
+        serde_json::json!([original.to_str().unwrap(), web.to_str().unwrap()])
+    );
+
+    // The web copy only, equal to the one written beside the original.
+    let only = TempDir::new("ffi-web-only");
+    let oo = cs(only.path().to_str().unwrap());
+    assert_eq!(
+        unsafe { negg_export_web(s, 0, 1, 2, oo.as_ptr(), ptr::null_mut()) },
+        NeggStatus::Ok
+    );
+    assert!(read_all(only.path(), "jpg").is_empty());
+    let web_only = only.path().join("web").join("frame0.negg.jpg");
+    assert!(std::fs::read(&web_only).unwrap() == std::fs::read(&web).unwrap());
+
+    // `negg_export` is unchanged: no web copy.
+    let plain = TempDir::new("ffi-web-none");
+    let op = cs(plain.path().to_str().unwrap());
+    assert_eq!(
+        unsafe { negg_export(s, 0, 0, op.as_ptr(), ptr::null_mut()) },
+        NeggStatus::Ok
+    );
+    assert!(!plain.path().join("web").exists());
+    assert_eq!(
+        unsafe { negg_export_web(s, 0, 0, 0, op.as_ptr(), ptr::null_mut()) },
+        NeggStatus::Ok
+    );
+    assert!(!plain.path().join("web").exists());
+
+    // An unknown web value.
+    assert_eq!(
+        unsafe { negg_export_web(s, 0, 0, 3, op.as_ptr(), ptr::null_mut()) },
+        NeggStatus::Session
+    );
+    assert!(last_error().contains("web"), "{}", last_error());
+    assert_eq!(
+        unsafe { negg_export_web(ptr::null_mut(), 0, 0, 1, op.as_ptr(), ptr::null_mut()) },
+        NeggStatus::Null
+    );
+    unsafe { negg_session_free(s) };
 }
 
 #[test]

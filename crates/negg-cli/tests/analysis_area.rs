@@ -149,7 +149,7 @@ fn convert_with_an_analysis_area_matches_the_clean_frame_at_full_size() {
     let g = &held["settings"]["geometry"];
     assert_eq!(g["crop"], serde_json::Value::Null);
     assert_eq!(g["analysis_area"]["y"], serde_json::json!(0.125));
-    assert_eq!(held["schema_version"], serde_json::json!(4));
+    assert_eq!(held["schema_version"], serde_json::json!(5));
     // The export keeps the whole frame, holder included.
     assert_eq!(
         tiff_size(&tmp.path("out-held/f.negg.tif")),
@@ -206,7 +206,7 @@ fn batch_flags_held_frames_and_pools_the_good_ones() {
     }
     assert!(!err.contains("a0.tif: Dmax"), "{err}");
     let roll = read_json(&dir.join("roll.negg.json"));
-    assert_eq!(roll["schema_version"], serde_json::json!(3));
+    assert_eq!(roll["schema_version"], serde_json::json!(4));
     let frames = roll["pool"]["frames"].as_array().unwrap();
     for f in frames {
         let held = f["source"].as_str().unwrap().starts_with('b');
@@ -375,6 +375,7 @@ fn the_session_with_an_area_set_before_pass_1_writes_what_batch_writes() {
                 scope: ExportScope::Roll,
                 format: ExportFormat::Tiff16,
                 out_dir: Some(s(&tmp.path("out-app"))),
+                web: negg_session::WebOutput::None,
             },
             &mut |_| {},
         )

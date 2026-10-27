@@ -35,11 +35,14 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use negg_session::{AnalyseStep, ExportFormat, ExportRequest, ExportScope, Session, SessionError};
+use negg_session::{
+    AnalyseStep, ExportFormat, ExportRequest, ExportScope, Session, SessionError, WebOutput,
+};
 use negg_types::{FrameOverrides, RollSettings};
 
-/// The version of this C ABI; bumped on any incompatible change.
-pub const NEGG_ABI_VERSION: u32 = 1;
+/// The version of this C ABI; bumped on any incompatible change. Version 2
+/// added [`negg_export_web`].
+pub const NEGG_ABI_VERSION: u32 = 2;
 
 /// The result of every fallible call. `Ok` is zero.
 #[repr(i32)]
@@ -445,7 +448,8 @@ pub unsafe extern "C" fn negg_set_roll_settings(
 /// [`negg_string_free`]), also when some frames failed. If any frame
 /// failed the status is [`NeggStatus::Session`] and the first error is the
 /// last error. An unknown `format` is also [`NeggStatus::Session`], and a
-/// `frame` below -1 or above `u32::MAX` is [`NeggStatus::NotFound`].
+/// `frame` below -1 or above `u32::MAX` is [`NeggStatus::NotFound`]. No
+/// web copy is written; [`negg_export_web`] writes one.
 ///
 /// # Safety
 ///
@@ -457,6 +461,29 @@ pub unsafe extern "C" fn negg_export(
     s: *mut NeggSession,
     frame: i64,
     format: u32,
+    out_dir: *const c_char,
+    report_json: *mut *mut c_char,
+) -> NeggStatus {
+    // SAFETY: the same contract.
+    unsafe { negg_export_web(s, frame, format, 0, out_dir, report_json) }
+}
+
+/// [`negg_export`] with the web copy (ADR 0035): `web` is 0 for none (as
+/// [`negg_export`]), 1 for the original and the web copy (`--web`) and 2
+/// for the web copy only (`--web-only`). The web copy is an sRGB JPEG, 2048
+/// px on the long edge and never upscaled, at
+/// `<out_dir>/web/<stem>.negg.jpg`; the report's `outputs` list it after
+/// its original. An unknown `web` is [`NeggStatus::Session`].
+///
+/// # Safety
+///
+/// As [`negg_export`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn negg_export_web(
+    s: *mut NeggSession,
+    frame: i64,
+    format: u32,
+    web: u32,
     out_dir: *const c_char,
     report_json: *mut *mut c_char,
 ) -> NeggStatus {
@@ -476,6 +503,14 @@ pub unsafe extern "C" fn negg_export(
                     NeggStatus::Session,
                     format!("unknown export format {n}"),
                 ));
+            }
+        };
+        let web = match web {
+            0 => WebOutput::None,
+            1 => WebOutput::Also,
+            2 => WebOutput::Only,
+            n => {
+                return Err(fail(NeggStatus::Session, format!("unknown web output {n}")));
             }
         };
         let scope = match frame {
@@ -500,6 +535,7 @@ pub unsafe extern "C" fn negg_export(
             scope,
             format,
             out_dir,
+            web,
         };
         let report = with_session(s, |sess| {
             sess.export(&req, &mut |_| {})
@@ -522,7 +558,8 @@ pub unsafe extern "C" fn negg_export(
     })
 }
 
-/// Frees a string returned by negg ([`negg_get_stats`], [`negg_export`]).
+/// Frees a string returned by negg ([`negg_get_stats`], [`negg_export`],
+/// [`negg_export_web`]).
 /// NULL is a no-op. Never pass any other pointer.
 ///
 /// # Safety

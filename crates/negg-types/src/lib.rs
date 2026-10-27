@@ -15,6 +15,7 @@ pub mod estimates;
 pub mod geometry;
 pub mod hash;
 pub mod image;
+pub mod look;
 pub mod profile;
 pub mod rig;
 pub mod roll;
@@ -28,6 +29,7 @@ pub use estimates::{
 pub use geometry::{ANALYSIS_BUFFER_DEFAULT, CropRect, Geometry};
 pub use hash::ContentHash;
 pub use image::Image;
+pub use look::{Preset, PrintLook, builtin_presets, validate_preset_name};
 pub use profile::{FilmProfile, RigProfile};
 pub use rig::{DensityModel, FilmCorrection, FlatField, PatchRect, RigCorrection};
 pub use roll::{FrameOverrides, PoolFrame, PoolRole, PooledEstimates, RollPool};

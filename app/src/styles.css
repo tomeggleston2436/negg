@@ -666,3 +666,91 @@ button.tool-area[aria-pressed="true"] {
   padding: 20px;
   text-align: center;
 }
+
+/* Tone presets: the frame screen's strip and the roll panel's picker. */
+
+.note.warn {
+  color: var(--warn);
+}
+
+.preset-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.preset-current {
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.preset-strip {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.preset-item {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.preset-item.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* The preview is out of flow, so a portrait (rotated) frame or a preview
+   still loading cannot size the box or widen the grid past the panel. */
+.preset-image {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
+  background: var(--surround);
+  font-size: 11px;
+}
+
+.preset-image img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.preset-name {
+  padding: 3px 4px;
+  font-size: 11px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-preset input[type="text"] {
+  width: 100%;
+}
+
+.preset-prompt {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+.preset-prompt p {
+  margin: 0 0 6px;
+}

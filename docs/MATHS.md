@@ -50,9 +50,9 @@ The steps are numbered in the order the plan presents them. In the per-pixel pip
 | 5 | `negg-render` | 1 |
 | 6 | `negg-render` | 1; roll mode in phase 2 (cast pooling in `negg-film`) |
 | 7 | `negg-cms` | 1 |
-| 8 | `negg-io`; geometry in `negg-types`; preview (pyramid, scopes, negative display) in `negg-render` | 1; linear DNG in phase 4; geometry and preview in phase 3 |
+| 8 | `negg-io`; geometry in `negg-types`; preview (pyramid, scopes, negative display) and the web downscale in `negg-render` | 1; geometry and preview in phase 3; web copy in phase 4 (linear DNG dropped) |
 
-A GPU preview kernel for steps 4 to 7 arrives in phase 4 and is tested against the CPU path on every CI run (ground rule 3).
+A GPU preview kernel for steps 3 to 7 and the display encoding arrived in phase 4 (ADR 0036, `negg-render`'s `gpu` feature) and is tested against the CPU path on every CI run (ground rule 3); see Preview under step 8.
 
 ## Step 1: decode to linear camera RGB
 
@@ -432,6 +432,15 @@ M = [ 0.6274  0.3293  0.0433 ]
 
 **Unchanged by a rig profile (R-step7, Ruling 41; ADR 0015, Proposed).** The step 7 matrix is applied to `out_c` whatever the rig: flat field, unmix and the density model do not alter it. No phase 2 measurement characterises the colorimetry of the positive, and a wedge constrains only the grey axis. Until a measured characterisation exists, saturation and hue for RAW input come from the Rec.709 reading above.
 
+**Saturation (phase 4, ADR 0033).** After the entry matrix and before the output transform, the positive `p` (linear Rec.2020, or the scan's own RGB for an untagged source, which uses the same weights on its own channels) has its chroma scaled about its luminance:
+
+```
+y     = 0.2627 r + 0.6780 g + 0.0593 b        # Rec.2020 luminance
+out_c = max(0, y + s * (p_c - y))
+```
+
+`s` is `print.saturation`, default 1, valid 0 to 2. At exactly 1 the step is skipped, so the default render is bitwise unchanged. Neutrals and the luminance `y` are preserved for every `s` (the weights sum to 1); `s = 0` gives the luminance grey; the clip at 0 only acts for `s > 1` on saturated pixels. `negg_render::saturate_pixel`, applied in the fused kernel by `render_in_place`.
+
 **Export.** Convert via `lcms2` to sRGB, Adobe RGB, Display P3, ProPhoto or Rec.2020, with the ICC profile embedded in the output file.
 
 **Display.** Convert to the monitor profile when it is known, else to sRGB.
@@ -450,28 +459,30 @@ Why: everything before this step is in camera-native RGB, which has no defined p
 
 ## Step 8: export
 
-Phase 1, crate `negg-io`. Linear DNG is phase 4.
+Phase 1, crate `negg-io`. Linear DNG was dropped by the owner on 2026-10-25 and is not planned.
 
 - 16-bit TIFF: deflate compression, ICC profile in tag 34675, orientation 1, resolution tags present.
 - 8-bit JPEG with the ICC profile embedded.
-- Linear DNG (phase 4), written with the `tiff` crate. The AGPL `dng` crate is forbidden.
 - Sidecar `frame.negg.json` beside the source file containing the settings, the estimated `Dmin_c`, `Dmax_c` and `gamma_c`, the source of each estimate (`dmin_source`: border, percentile, fixed, roll, roll_min or profile; `gamma_source`: range, fixed, neutral_fit, roll or profile; `cast_source`: fit, fixed, roll or identity), and a `schema_version`.
 
 **Geometry (phase 3; Ruling 70, ADR 0021).** After step 7 (`render_full`) and before the output transform, the export applies the frame's geometry to the linear working-space image: crop (the crop rect itself, no analysis buffer, pixels as in step 3), then the clockwise rotation (0, 90, 180 or 270 degrees), then the mirror left to right of the rotated image. This only moves pixels and changes no value, so it lives in `negg-types` (`Geometry::apply`). An identity geometry (no crop, rotation 0, no flip) skips the copy, so exports without geometry are byte-identical to earlier phases. The analysis area (Ruling 134) never touches the export: a frame with an analysis area and no crop exports whole. Arbitrary-angle rotation is deferred to phase 4.
+
+**Web output (phase 4, ADR 0035).** After geometry, `downscale_to_long_edge` shrinks the linear working-space image so its long edge is 2048 px, never upscaling (an image whose long edge is already at most 2048 is left as it is). The scale is `t = 2048 / max(w, h)` and the output is `max(1, round(w t))` by `max(1, round(h t))`, the long side exactly 2048. Each output pixel is the area-weighted mean of the input pixels its footprint covers (a box filter with fractional edge weights, so exact box means at integer ratios and no ringing), accumulated in `f64` in a fixed order per output pixel. Then the sRGB output transform whatever the frame's `output_space`, 8-bit JPEG at quality 85 with the sRGB ICC profile embedded, written to the `web/` subfolder of the export directory as `<stem>.negg.jpg`. `negg_render::downscale_to_long_edge`.
 
 **Preview (phase 3; Rulings 73 to 76, ADR 0022).** The preview is not an export and never feeds one.
 
 - *Pyramid:* level 0 is the full linear image after steps 1 and 2; level `n` is `downscale_half` of level `n - 1`, a 2 x 2 box mean in linear light (odd edge rows or columns average the pixels that exist; size `ceil(w/2) x ceil(h/2)`), until `max(w_n, h_n) <= 512`.
 - *Tiles:* 512 x 512 regions of a level, rendered by `render_region` with the frame's plan (estimates from the analysis grid, step 3) and then converted to 8-bit sRGB with perceptual intent and alpha 255. Display is sRGB only in phase 3. Level 0 tiles assembled are byte-equal to the 8-bit conversion of the full render; higher levels are a render of a downscale, not a downscale of a render.
+- *GPU tiles (phase 4, ADR 0036):* with the app's GPU preview on, a tile is rendered by `render.wgsl`, the same steps 3 to 7 as `render_region`, and encoded on the GPU as Little-CMS encodes 8-bit sRGB: `v = M p` with `M = negg_cms::working_to_output_matrix(Srgb)`, the IEC 61966-2-1 curve (`12.92 v` up to `v = 0.0031308`, else `1.055 v^(1/2.4) - 0.055`), then `w = clamp(floor(65535 e + 0.5), 0, 65535)` and the 8-bit value `(65281 w + 2^23) >> 24`. The positive is within 1/4096 per channel of the CPU's and the tile within one 8-bit step. While a slider is dragged the app draws the level one coarser than the zoom needs and asks for the finer one again on release (display only). Exports, thumbnails, scopes and negative tiles stay on the CPU.
 - *Scopes:* from the 8-bit sRGB render of the whole frame at the first level with long side at most 1024, with geometry applied. Histogram: 256 bins each for R, G, B and luma `round(0.2126 R + 0.7152 G + 0.0722 B)`. Parade: per channel, 256 columns (`floor(x * 256 / width)`) by 256 code values. Vectorscope: with `R', G', B'` as codes over 255, `Y' = 0.2126 R' + 0.7152 G' + 0.0722 B'`, `Cb = (B' - Y') / 1.8556`, `Cr = (R' - Y') / 1.5748`, column `min(255, floor((Cb + 0.5) * 256))`, row `min(255, floor((0.5 - Cr) * 256))`. Counts are u16 and saturate.
 - *Thumbnail:* the full render of the cached analysis grid (about 1024 px), geometry applied, 8-bit sRGB, JPEG quality 85.
 - *The negative before analysis (Ruling 134):* so that an analysis area can be drawn before pass 1, the decoded negative is shown as it is, not inverted. Its tiles (same pyramid and tile grid as above) and its thumbnail (the analysis grid's block medians) are `clip(M (s v), 0, 1)` per channel, with `v` the linear camera RGB after step 2, `M` the step 7 entry matrix when the decode gives one, and one scale per frame `s = 1 / P`, `P` the 99.5th percentile of all three channels of the grid's block medians together (1 when the grid is empty or `P` is not positive; non-finite samples are ignored in `P`; implementer choice for a preview, `TODO(measure)`). One scale keeps the mask colour and the holder as they are. Then 8-bit sRGB as for tiles. Source orientation, no crop, no geometry. `negg_render::negative_display`.
 
-The schema versions are now 4 for settings and the frame sidecar (version 3 added `geometry`, version 4 adds `geometry.analysis_area`) and 3 for the roll sidecar (ADR 0021 and its amendment). Embedded ICC profiles are deterministic: the header creation date is fixed at 2026-01-01 00:00:00 and the profile ID is zeroed (ADR 0022).
+The schema versions are now 5 for settings and the frame sidecar (version 3 added `geometry`, version 4 added `geometry.analysis_area`, version 5 adds `print.saturation` and `print.preset`, both omitted from the file at their defaults of 1 and none, ADR 0033) and 4 for the roll sidecar (ADR 0021 and its amendment; ADR 0033). Embedded ICC profiles are deterministic: the header creation date is fixed at 2026-01-01 00:00:00 and the profile ID is zeroed (ADR 0022).
 
 This is the only place the pipeline quantises: `f32` is converted to 16-bit or 8-bit integers here and nowhere else (ground rule 4).
 
-TIFF resolution tags are 300 pixels per inch with `ResolutionUnit` inch; JPEG quality is 92 with the encoder's default chroma subsampling; the sidecar fields are `schema_version`, `source` (file name only), `settings`, `settings_hash`, `estimates` (optional: `dmin`, `dmin_source`, `dmax`, `gamma`, `gamma_source`, `neutral_offset`, `anchor`, `x0`, `cast`, `cast_source`), `overrides` (phase 2: the frame's `FrameOverrides`, omitted when empty), `roll` (phase 2: `roll.negg.json` when rendered in roll mode) and `negg_version` (ADR 0010, Proposed; schema version 4 since Ruling 134 per ADR 0018 and ADR 0021). Version 1 sidecars migrate with `neutral_offset = [0, 0, 0]` and a `cast_source` of Fit when `cast.cells_used > 0`, else Identity. A roll sidecar `roll.negg.json` (its own schema version, 3 since Ruling 134) beside the frames holds the shared `RollSettings`, the pool (each frame's record with `needs_analysis_area` when its Dmax is pinned, ADR 0032) and the frame list (ADR 0017, Proposed).
+TIFF resolution tags are 300 pixels per inch with `ResolutionUnit` inch; JPEG quality is 92 with the encoder's default chroma subsampling; the sidecar fields are `schema_version`, `source` (file name only), `settings`, `settings_hash`, `estimates` (optional: `dmin`, `dmin_source`, `dmax`, `gamma`, `gamma_source`, `neutral_offset`, `anchor`, `x0`, `cast`, `cast_source`), `overrides` (phase 2: the frame's `FrameOverrides`, omitted when empty), `roll` (phase 2: `roll.negg.json` when rendered in roll mode) and `negg_version` (ADR 0010, Proposed; schema version 5 since ADR 0033; 4 since Ruling 134 per ADR 0018 and ADR 0021). Version 1 sidecars migrate with `neutral_offset = [0, 0, 0]` and a `cast_source` of Fit when `cast.cells_used > 0`, else Identity. A roll sidecar `roll.negg.json` (its own schema version, 4 since ADR 0033; 3 since Ruling 134) beside the frames holds the shared `RollSettings`, the pool (each frame's record with `needs_analysis_area` when its Dmax is pinned, ADR 0032) and the frame list (ADR 0017, Proposed).
 
 Constants:
 
@@ -480,6 +491,8 @@ Constants:
 | TIFF bit depth | 16 | Deflate, ICC tag 34675, orientation 1. |
 | TIFF resolution | 300 ppi | `XResolution`, `YResolution`, `ResolutionUnit` inch (ADR 0010, Proposed). |
 | JPEG bit depth | 8 | ICC embedded. Quality 92, encoder default chroma subsampling (ADR 0010, Proposed). |
+| web long edge | 2048 px | Never upscaled; area average in linear light (ADR 0035). |
+| web JPEG quality | 85 | 8-bit sRGB, ICC embedded, `web/<stem>.negg.jpg` (ADR 0035). |
 | sidecar | `frame.negg.json` | Beside the source; carries `schema_version`. |
 
 Why: a 16-bit TIFF with the profile embedded preserves everything the `f32` pipeline produced to within the precision a downstream editor can use, and the sidecar makes every render reproducible from the source RAW plus one small file. Recording the source of each estimate in the sidecar is what lets a user, or `negg-cli eval`, tell a border-derived Dmin from a percentile one.

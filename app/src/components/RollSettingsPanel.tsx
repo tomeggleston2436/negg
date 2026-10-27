@@ -5,9 +5,19 @@
 
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { type OutputSpace, OUTPUT_SPACES, type RollSettings, emptyOverrides, resolve } from "../ipc/types";
+import {
+  type OutputSpace,
+  OUTPUT_SPACES,
+  type Preset,
+  type RollPresetScope,
+  type RollSettings,
+  emptyOverrides,
+  resolve,
+} from "../ipc/types";
 import { SLIDERS, turn } from "../sliders";
+import { chooseRollPreset, presetHeading, presetState } from "../presets";
 import { Slider } from "./Slider";
+import { RollPresetPrompt } from "./RollPresetPrompt";
 import { CropFields } from "./CropFields";
 
 export const OUTPUT_SPACE_LABELS: Record<OutputSpace, string> = {
@@ -23,11 +33,44 @@ export interface RollSettingsPanelProps {
   disabled: boolean;
   onCommit: (roll: RollSettings) => void;
   onError: (e: unknown) => void;
+  presets: readonly Preset[];
+  /** The frames with a look of their own; null when refused (already reported). */
+  framesWithOwnLook: () => Promise<number[] | null>;
+  /** Applies a preset to the roll; false when refused (already reported). */
+  applyPreset: (name: string, scope: RollPresetScope) => Promise<boolean>;
 }
 
-export function RollSettingsPanel({ roll, disabled, onCommit, onError }: RollSettingsPanelProps) {
+export function RollSettingsPanel(props: RollSettingsPanelProps) {
+  const { roll, disabled, onCommit, onError } = props;
   const [draft, setDraft] = useState<RollSettings>(roll);
   useEffect(() => setDraft(roll), [roll]);
+  // The roll preset being asked about (frames with their own look), if any.
+  const [asking, setAsking] = useState<{ name: string; count: number } | null>(null);
+  const [applying, setApplying] = useState(false);
+
+  const choosePreset = async (name: string) => {
+    if (name === "" || applying) return;
+    setAsking(null);
+    setApplying(true);
+    try {
+      const out = await chooseRollPreset(name, { framesWithOwnLook: props.framesWithOwnLook, apply: props.applyPreset });
+      if (out.kind === "ask") setAsking({ name, count: out.frames.length });
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const answer = async (scope: RollPresetScope) => {
+    if (!asking) return;
+    const { name } = asking;
+    setAsking(null);
+    setApplying(true);
+    try {
+      await props.applyPreset(name, scope);
+    } finally {
+      setApplying(false);
+    }
+  };
   const shared = draft.shared;
   const none = emptyOverrides();
 
@@ -61,6 +104,34 @@ export function RollSettingsPanel({ roll, disabled, onCommit, onError }: RollSet
 
   return (
     <div className="panel-body">
+      <section aria-labelledby="roll-preset-heading">
+        <h2 id="roll-preset-heading">Roll preset</h2>
+        <p className="preset-current">{presetHeading(presetState(roll.shared, props.presets))}</p>
+        <label className="field">
+          <span>Apply a preset to the roll</span>
+          <select
+            value=""
+            disabled={disabled || applying || props.presets.length === 0}
+            onChange={(e) => void choosePreset(e.currentTarget.value)}
+          >
+            <option value="">Choose a preset</option>
+            {props.presets.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {asking && (
+          <RollPresetPrompt
+            name={asking.name}
+            count={asking.count}
+            onChoose={(scope) => void answer(scope)}
+            onCancel={() => setAsking(null)}
+          />
+        )}
+      </section>
+
       <section aria-labelledby="roll-print-heading">
         <h2 id="roll-print-heading">Roll print settings</h2>
         {SLIDERS.filter((sp) => sp.id !== "analysis_buffer").map((spec) => (

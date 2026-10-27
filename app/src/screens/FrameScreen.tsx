@@ -4,15 +4,25 @@
 // frame's estimates. Before pass 1 reaches the frame it shows the negative
 // and the analysis area tool sets the roll's area (Rulings 134 and 136).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { scopes as fetchScopes } from "../ipc/commands";
 import { parseScopes } from "../ipc/scopes";
-import type { CropRect, Estimates, FrameOverrides, Rgb } from "../ipc/types";
-import { analysing as isAnalysing, awaitingAnalysis, exportBlocked, neighbour, shownOverrides } from "../state/reducer";
+import { type CropRect, type Estimates, type FrameOverrides, type Rgb, resolve } from "../ipc/types";
+import {
+  analysing as isAnalysing,
+  awaitingAnalysis,
+  dragging as isDragging,
+  exportBlocked,
+  neighbour,
+  previewKey,
+  shownOverrides,
+} from "../state/reducer";
 import { isTextEntry } from "../focus";
 import { errorText, useStore } from "../state/store";
 import { analysisArea, effectiveGeometry, hasOwnArea, withGeometry } from "../sliders";
 import { SliderPanel } from "../components/SliderPanel";
+import { PresetStrip, SavePreset } from "../components/PresetStrip";
+import { lookOf, nextPreset, presetCycleStep, presetState, previewVersion } from "../presets";
 import { TileView, type Tool, type Zoom } from "../components/TileView";
 import { AnalysisAreaPanel } from "../components/AnalysisAreaPanel";
 import { Histogram } from "../components/Histogram";
@@ -77,11 +87,49 @@ export function FrameScreen() {
     if (wantNegative && !haveNegative && current !== null) void actions.loadNegative(current);
   }, [wantNegative, haveNegative, current, actions]);
 
+  // The frame shown once it can be edited, with the look the sliders show
+  // (a drag included) and the preset it came from.
+  const editable =
+    current !== null && frame !== null && frame.index === current && !notReady && !frame.read_only;
+  const looked = frame && frame.index === current ? resolve(frame.settings, shownOverrides(state) ?? frame.overrides) : null;
+  const preset = looked ? presetState(looked, state.presets) : null;
+
+  // P and Shift+P (Ruling 10) step from the preset last asked for, so quick
+  // presses do not repeat one while its reply is on the way.
+  const cycleFrom = useRef<{ frame: number; name: string } | null>(null);
+  useEffect(() => {
+    if (cycleFrom.current && (cycleFrom.current.frame !== current || cycleFrom.current.name === preset?.name)) {
+      cycleFrom.current = null;
+    }
+  }, [current, preset?.name]);
+  const cycle = (step: 1 | -1) => {
+    if (!editable || current === null || state.presets.length === 0) return;
+    const from = cycleFrom.current?.frame === current ? cycleFrom.current.name : (preset?.name ?? null);
+    const next = nextPreset(state.presets, from, step);
+    cycleFrom.current = { frame: current, name: next.name };
+    actions.applyFramePreset(next.name, current);
+  };
+  const cycleRef = useRef(cycle);
+  cycleRef.current = cycle;
+
+  // Previews of this frame under each preset, fetched lazily and again only
+  // when the frame's corrections or the preset change.
+  useEffect(() => {
+    if (!frame || frame.index !== current || notReady) return;
+    for (const p of state.presets) actions.requestPresetPreview(frame.index, p.name, previewVersion(frame, p.look));
+  }, [frame, current, notReady, state.presets, actions]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // The export dialog owns the keyboard while it is open.
       if (state.exportDialog) return;
       if (isTextEntry(e.target)) return;
+      const step = presetCycleStep(e, false);
+      if (step !== null) {
+        e.preventDefault();
+        cycleRef.current(step);
+        return;
+      }
       // Undo and redo are the shell's (App.tsx), on every screen.
       const mod = e.metaKey || e.ctrlKey;
       if (mod || e.altKey) return;
@@ -296,12 +344,37 @@ export function FrameScreen() {
               onCropCancel={actions.revertDraft}
               onArea={setArea}
               onError={(e) => dispatch({ type: "error/set", error: errorText(e) })}
+              dragging={isDragging(state) && tool === null && mode === "positive"}
             />
           ) : (
             <p className="loading">{info?.status === "pending" ? "Opening the negative" : "Opening frame"}</p>
           )}
         </main>
         <aside className="side-panel" aria-label="Adjustments">
+          {shown && (
+            <div className="panel-body">
+              <PresetStrip
+                presets={state.presets}
+                urls={Object.fromEntries(state.presets.map((p) => [p.name, state.presetUrls[previewKey(shown.index, p.name)]]))}
+                state={preset}
+                disabled={!editable}
+                onApply={(name) => actions.applyFramePreset(name, shown.index)}
+                onCycle={cycle}
+              />
+              {looked && (
+                <SavePreset
+                  key={current}
+                  presets={state.presets}
+                  builtins={state.presetBuiltins}
+                  disabled={notReady}
+                  onSave={(name) => actions.savePreset(name, lookOf(looked), current ?? undefined)}
+                />
+              )}
+              {state.presetWarnings.length > 0 && (
+                <p className="note warn">Some presets could not be read: {state.presetWarnings.join("; ")}</p>
+              )}
+            </div>
+          )}
           <div className="panel-body">
             <AnalysisAreaPanel
               scope={editsFrame ? "frame" : "roll"}

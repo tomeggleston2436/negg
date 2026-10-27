@@ -48,6 +48,9 @@ fn frame_overrides() -> FrameOverrides {
     o.print.exposure = Some(0.25);
     o.print.cmy = Some([0.0, 0.01, -0.02]);
     o.print.black_point_compensation = Some(true);
+    o.print.saturation = Some(1.15);
+    // Pinned "no preset" (Ruling 8).
+    o.print.preset = Some(String::new());
     o.geometry = Some(Geometry {
         crop: Some(CropRect {
             x: 0.05,
@@ -181,7 +184,16 @@ fn export_request() -> ExportRequest {
         scope: ExportScope::Frames { frames: vec![0, 2] },
         format: ExportFormat::Jpeg,
         out_dir: Some("/exports/roll-01".to_owned()),
+        web: negg_session::WebOutput::None,
     }
+}
+
+fn preset_list() -> negg_session::PresetList {
+    let mut list = negg_session::list_presets(None);
+    list.presets.truncate(2);
+    list.builtins = 2;
+    list.warnings = vec!["broken.preset.negg.toml: unreadable".to_owned()];
+    list
 }
 
 /// Compares (or with `NEGG_BLESS=1` writes) one fixture.
@@ -210,6 +222,7 @@ fn fixtures_are_the_serde_output() {
         check("negative_view.json", &negative_view()),
         check("frame_view.json", &frame_view()),
         check("export_request.json", &export_request()),
+        check("preset_list.json", &preset_list()),
     ]
     .into_iter()
     .flatten()

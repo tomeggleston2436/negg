@@ -157,6 +157,17 @@ export const SLIDERS: readonly SliderSpec[] = [
     set: (o, v) => withPrint(o, { shoulder: v }),
   },
   {
+    id: "saturation",
+    label: "Saturation",
+    hint: "Colour intensity; 1 leaves colours as printed",
+    min: 0,
+    max: 2,
+    step: 0.01,
+    defaultValue: 1,
+    get: (o, s) => o.print.saturation ?? s.print.saturation ?? 1,
+    set: (o, v) => withPrint(o, { saturation: v }),
+  },
+  {
     id: "analysis_buffer",
     label: "Analysis buffer",
     hint: "Fraction of the analysis area's (or crop's) short side left out of the analysis on every edge",
