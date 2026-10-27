@@ -65,10 +65,13 @@ function splitTop(expr, op) {
 }
 
 function main() {
+  // On Windows pnpm is a pnpm.cmd shim, which Node only starts through a
+  // shell. The arguments are fixed, so the shell sees nothing from outside.
   const out = execFileSync("pnpm", ["licenses", "list", "--json"], {
     cwd: APP_DIR,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    shell: process.platform === "win32",
   });
   const byLicence = JSON.parse(out);
   const bad = [];
