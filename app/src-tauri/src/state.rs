@@ -263,6 +263,12 @@ impl AppState {
     /// A state with no roll open, sending events to `sink`, with its
     /// debounced flush thread running.
     pub fn new(sink: Arc<dyn EventSink>) -> AppState {
+        AppState::with_flush_delay(sink, FLUSH_DELAY)
+    }
+
+    /// As [`AppState::new`], flushing `delay` after the last edit instead of
+    /// [`FLUSH_DELAY`]. A test that must flush by hand first uses a long one.
+    pub fn with_flush_delay(sink: Arc<dyn EventSink>, delay: Duration) -> AppState {
         let shared = Arc::new(Shared {
             slot: Mutex::new(None),
             sink,
@@ -281,7 +287,7 @@ impl AppState {
         let weak: Weak<Shared> = Arc::downgrade(&shared);
         std::thread::Builder::new()
             .name("negg-flush".into())
-            .spawn(move || flush_thread(&weak, &rx))
+            .spawn(move || flush_thread(&weak, &rx, delay))
             .expect("the flush thread starts");
         AppState { shared }
     }
@@ -723,11 +729,11 @@ fn analyse_loop(shared: &Shared, id: u64) {
     }
 }
 
-/// Waits for a quiet [`FLUSH_DELAY`] after the last request, then flushes.
-fn flush_thread(shared: &Weak<Shared>, rx: &mpsc::Receiver<()>) {
+/// Waits for a quiet `delay` after the last request, then flushes.
+fn flush_thread(shared: &Weak<Shared>, rx: &mpsc::Receiver<()>, delay: Duration) {
     while rx.recv().is_ok() {
         loop {
-            match rx.recv_timeout(FLUSH_DELAY) {
+            match rx.recv_timeout(delay) {
                 Ok(()) => {}
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => return,

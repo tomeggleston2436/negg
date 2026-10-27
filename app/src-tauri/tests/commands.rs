@@ -280,7 +280,9 @@ fn edits_flush_after_the_debounce_and_repools_run_in_the_background() {
 fn a_sidecar_changed_by_another_program_is_never_overwritten() {
     let dir = Scratch::new("stale");
     write_roll(&dir, 2);
-    let (st, _rec) = state();
+    // Flushed by hand only: a debounced flush between the commit and the
+    // foreign write would save the edit first, leaving nothing to refuse.
+    let st = AppState::with_flush_delay(Arc::new(Recorder::default()), Duration::from_secs(3600));
     commands::open_roll(&st, dir.dir()).unwrap();
     commands::start_analysis(&st).unwrap();
     wait_idle(&st);
