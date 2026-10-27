@@ -1,171 +1,160 @@
-# negg
+<h1 align="center">negg</h1>
 
-negg is an open-source, standalone film negative converter: a Rust engine with
-a command-line tool first and a Tauri desktop app second. The aim is to match
-or beat Negative Lab Pro on camera-scanned C-41 negatives without needing
-Lightroom.
+<p align="center">
+  <strong>Turn camera-scanned colour negatives into finished positives.</strong><br>
+  Free and open source, for macOS, Windows and Linux. No Lightroom needed.
+</p>
+
+<p align="center">
+  <a href="https://github.com/tomeggleston2436/negg/releases"><img alt="Release" src="https://img.shields.io/github/v/release/tomeggleston2436/negg?include_prereleases&label=download"></a>
+  <a href="https://github.com/tomeggleston2436/negg/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/tomeggleston2436/negg/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="#licence"><img alt="Licence: MPL-2.0 and Apache-2.0" src="https://img.shields.io/badge/licence-MPL--2.0%20%2F%20Apache--2.0-blue"></a>
+</p>
+
+<!-- Screenshot of the frame screen: docs/images/app.jpg
+<p align="center"><img src="docs/images/app.jpg" alt="The negg frame screen: a converted photo with the sliders, tone presets and scopes beside it" width="900"></p>
+-->
+
+If you scan film with a digital camera, negg turns the negatives into
+positives. Open a folder of RAW or TIFF scans as a roll and negg measures the
+film itself: the orange base, the density range and the colour balance. It
+pools those measurements across the whole roll, so every frame comes out
+consistent. Then you pick a look, tweak it if you want, and export.
+
+<!-- Before and after: docs/images/before-after.jpg
+<p align="center"><img src="docs/images/before-after.jpg" alt="A colour negative scan beside the positive negg made from it" width="900"></p>
+-->
+
+## Features
+
+- **Whole rolls at once.** The film base and colour are measured across the
+  roll, not guessed frame by frame, so a sequence stays consistent.
+- **Physical controls.** Density, grade, cyan, magenta and yellow, toe,
+  shoulder and saturation behave like a colour darkroom print, not like
+  generic photo sliders.
+- **Tone presets.** Preview every preset on the frame you are looking at, apply
+  one to a frame or the whole roll, and save your own.
+- **Analysis area.** Leave the film holder out of the measurements without
+  cropping the photo.
+- **Export for print and for the web.** A full-quality 16-bit TIFF or JPEG,
+  and a 2048 px sRGB JPEG ready for Instagram or a website, in one go.
+- **Fast preview.** Renders on the GPU where there is one.
+- **Never touches your scans.** Edits are saved in small `.negg.json` files
+  next to them, so you can close and come back, or delete the files to
+  start again.
+- **A command line tool too.** Everything the app does, scriptable. Exports are
+  byte-identical between the two.
+
+## Install
+
+Download the latest build from the
+[Releases page](https://github.com/tomeggleston2436/negg/releases):
+
+| System | File |
+| --- | --- |
+| macOS 11 or newer (Apple silicon and Intel) | `negg_<version>_universal.dmg` |
+| Windows 10 or 11 | `negg_<version>_x64-setup.exe` |
+| Linux | `negg_<version>_amd64.AppImage` |
+
+negg is not signed with a paid certificate yet, so the first launch needs one
+extra step:
+
+- **macOS:** open the `.dmg` and drag negg to Applications. The first time you
+  open it, macOS says it cannot check the app. Click **Done**, go to
+  **System Settings > Privacy & Security**, scroll down and click
+  **Open Anyway** next to negg. You only need to do this once.
+- **Windows:** if SmartScreen says "Windows protected your PC", click
+  **More info**, then **Run anyway**.
+- **Linux:** make the AppImage executable (`chmod +x negg_*.AppImage`) and run
+  it.
+
+## Quick start
+
+1. **Open a folder** of scans from one roll. negg lists the frames and writes
+   nothing yet.
+2. **Draw the analysis area** over the film, including its clear edge, and
+   leave out the film holder. This only tells negg where to measure; it does
+   not crop your photos.
+3. **Press Analyse.** negg measures the roll and shows the positives.
+4. **Pick a look.** Click a tone preset, or press `P` to step through them, and
+   adjust the sliders if a frame needs it. `Cmd+Z` or `Ctrl+Z` undoes.
+5. **Export** the frame, the frames you selected or the whole roll, as the
+   original quality, a web copy, or both.
+
+Arrow keys move between frames, `F` fits the photo to the window and `1` shows
+actual pixels. The [app guide](app/README.md#what-it-does) covers every
+control.
+
+## What works with it
+
+- **Scans:** RAW files from most digital cameras (decoded by
+  [rawler](https://github.com/dnglab/dnglab)) and 16-bit TIFFs.
+- **Film:** colour negative (C-41). Slide film and black and white are not
+  supported.
 
 ## Status
 
-Phases 0 to 3 are built: the engine and the `negg` CLI (phases 1 and 2: inversion,
-roll pooling, rig and film profiles, `negg eval`) and the desktop app with its
-C ABI (phase 3). The gates are not claimed met. The committed corpus has no
-frames and there is no rig, so Gates 1 and 2 are not met by data, and Gate 3
-(a tester converts a 36-frame roll in the app) is open: its automatic half, that
-the app's exports are byte-identical to the CLI's, is a test
-(`crates/negg-cli/tests/app_parity.rs`, ADR 0024). Phase 4 has begun with
-tone presets, saturation and web export (ADR 0033 to 0035); the built-in preset
-values are provisional. Linear DNG output was dropped and looks as
-3D LUTs are parked; arbitrary-angle straightening remains. The app's preview renders on the GPU when there is one (ADR 0036).
+negg is an early alpha. It works on real rolls, but expect rough edges:
 
-## Crates
+- The built-in tone presets are a first pass and may change.
+- There are no measured profiles for particular film stocks yet; negg works
+  from what it measures on each roll.
+- Updates are not automatic. Download the new version from the Releases page.
 
-All crates live under `crates/` and each has its own `README.md` stating what
-it owns and what it must not do.
+What is planned and what is not is in the [roadmap](ROADMAP.md).
 
-- `negg-types`: `Image<f32>`, `Settings`, `RollSettings` and errors; no
-  dependencies beyond serde.
-- `negg-decode`: RAW and TIFF input to linear camera RGB `f32`.
-- `negg-calib`: rig profiles: flat field, crosstalk, camera-to-density fit.
-- `negg-film`: film profiles, Dmin/Dmax/gamma estimators, roll pooling.
-- `negg-render`: inversion, print curve, adjustments and scopes.
-- `negg-cms`: working space, ICC profiles and soft proof.
-- `negg-io`: TIFF, DNG and JPEG writers plus sidecars.
-- `negg-session`: the flows (convert, batch, lock, roll mode) and the
-  `Session` that the app and the C ABI drive; orchestration and I/O, no image
-  maths.
-- `negg-cli`: the `negg` binary: convert, batch, lock, eval and profile, on top
-  of `negg-session`.
-- `negg-ffi`: C ABI over `negg-session` for hosts that are not Rust (phase 3).
+## Found a problem?
 
-The desktop app is in `app/` (see `app/README.md`). It is its own cargo
-workspace (`app/src-tauri`), so `cargo build --workspace` at the root never
-builds Tauri or needs Node.
+[Open an issue](https://github.com/tomeggleston2436/negg/issues). Say which
+camera and file type you scanned with and which system you are on. If you can,
+attach the frame's `.negg.json` file; it holds the settings and measurements
+but none of the photo.
 
-## Licensing
+## For developers
 
-The engine crates (`negg-types`, `negg-decode`, `negg-calib`, `negg-film`,
-`negg-render`, `negg-cms`, `negg-io`) are licensed under the Mozilla Public
-License 2.0; see `LICENSE-MPL-2.0`. `negg-cli`, `negg-ffi`, the desktop app,
-the documentation and the profile and corpus data are licensed under the
-Apache License 2.0; see `LICENSE-APACHE-2.0`. Each crate directory carries its
-own `LICENSE` file and every source file starts with an SPDX header.
+negg is a Rust engine with a command line tool and a
+[Tauri 2](https://tauri.app) desktop app on top. The colour model is written
+out in [docs/MATHS.md](docs/MATHS.md) and the design decisions are in
+[docs/ADR](docs/ADR/).
 
-Dependencies must be MIT, Apache-2.0, BSD, MPL-2.0 or LGPL. No GPL or AGPL
-code is permitted. `rawler` (LGPL-2.1) is used as an ordinary crate
-dependency and never vendored; see `NOTICE`. The policy is enforced by
-cargo-deny using `deny.toml`.
+| Crate | What it does |
+| --- | --- |
+| `negg-types` | `Image<f32>`, `Settings`, `RollSettings` and errors |
+| `negg-decode` | RAW and TIFF input to linear camera RGB |
+| `negg-calib` | Rig profiles: flat field, crosstalk, camera-to-density fit |
+| `negg-film` | Film profiles, Dmin, Dmax and gamma estimators, roll pooling |
+| `negg-render` | Inversion, print curve, adjustments, scopes and the GPU preview |
+| `negg-cms` | Working space, ICC profiles and soft proof |
+| `negg-io` | TIFF and JPEG writers, sidecars, profiles and presets |
+| `negg-session` | Convert, batch, lock and roll flows; the `Session` the app drives |
+| `negg-cli` | The `negg` binary ([usage](docs/CLI.md)) |
+| `negg-ffi` | A C ABI over `negg-session` |
 
-## Building
-
-The toolchain is pinned to stable in `rust-toolchain.toml`. Install
-[cargo-deny](https://github.com/EmbarkStudios/cargo-deny) for the last step.
+The desktop app is in [`app/`](app/README.md) and is its own cargo workspace,
+so building the engine never needs Node.
 
 ```sh
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all --check
-cargo deny check
+cargo deny check     # needs cargo-deny
 ```
 
-All five must pass before a change is considered done.
+All five must pass before a change is merged. Changes to the engine are scored
+by `negg eval` against a corpus of scans; see
+[docs/EVALUATION.md](docs/EVALUATION.md). To build and run the app, see
+[app/README.md](app/README.md).
 
-## Usage
+## Licence
 
-```sh
-negg convert frame.dng                      # frame.negg.tif (16-bit, sRGB, ICC embedded) and frame.negg.json beside it
-negg convert frame.dng --out positives --format jpeg --space adobe_rgb
-negg convert frame.dng --settings my.json --dump-stats --timing
-negg convert frame.dng --crop 0.04,0.06,0.92,0.88            # crop the export; the analysis sees the crop too
-negg convert frame.dng --analysis-area 0.1,0.1,0.8,0.8       # analyse the film only; the export is not cropped
-negg batch roll/ --out positives            # every RAW or TIFF in roll/ as one roll: pooled film base, gamma and cast
-negg batch roll/ --no-roll                  # each frame on its own, no roll.negg.json
-negg lock frame.dng --dmin --gamma          # keep this frame's estimates in later batches
-negg batch roll/ --preset Rich              # the Rich tone preset for the roll; frames with their own look keep it
-negg preset list                            # the built-in and user tone presets
-negg convert frame.dng --preset Soft --web  # a tone preset, plus web/frame.negg.jpg (2048 px, JPEG 85, sRGB)
-negg profile rig --flat flat.dng --name rig1 --source "..." --out rig1.rig.negg.toml
-negg profile film roll/ --patches patches.csv --stock Portra --iso 160 --name p160 --source "..." --out p160.film.negg.toml
-negg eval --corpus corpus --baseline eval-baseline.json --tolerances eval.toml
-```
+The engine crates (`negg-types`, `negg-decode`, `negg-calib`, `negg-film`,
+`negg-render`, `negg-cms`, `negg-io`) are licensed under the
+[Mozilla Public License 2.0](LICENSE-MPL-2.0). The command line tool, the C
+ABI, the desktop app, the documentation and the profile data are licensed
+under the [Apache License 2.0](LICENSE-APACHE-2.0). Each crate carries its own
+`LICENSE` file and every source file has an SPDX header.
 
-`--crop x,y,w,h` and `--analysis-area x,y,w,h` take four fractions of the frame
-in its source orientation. A scan with the film holder in shot pins Dmax at the
-density cap and renders dark; an analysis area drawn on the film keeps the
-holder out of the estimates without cropping the photo (ADR 0021). A batch
-warns for each frame it finds pinned and leaves it out of the gamma and cast
-pools (ADR 0032). In roll mode both are stored in `roll.negg.json` and shared by
-every frame. `negg batch` also takes `--rig` and `--film` profile files, as
-does `convert`.
-
-`--dump-stats` prints the estimates used for the frame (Dmin and its source,
-Dmax, gamma and its source, the exposure anchor and `x0`, the cast fit) plus
-the grid and image sizes; `--timing` prints per-stage milliseconds to stderr.
-The settings file is JSON in the `Settings` schema of `negg-types`; omitted
-fields take their defaults, for example
-`{"print": {"grade": 90}, "colour": {"auto_colour": false}}`. A sidecar
-(recognised by its top-level `settings` key) is also accepted, so a frame's
-`<stem>.negg.json` re-renders another frame with the same settings; a JSON
-object with neither is refused with exit status 2. The sidecar
-`<stem>.negg.json` records the settings, their hash and the estimates, so a
-render is reproducible from the source plus that file. Outputs are named
-`<stem>.negg.tif` or `<stem>.negg.jpg`, so a TIFF source is never
-overwritten, and `negg batch` skips any file whose name contains `.negg.`. A RAW's print
-channels are read as Rec.709 primaries and enter Rec.2020 through the BT.2087
-matrix (ADR 0026), not the camera matrix; a TIFF with a matrix/TRC ICC
-profile is linearised through its TRC in its own primaries and brought into
-Rec.2020 by its colorants after the print stage (LUT profiles are refused);
-an untagged TIFF is assumed gamma 2.2 and left in its
-own colour space. Tone presets (ADR 0034) set only the print grade, toe, shoulder, black point
-compensation and saturation, plus a label recorded in `print.preset`. The
-built-ins are Standard, Soft, Hard, Flat, Rich and Linear (provisional values).
-`--preset <NAME|FILE>` takes a built-in or user preset name or a
-`*.preset.negg.toml` file and applies after `--settings`. User presets are
-those files in `$NEGG_PRESETS_DIR` when set, else the `negg/presets` folder of
-the platform config directory; each is flat TOML with `schema_version = 1`, `name`, `grade`, `toe`,
-`shoulder`, `black_point_compensation` and `saturation`.
-In `negg batch` roll mode, frames that have their own look keep it;
-`--preset-all-frames` replaces them too. `--web` also writes a web copy and
-`--web-only` writes only that: 2048 px on the long edge (never upscaled), 8-bit
-JPEG at quality 85, sRGB with the ICC profile embedded whatever the output
-space, at `web/<stem>.negg.jpg` beside the originals or under `--out`
-(ADR 0035). Saturation (`print.saturation`, 0 to 2, default 1; ADR 0033) is
-neutral at its default, so renders without a preset or a saturation change are
-byte-identical to earlier phases. Settings files are schema 5, frame sidecars
-5 and roll sidecars 4; older files migrate on read and newer ones are refused.
-Exit status: 0 ok, 1 conversion failure (for `batch`, any
-frame), 2 usage or settings error, 3 eval regression.
-
-## Evaluation
-
-`negg eval` decodes every frame in `corpus/`, renders it through the engine
-with default settings and scores the render: CIEDE2000 against each reference
-render (mean, p95, max; on a shared block-median grid when the sizes differ),
-grey-card neutrality (`(|a*| + |b*|) / 2` on the card patch of the render)
-and its signed counterpart `neutrality.de = sqrt(mean(a*)^2 + mean(b*)^2)`,
-the chroma of the patch's mean colour), and per-roll variance of the
-estimated Dmin and gamma per channel (present when a roll has two or more
-evaluated frames). When a frame has both a negadoctor and a NegPy reference,
-their distance to each other is recorded as `reference_distance`. The summary
-gives the mean CIEDE2000 per tool (`de2000_mean_by_tool`) and the
-Gate 1 criteria under `gate1`: `engine_vs_negpy` and `negadoctor_vs_negpy`
-(both over the frames that have both references), `neutrality_de_mean`, and
-`pass`, which is present when both distances are and is true when the engine
-is closer to NegPy than negadoctor is and the mean neutrality error is under
-dE 4; fields with no data are null. Each frame's estimates are written into
-the results. It prints a table and writes `eval-results.json`. Corpus frames are local-only, so entries whose files are
-absent are skipped and counted, and CI evaluates zero frames until the corpus
-is shared (docs/ADR/0005). CI runs it on every pull request with `--baseline
-eval-baseline.json --tolerances eval.toml` and fails (exit status 3) when any
-metric exceeds its baseline by more than its tolerance. To accept a new
-baseline, copy a fresh `eval-results.json` over `eval-baseline.json` in a
-reviewed commit that explains the delta. When a frame renders badly, add it as
-a `[[case]]` in `eval.toml` first, so the fix is measured and cannot regress.
-
-The committed corpus has no frames: frames and reference renders are
-local-only (docs/ADR/0005). Personal scans that must not be published go in a
-private corpus outside the repository, with the licence `LicenseRef-Private`,
-and are evaluated with their own `--corpus`, `--out` and `--baseline` (see
-`corpus/README.md`). A frame's manifest `geometry` can carry a crop, a buffer,
-a turn and a flip but not yet an `analysis_area`.
+Dependencies must be MIT, Apache-2.0, BSD, MPL-2.0 or LGPL; no GPL or AGPL
+code is allowed, and `cargo deny` checks this. `rawler` (LGPL-2.1) is used as
+an ordinary dependency and never vendored; see [NOTICE](NOTICE).

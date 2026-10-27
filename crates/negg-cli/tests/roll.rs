@@ -8,7 +8,7 @@ mod common;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use common::{TempDir, read_json, without_icc_date, write_negative_tiff};
+use common::{TempDir, assert_golden, read_json, without_icc_date, write_negative_tiff};
 use tiff::encoder::TiffEncoder;
 use tiff::encoder::colortype::RGB16;
 
@@ -181,7 +181,11 @@ fn no_roll_matches_the_golden_render_byte_for_byte() {
     ]);
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     assert!(!roll.join("roll.negg.json").exists());
-    assert!(without_icc_date(&out.join("golden.negg.tif")) == want);
+    assert_golden(
+        &out.join("golden.negg.tif"),
+        Path::new(PHASE1_GOLDEN),
+        &want,
+    );
     let s = read_json(&roll.join("golden.negg.json"));
     assert!(s.get("roll").is_none(), "{s}");
     assert_ne!(s["estimates"]["dmin_source"], "roll");
@@ -195,7 +199,11 @@ fn no_roll_matches_the_golden_render_byte_for_byte() {
         out.to_str().unwrap(),
     ]);
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
-    assert!(without_icc_date(&out.join("golden.negg.tif")) == want);
+    assert_golden(
+        &out.join("golden.negg.tif"),
+        Path::new(PHASE1_GOLDEN),
+        &want,
+    );
 }
 
 #[test]

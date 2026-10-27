@@ -182,3 +182,62 @@ pub fn without_icc_date(path: &Path) -> Vec<u8> {
     bytes[at - 12..at].fill(0);
     bytes
 }
+
+/// The most a 16-bit sample of a render may differ from its golden file on
+/// Windows (see [`assert_golden`]).
+pub const WINDOWS_GOLDEN_TOLERANCE: u16 = 2;
+
+/// Asserts that the TIFF at `got` is the golden render whose date-masked
+/// bytes are `want` (from [`without_icc_date`] on `want_path`). On macOS and
+/// Linux the bytes must be identical. The MSVC C runtime rounds `exp`, `ln`
+/// and `powf` differently in the last place, which can move a sample by a
+/// code value or two, so on Windows only the image size, the embedded ICC
+/// profile and every sample within [`WINDOWS_GOLDEN_TOLERANCE`] are required.
+pub fn assert_golden(got: &Path, want_path: &Path, want: &[u8]) {
+    let bytes = without_icc_date(got);
+    if bytes == want || !cfg!(windows) {
+        assert!(
+            bytes == want,
+            "{} differs from {}",
+            got.display(),
+            want_path.display()
+        );
+        return;
+    }
+    let (gw, gh, gs, gi) = read_tiff16(got);
+    let (ww, wh, ws, wi) = read_tiff16(want_path);
+    assert_eq!((gw, gh), (ww, wh), "image size");
+    assert!(
+        without_icc_date_bytes(gi) == without_icc_date_bytes(wi),
+        "ICC profile"
+    );
+    let worst = gs
+        .iter()
+        .zip(&ws)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        worst <= WINDOWS_GOLDEN_TOLERANCE,
+        "{} differs from {} by up to {worst} code values",
+        got.display(),
+        want_path.display()
+    );
+}
+
+/// A 16-bit RGB TIFF's width, height, samples and ICC profile.
+fn read_tiff16(path: &Path) -> (u32, u32, Vec<u16>, Vec<u8>) {
+    let mut d = tiff::decoder::Decoder::new(File::open(path).unwrap()).unwrap();
+    let (w, h) = d.dimensions().unwrap();
+    let icc = d.get_tag_u8_vec(tiff::tags::Tag::IccProfile).unwrap();
+    let tiff::decoder::DecodingResult::U16(samples) = d.read_image().unwrap() else {
+        panic!("{} is not 16-bit", path.display());
+    };
+    (w, h, samples, icc)
+}
+
+/// An ICC profile with its creation date and time zeroed.
+fn without_icc_date_bytes(mut icc: Vec<u8>) -> Vec<u8> {
+    icc[24..36].fill(0);
+    icc
+}
