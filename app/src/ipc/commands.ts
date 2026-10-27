@@ -14,13 +14,18 @@ import {
   type CropRect,
   type HistoryView,
   type NegativeView,
+  type PresetList,
+  type PrintLook,
+  type RollPresetScope,
   type RollSettings,
   type RollView,
   decodeExportReport,
+  decodeFrameList,
   decodeFrameView,
   decodeGeneration,
   decodeHistoryView,
   decodeNegativeView,
+  decodePresetList,
   decodeRollView,
 } from "./types";
 import { WireError } from "./tile";
@@ -157,6 +162,36 @@ export async function commitRoll(roll: RollSettings): Promise<RollView> {
 /** All three false locks all three (as `negg lock` with no flags). */
 export async function lockFrame(frame: number, dmin: boolean, gamma: boolean, cast: boolean): Promise<FrameView> {
   return decodeFrameView(await call("lock_frame", { frame, dmin, gamma, cast }));
+}
+
+/** The built-in presets and the user presets, with a message per skipped file. */
+export async function listPresets(): Promise<PresetList> {
+  return decodePresetList(await call("list_presets"));
+}
+
+/** Saves a look as a user preset; returns the refreshed list. */
+export async function savePreset(name: string, look: PrintLook): Promise<PresetList> {
+  return decodePresetList(await call("save_preset", { name, look }));
+}
+
+/** Sets a frame's look from a preset: one history entry. */
+export async function applyFramePreset(frame: number, name: string): Promise<FrameView> {
+  return decodeFrameView(await call("apply_frame_preset", { frame, name }));
+}
+
+/** The frames with a look of their own, which a roll preset asks about. */
+export async function framesWithOwnLook(): Promise<number[]> {
+  return decodeFrameList(await call("frames_with_own_look"));
+}
+
+/** Applies a preset to the roll: one history entry. */
+export async function applyRollPreset(name: string, scope: RollPresetScope): Promise<RollView> {
+  return decodeRollView(await call("apply_roll_preset", { name, scope }));
+}
+
+/** The frame as a preset would print it, as a JPEG thumbnail. Changes nothing. */
+export function presetThumbnail(frame: number, name: string): Promise<ArrayBuffer> {
+  return binary("preset_thumbnail", { frame, name });
 }
 
 export async function undo(): Promise<HistoryView> {

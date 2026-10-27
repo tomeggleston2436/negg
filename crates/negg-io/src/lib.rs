@@ -19,6 +19,8 @@
 //!   beside a roll's frames.
 //! - [`read_rig_profile`], [`write_rig_profile`], [`read_film_profile`] and
 //!   [`write_film_profile`]: the `*.negg.toml` profiles (docs/PROFILES.md).
+//! - [`read_preset`] and [`write_preset`]: the `*.preset.negg.toml` tone
+//!   preset files (ADR 0034).
 //! - [`parse_wedge_csv`] and [`parse_patches_csv`]: the calibration input
 //!   files (docs/PROFILES.md, Input CSV files).
 //!
@@ -27,6 +29,7 @@
 pub mod csv;
 pub mod error;
 pub mod jpeg;
+pub mod preset;
 pub mod profile;
 pub mod roll;
 pub mod sidecar;
@@ -38,6 +41,7 @@ pub use csv::{
 };
 pub use error::IoError;
 pub use jpeg::{DEFAULT_JPEG_QUALITY, JpegOptions, encode_jpeg8, write_jpeg8};
+pub use preset::{PRESET_SUFFIX, read_preset, write_preset};
 pub use profile::{read_film_profile, read_rig_profile, write_film_profile, write_rig_profile};
 pub use roll::{
     ROLL_SIDECAR_NAME, ROLL_SIDECAR_SCHEMA_VERSION, RollSidecar, migrate_roll, read_roll_sidecar,

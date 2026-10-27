@@ -7,7 +7,7 @@ Python's ctypes). The desktop app does not use it: the Tauri backend links
 ## Owns
 
 - The C ABI boundary: the `extern "C"` functions in `src/lib.rs` and the
-  generated header `include/negg.h` (ABI version 1, `NEGG_ABI_VERSION`)
+  generated header `include/negg.h` (ABI version 2, `NEGG_ABI_VERSION`)
 - The ownership and error rules of that boundary, below
 
 ## API
@@ -45,6 +45,10 @@ All functions are declared in `include/negg.h`.
 - `negg_export(session, frame, format, out_dir, &report_json)` exports one
   frame (`frame >= 0`) or the whole roll (`frame == -1`) as `negg convert` or
   `negg batch` would; `format` is 0 for TIFF16 and 1 for JPEG
+- `negg_export_web(session, frame, format, web, out_dir, &report_json)` is
+  `negg_export` with the web copy (ADR 0035): `web` is 0 for none, 1 for the
+  original and the web copy (`--web`), 2 for the web copy only
+  (`--web-only`); the web copy goes to `<out_dir>/web/<stem>.negg.jpg`
 - `negg_string_free`, `negg_last_error`
 
 JSON carries settings, statistics and the export report only, never pixels.

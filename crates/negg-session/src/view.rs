@@ -7,6 +7,8 @@
 use negg_types::{Estimates, FrameOverrides, PoolFrame, RollSettings, Settings};
 use serde::{Deserialize, Serialize};
 
+pub use crate::convert::WebOutput;
+
 /// The open roll: its directory, its frames, its settings, whether pass 1
 /// has finished, the session generation and the edit history.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -175,6 +177,21 @@ pub enum ExportScope {
     Roll,
 }
 
+/// Which frames a roll preset reaches (spec "Roll preset vs frames with
+/// their own look"): a frame has its own look when its overrides set any
+/// look field (grade, toe, shoulder, black point compensation, saturation
+/// or a frame preset).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RollPresetScope {
+    /// Every frame: the look fields of frames with their own look are
+    /// cleared, so they take the roll's new look. Their other overrides
+    /// stay.
+    AllFrames,
+    /// Only frames without their own look; the others keep theirs.
+    FramesWithoutOwnLook,
+}
+
 /// The output file format of an export.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -195,6 +212,10 @@ pub struct ExportRequest {
     /// The output directory (`--out`); `None` writes beside the sources, as
     /// the CLI does.
     pub out_dir: Option<String>,
+    /// The web copy (ADR 0035): none (the default, also when the field is
+    /// absent), also (`--web`) or only (`--web-only`).
+    #[serde(default)]
+    pub web: WebOutput,
 }
 
 /// What an export did.
@@ -204,7 +225,8 @@ pub struct ExportReport {
     pub converted: u32,
     /// Frames that failed.
     pub failed: u32,
-    /// The output images written, in the order they were written.
+    /// The output images written, in the order they were written: per
+    /// frame the original, then its web copy when one was written.
     pub outputs: Vec<String>,
     /// One line per failed frame: its path and why.
     pub errors: Vec<String>,
@@ -215,16 +237,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn roll_preset_scopes_are_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&RollPresetScope::FramesWithoutOwnLook).unwrap(),
+            r#""frames_without_own_look""#
+        );
+        let all: RollPresetScope = serde_json::from_str(r#""all_frames""#).unwrap();
+        assert_eq!(all, RollPresetScope::AllFrames);
+    }
+
+    #[test]
     fn export_requests_use_snake_case_tags() {
         let req = ExportRequest {
             scope: ExportScope::Frames { frames: vec![1, 2] },
             format: ExportFormat::Tiff16,
             out_dir: None,
+            web: WebOutput::Also,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(
             json,
-            r#"{"scope":{"kind":"frames","frames":[1,2]},"format":"tiff16","out_dir":null}"#
+            r#"{"scope":{"kind":"frames","frames":[1,2]},"format":"tiff16","out_dir":null,"web":"also"}"#
         );
         let back: ExportRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(back, req);
@@ -234,5 +267,21 @@ mod tests {
             serde_json::to_string(&FrameStatus::ReadOnly).unwrap(),
             r#""read_only""#
         );
+    }
+
+    #[test]
+    fn export_request_without_web_reads_as_none() {
+        let req: ExportRequest =
+            serde_json::from_str(r#"{"scope":{"kind":"roll"},"format":"jpeg","out_dir":null}"#)
+                .unwrap();
+        assert_eq!(req.web, WebOutput::None);
+        for (web, text) in [
+            (WebOutput::None, r#""none""#),
+            (WebOutput::Also, r#""also""#),
+            (WebOutput::Only, r#""only""#),
+        ] {
+            assert_eq!(serde_json::to_string(&web).unwrap(), text);
+            assert_eq!(serde_json::from_str::<WebOutput>(text).unwrap(), web);
+        }
     }
 }

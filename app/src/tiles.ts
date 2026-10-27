@@ -90,6 +90,40 @@ export function levelForScale(scale: number, dpr: number, levels: number): numbe
   return Math.max(0, Math.min(levels - 1, l));
 }
 
+/**
+ * The level drawn while a slider is dragged: one coarser than `fine` (a
+ * quarter of its pixels), so the preview keeps up with the slider. Null
+ * when that is the backdrop `top` (or past it), which is always drawn.
+ */
+export function dragLevel(fine: number, top: number): number | null {
+  return fine + 1 < top ? fine + 1 : null;
+}
+
+/**
+ * The pyramid levels a tiled preview mounts and asks for, besides the
+ * backdrop `top` (always both), coarsest first. `fine` is the level for
+ * the scale ({@link levelForScale}); `kept` is the coarser level left
+ * mounted after the last slider drag (null for none). While `dragging`
+ * only the {@link dragLevel} is asked for; `fine` stays mounted (hidden
+ * by the view) and is asked for again on release, drawn over `kept`,
+ * which is not asked for again, so the picture never falls back to the
+ * backdrop while the fine tiles arrive.
+ */
+export function previewLevels(
+  fine: number,
+  top: number,
+  dragging: boolean,
+  kept: number | null,
+): { mount: number[]; request: number[] } {
+  const drag = dragging ? dragLevel(fine, top) : null;
+  const mount = [kept, drag, fine]
+    .filter((l): l is number => l !== null && l < top)
+    .filter((l, i, all) => all.indexOf(l) === i)
+    .sort((a, b) => b - a);
+  const request = dragging ? (drag === null ? [] : [drag]) : fine < top ? [fine] : [];
+  return { mount, request };
+}
+
 /** Image size after a quarter turn (crop is not applied in the preview). */
 export function orientedSize(w: number, h: number, rotate: Rotation): [number, number] {
   return rotate === 90 || rotate === 270 ? [h, w] : [w, h];

@@ -8,10 +8,10 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use negg_session::{AnalyseStep, RollView, Session, SessionError};
+use negg_session::{AnalyseStep, Gpu, RollView, Session, SessionError};
 use serde::{Deserialize, Serialize};
 
 /// The roll view as the app's commands send it: the session's [`RollView`]
@@ -229,7 +229,13 @@ struct Shared {
     /// The webview answered the last `negg://closing` (its edits are sent).
     close_ack: Mutex<bool>,
     close_ack_cv: Condvar,
+    /// The GPU preview device once [`AppState::start_gpu`] has looked for
+    /// one (`None` inside: none found, or `NEGG_GPU=0`).
+    gpu: OnceLock<Option<Arc<Gpu>>>,
 }
+
+/// Set to `0` to keep the preview on the CPU.
+pub const GPU_ENV: &str = "NEGG_GPU";
 
 /// How a command uses the session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,6 +263,12 @@ impl AppState {
     /// A state with no roll open, sending events to `sink`, with its
     /// debounced flush thread running.
     pub fn new(sink: Arc<dyn EventSink>) -> AppState {
+        AppState::with_flush_delay(sink, FLUSH_DELAY)
+    }
+
+    /// As [`AppState::new`], flushing `delay` after the last edit instead of
+    /// [`FLUSH_DELAY`]. A test that must flush by hand first uses a long one.
+    pub fn with_flush_delay(sink: Arc<dyn EventSink>, delay: Duration) -> AppState {
         let shared = Arc::new(Shared {
             slot: Mutex::new(None),
             sink,
@@ -268,15 +280,47 @@ impl AppState {
             close_approved: AtomicBool::new(false),
             close_ack: Mutex::new(false),
             close_ack_cv: Condvar::new(),
+            gpu: OnceLock::new(),
         });
         let (tx, rx) = mpsc::channel::<()>();
         *lock_ignoring_poison(&shared.flush) = Some(tx);
         let weak: Weak<Shared> = Arc::downgrade(&shared);
         std::thread::Builder::new()
             .name("negg-flush".into())
-            .spawn(move || flush_thread(&weak, &rx))
+            .spawn(move || flush_thread(&weak, &rx, delay))
             .expect("the flush thread starts");
         AppState { shared }
+    }
+
+    /// Looks for a GPU for the preview (ADR 0036) on a background thread,
+    /// unless [`GPU_ENV`] is `0`. Until it is found, and when there is none,
+    /// tiles render on the CPU.
+    pub fn start_gpu(&self) {
+        if std::env::var(GPU_ENV).is_ok_and(|v| v == "0") {
+            let _ = self.shared.gpu.set(None);
+            return;
+        }
+        let shared = Arc::clone(&self.shared);
+        let _ = std::thread::Builder::new()
+            .name("negg-gpu".into())
+            .spawn(move || {
+                let gpu = match Gpu::new() {
+                    Ok(g) => {
+                        eprintln!("negg: preview on the GPU, {}", g.adapter());
+                        Some(Arc::new(g))
+                    }
+                    Err(e) => {
+                        eprintln!("negg: preview on the CPU, {e}");
+                        None
+                    }
+                };
+                let _ = shared.gpu.set(gpu);
+            });
+    }
+
+    /// The GPU preview device, once found.
+    pub fn gpu(&self) -> Option<Arc<Gpu>> {
+        self.shared.gpu.get().cloned().flatten()
     }
 
     /// Sends one event.
@@ -685,11 +729,11 @@ fn analyse_loop(shared: &Shared, id: u64) {
     }
 }
 
-/// Waits for a quiet [`FLUSH_DELAY`] after the last request, then flushes.
-fn flush_thread(shared: &Weak<Shared>, rx: &mpsc::Receiver<()>) {
+/// Waits for a quiet `delay` after the last request, then flushes.
+fn flush_thread(shared: &Weak<Shared>, rx: &mpsc::Receiver<()>, delay: Duration) {
     while rx.recv().is_ok() {
         loop {
-            match rx.recv_timeout(FLUSH_DELAY) {
+            match rx.recv_timeout(delay) {
                 Ok(()) => {}
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => return,

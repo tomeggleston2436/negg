@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
-import { CommandFailure } from "../ipc/commands";
+import { CommandFailure, setInvoke } from "../ipc/commands";
 import frameViewFixture from "../ipc/__fixtures__/frame_view.json";
 import rollViewFixture from "../ipc/__fixtures__/roll_view.json";
 import { type FrameOverrides, type FrameView, decodeFrameView, decodeRollView, emptyOverrides } from "../ipc/types";
 import { hasOwnArea, withRollArea } from "../sliders";
-import { EditQueue, cropToRollFlow, errorText, sameGeometry } from "./store";
+import presetListFixture from "../ipc/__fixtures__/preset_list.json";
+import { EditQueue, cropToRollFlow, errorText, presetActions, sameGeometry } from "./store";
+import type { Action } from "./reducer";
 
 describe("EditQueue", () => {
   it("runs jobs in order and collapses queued previews to the latest", async () => {
@@ -155,5 +157,143 @@ describe("cropToRollFlow", () => {
       },
     );
     expect(asked).toBe(false);
+  });
+});
+
+describe("preset actions", () => {
+  const view = decodeFrameView(frameViewFixture);
+  const rollView = decodeRollView(rollViewFixture);
+  const look = { grade: 130, toe: 8, shoulder: 3.5, black_point_compensation: true, saturation: 1.1 };
+
+  function setup(reply: (cmd: string, args: Record<string, unknown> | undefined) => unknown) {
+    const calls: Array<[string, Record<string, unknown> | undefined]> = [];
+    setInvoke(async (name, args) => {
+      calls.push([name, args]);
+      return reply(name, args);
+    });
+    const dispatched: Action[] = [];
+    const failures: unknown[] = [];
+    const reloaded: number[] = [];
+    const queue = new EditQueue();
+    const inflight = { n: 0 };
+    const p = presetActions({
+      queue,
+      dispatch: (a) => dispatched.push(a),
+      fail: (e) => failures.push(e),
+      current: () => 0,
+      onFrameScreen: () => true,
+      reloadFrame: async (i) => void reloaded.push(i),
+      inflight,
+    });
+    return { p, calls, dispatched, failures, reloaded, queue, inflight };
+  }
+
+  it("applies a frame preset after the edits already queued, and shows the frame it returns", async () => {
+    const { p, calls, dispatched, queue } = setup(() => frameViewFixture);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    queue.push(async () => {
+      await gate;
+      calls.push(["pending slider commit", undefined]);
+    }, false);
+    p.applyFramePreset("Rich");
+    release();
+    await queue.idle();
+    expect(calls.map((c) => c[0])).toEqual(["pending slider commit", "apply_frame_preset"]);
+    expect(calls[1]?.[1]).toEqual({ frame: 0, name: "Rich" });
+    expect(dispatched).toEqual([{ type: "frame/loaded", frame: view }]);
+  });
+
+  it("applies to the frame named, not the one shown later", async () => {
+    const { p, calls, queue } = setup(() => frameViewFixture);
+    p.applyFramePreset("Soft", 3);
+    await queue.idle();
+    expect(calls[0]).toEqual(["apply_frame_preset", { frame: 3, name: "Soft" }]);
+  });
+
+  it("reports a refused frame preset and shows the session's frame again", async () => {
+    const { p, failures, reloaded, queue } = setup(() => {
+      throw { kind: "read_only", message: "frame 1 is read-only" };
+    });
+    p.applyFramePreset("Rich");
+    await queue.idle();
+    expect(failures).toHaveLength(1);
+    expect(reloaded).toEqual([0]);
+  });
+
+  it("asks for the frames with their own look once queued edits are sent", async () => {
+    const { p, calls, queue } = setup((c) => (c === "frames_with_own_look" ? [2, 5] : null));
+    queue.push(async () => void calls.push(["queued", undefined]), false);
+    expect(await p.framesWithOwnLook()).toEqual([2, 5]);
+    expect(calls.map((c) => c[0])).toEqual(["queued", "frames_with_own_look"]);
+  });
+
+  it("applies a roll preset, then shows the new roll and the frame on screen", async () => {
+    const { p, calls, dispatched, reloaded } = setup(() => rollViewFixture);
+    expect(await p.applyRollPreset("Rich", "all_frames")).toBe(true);
+    expect(calls).toEqual([["apply_roll_preset", { name: "Rich", scope: "all_frames" }]]);
+    expect(dispatched).toEqual([{ type: "roll/loaded", roll: rollView }]);
+    expect(reloaded).toEqual([0]);
+  });
+
+  it("a refused roll preset reports and returns false", async () => {
+    const { p, failures, inflight } = setup(() => {
+      throw { kind: "convert", message: "no preset" };
+    });
+    expect(await p.applyRollPreset("Gone", "frames_without_own_look")).toBe(false);
+    expect(failures).toHaveLength(1);
+    expect(inflight.n).toBe(0);
+  });
+
+  it("loads the presets and saves one", async () => {
+    const { p, calls, dispatched, queue } = setup((c) => (c === "apply_frame_preset" ? frameViewFixture : presetListFixture));
+    await p.loadPresets();
+    expect(await p.savePreset("Mine", look)).toBeNull();
+    await queue.idle();
+    expect(calls).toEqual([
+      ["list_presets", undefined],
+      ["save_preset", { name: "Mine", look }],
+      // The saved preset is applied to the frame, so its heading names it.
+      ["apply_frame_preset", { frame: 0, name: "Mine" }],
+    ]);
+    expect(dispatched.map((a) => a.type)).toEqual(["presets/loaded", "presets/loaded", "frame/loaded"]);
+  });
+
+  it("applies a saved preset to the frame it was saved from, not the one shown later", async () => {
+    let shown = 4;
+    let finishSave: (v: unknown) => void = () => undefined;
+    const calls: Array<[string, Record<string, unknown> | undefined]> = [];
+    setInvoke(async (name, args) => {
+      calls.push([name, args]);
+      if (name === "save_preset") return new Promise((r) => (finishSave = r));
+      return frameViewFixture;
+    });
+    const queue = new EditQueue();
+    const p = presetActions({
+      queue,
+      dispatch: () => undefined,
+      fail: () => undefined,
+      current: () => shown,
+      onFrameScreen: () => true,
+      reloadFrame: async () => undefined,
+      inflight: { n: 0 },
+    });
+    const saved = p.savePreset("Mine", look);
+    shown = 5;
+    finishSave(presetListFixture);
+    expect(await saved).toBeNull();
+    await queue.idle();
+    expect(calls[1]).toEqual(["apply_frame_preset", { frame: 4, name: "Mine" }]);
+  });
+
+  it("returns why a save was refused", async () => {
+    const { p, dispatched, calls, queue } = setup(() => {
+      throw { kind: "convert", message: "\"Rich\" is a built-in preset name; choose another" };
+    });
+    expect(await p.savePreset("Rich", look)).toBe('"Rich" is a built-in preset name; choose another');
+    expect(dispatched).toEqual([]);
+    // A refused save applies nothing.
+    await queue.idle();
+    expect(calls.map((c) => c[0])).toEqual(["save_preset"]);
   });
 });

@@ -11,8 +11,17 @@ publish = false
 negg-film = { path = "../negg-film", version = "0.0.0" }
 negg-types = { path = "../negg-types", version = "0.0.0" }
 rayon = { workspace = true }
+# The GPU preview kernel (feature `gpu`, ADR 0036). MIT OR Apache-2.0.
+bytemuck = { version = "1.25.2", optional = true }
+pollster = { version = "1.0.1", optional = true }
+wgpu = { version = "30.0.1", optional = true }
+
+[features]
+gpu = ["dep:bytemuck", "dep:pollster", "dep:wgpu"]
 
 [dev-dependencies]
+# The GPU tests compare the display encoding with Little-CMS.
+negg-cms = { path = "../negg-cms", version = "0.0.0" }
 proptest = { workspace = true }
 
 [lints]

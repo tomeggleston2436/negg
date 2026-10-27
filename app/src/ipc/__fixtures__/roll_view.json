@@ -31,9 +31,9 @@
     }
   ],
   "roll": {
-    "schema_version": 4,
+    "schema_version": 5,
     "shared": {
-      "schema_version": 4,
+      "schema_version": 5,
       "film": {
         "film_base": {
           "mode": "auto"

@@ -41,9 +41,10 @@ use std::time::Instant;
 use negg_cms::{CmsError, Intent};
 use negg_decode::{Decoded, Transfer};
 use negg_io::{JpegOptions, Sidecar, TiffOptions};
-use negg_render::{FrameRender, render_frame};
+use negg_render::{FrameRender, downscale_to_long_edge, render_frame};
 use negg_types::settings::OutputSpace;
 use negg_types::{FrameOverrides, Image, RollPool, Settings};
+use serde::{Deserialize, Serialize};
 
 use crate::error::ConvertError;
 use crate::roll::{RollContext, prepare_frame, render_in_roll};
@@ -67,6 +68,31 @@ impl Format {
         }
     }
 }
+
+/// Whether an export also writes the web copy (ADR 0035): an sRGB JPEG of
+/// [`WEB_LONG_EDGE`] px on the long edge at quality [`WEB_JPEG_QUALITY`],
+/// at [`web_output_path`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebOutput {
+    /// The original only, as before.
+    #[default]
+    None,
+    /// The original and the web copy (`--web`).
+    Also,
+    /// The web copy only (`--web-only`): no original is written.
+    Only,
+}
+
+/// The long edge of the web copy in pixels; a smaller image is never
+/// upscaled (ADR 0035, `docs/MATHS.md` step 8).
+pub const WEB_LONG_EDGE: usize = 2048;
+
+/// The JPEG quality of the web copy (ADR 0035); originals stay at 92.
+pub const WEB_JPEG_QUALITY: u8 = 85;
+
+/// The subfolder of the export directory the web copies go into.
+pub const WEB_SUBDIR: &str = "web";
 
 /// File extensions (lower case, no dot) that `negg batch` converts: the
 /// RAW formats rawler reads plus TIFF.
@@ -181,6 +207,34 @@ pub fn output_path(input: &Path, out_dir: &Path, format: Format) -> PathBuf {
     out_dir.join(name)
 }
 
+/// The web copy's path for `input` in `out_dir`:
+/// `<out_dir>/web/<stem>.negg.jpg` (ADR 0035). It is in its own folder
+/// and carries the `.negg.` infix, so it never names an original output or
+/// a source, and `negg batch` never takes it as an input.
+pub fn web_output_path(input: &Path, out_dir: &Path) -> PathBuf {
+    output_path(input, &out_dir.join(WEB_SUBDIR), Format::Jpeg)
+}
+
+/// The image files converting `input` into `out_dir` writes, the one
+/// reported as [`Converted::output`] first: the original at
+/// [`output_path`] unless `web` is [`WebOutput::Only`], then the web copy
+/// at [`web_output_path`] unless `web` is [`WebOutput::None`].
+pub(crate) fn planned_outputs(
+    input: &Path,
+    out_dir: &Path,
+    format: Format,
+    web: WebOutput,
+) -> Vec<PathBuf> {
+    let mut paths = Vec::with_capacity(2);
+    if web != WebOutput::Only {
+        paths.push(output_path(input, out_dir, format));
+    }
+    if web != WebOutput::None {
+        paths.push(web_output_path(input, out_dir));
+    }
+    paths
+}
+
 /// Whether `a` and `b` name the same file. When both exist they are
 /// compared by device and inode on Unix (which catches symbolic and hard
 /// links, `..` and case-insensitive file systems) and by canonical path
@@ -237,8 +291,12 @@ impl fmt::Display for Timing {
 /// What one successful conversion produced.
 #[derive(Debug)]
 pub struct Converted {
-    /// The output image.
+    /// The output image: the original, or the web copy with
+    /// [`WebOutput::Only`].
     pub output: PathBuf,
+    /// The web copy, when one was written ([`WebOutput::Also`], or
+    /// [`WebOutput::Only`] where it equals `output`).
+    pub web: Option<PathBuf>,
     /// The sidecar beside the source.
     pub sidecar: PathBuf,
     /// The render, kept for `--dump-stats`.
@@ -255,7 +313,8 @@ pub struct Converted {
 
 /// Checks, before anything is decoded or written, that converting `input`
 /// to `output` cannot write over the source and that its sidecar is not
-/// the roll sidecar (R-roll).
+/// the roll sidecar (R-roll). The conversion calls it for each file it
+/// writes, the web copy ([`web_output_path`]) included.
 ///
 /// # Errors
 ///
@@ -293,6 +352,8 @@ pub struct FrameOptions<'a> {
     /// Recorded as the sidecar's `roll` (the roll sidecar's file name) when
     /// the frame is rendered in roll mode.
     pub roll: Option<&'a str>,
+    /// Whether to write the web copy too, or only it (ADR 0035).
+    pub web: WebOutput,
 }
 
 /// Converts one frame: decode, prepare, render, export and write the image
@@ -325,6 +386,14 @@ pub fn convert_frame(
 /// returned render's image is the exported framing. The sidecar records
 /// `settings`, the estimates, `opts.overrides` and `opts.roll`.
 ///
+/// With `opts.web` the web copy (ADR 0035) is made from the same render
+/// after geometry: [`downscale_to_long_edge`] to [`WEB_LONG_EDGE`], then
+/// the sRGB output transform whatever `colour.output_space` says, written
+/// as a JPEG at quality [`WEB_JPEG_QUALITY`] with the sRGB profile at
+/// [`web_output_path`] (its folder created if absent). With
+/// [`WebOutput::Only`] no original is written; the sidecar is written all
+/// the same.
+///
 /// # Errors
 ///
 /// As [`convert_frame`].
@@ -349,9 +418,13 @@ pub(crate) fn convert_frame_noting(
     opts: &FrameOptions,
     on_note: &mut dyn FnMut(&str),
 ) -> Result<Converted, ConvertError> {
-    let output = output_path(input, out_dir, format);
+    let outputs = planned_outputs(input, out_dir, format, opts.web);
     let sidecar = negg_io::sidecar_path(input);
-    check_targets(input, &output)?;
+    for target in &outputs {
+        check_targets(input, target)?;
+    }
+    let output = outputs[0].clone();
+    let web = (opts.web != WebOutput::None).then(|| web_output_path(input, out_dir));
     let mut timing = Timing::default();
 
     let t = Instant::now();
@@ -382,30 +455,57 @@ pub(crate) fn convert_frame_noting(
     let transform = negg_cms::working_to_output(space, Intent::Perceptual)?;
     let icc = negg_cms::profile_bytes(space)?;
     let (w, h) = (render.image.width(), render.image.height());
-    let encoded = match format {
-        Format::Tiff16 => Encoded::U16(transform.apply(&render.image)),
-        Format::Jpeg => Encoded::U8(transform.apply_u8(&render.image)),
+    let encoded = match (opts.web, format) {
+        (WebOutput::Only, _) => None,
+        (_, Format::Tiff16) => Some(Encoded::U16(transform.apply(&render.image))),
+        (_, Format::Jpeg) => Some(Encoded::U8(transform.apply_u8(&render.image))),
+    };
+    // The web copy (ADR 0035): downscaled in linear light after geometry,
+    // then always sRGB.
+    let web_encoded = match &web {
+        Some(_) => {
+            let small = downscale_to_long_edge(&render.image, WEB_LONG_EDGE);
+            let srgb = negg_cms::working_to_output(OutputSpace::Srgb, Intent::Perceptual)?;
+            let rgb8 = srgb.apply_u8(&small);
+            Some((small.width(), small.height(), rgb8))
+        }
+        None => None,
     };
     timing.transform_ms = t.elapsed().as_secs_f64() * 1e3;
 
     let t = Instant::now();
     match &encoded {
-        Encoded::U16(rgb16) => {
+        Some(Encoded::U16(rgb16)) => {
             let opts = TiffOptions {
                 icc: Some(icc),
                 ..TiffOptions::default()
             };
             negg_io::write_tiff16(&output, w, h, rgb16, &opts)?;
         }
-        Encoded::U8(rgb8) => {
+        Some(Encoded::U8(rgb8)) => {
             let opts = JpegOptions {
                 icc: Some(icc),
                 ..JpegOptions::default()
             };
             negg_io::write_jpeg8(&output, w, h, rgb8, &opts)?;
         }
+        None => {}
     }
     drop(encoded);
+    if let (Some(path), Some((ww, wh, rgb8))) = (&web, &web_encoded) {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|source| ConvertError::Io {
+                path: dir.to_path_buf(),
+                source,
+            })?;
+        }
+        let opts = JpegOptions {
+            icc: Some(negg_cms::profile_bytes(OutputSpace::Srgb)?),
+            quality: WEB_JPEG_QUALITY,
+        };
+        negg_io::write_jpeg8(path, *ww, *wh, rgb8, &opts)?;
+    }
+    drop(web_encoded);
     let mut record = Sidecar::new(
         input,
         settings.clone(),
@@ -421,6 +521,7 @@ pub(crate) fn convert_frame_noting(
 
     Ok(Converted {
         output,
+        web,
         sidecar,
         render,
         matrix_applied,
@@ -598,6 +699,57 @@ mod tests {
             failed: 0,
         };
         assert_eq!(one.to_string(), "converted 1 of 1 frame (0 failed)");
+    }
+
+    #[test]
+    fn web_copies_go_to_the_web_folder_and_are_never_batch_inputs() {
+        let web = web_output_path(Path::new("roll/a.tif"), Path::new("out"));
+        assert_eq!(web, Path::new("out/web/a.negg.jpg"));
+        assert!(!is_batch_input(&web));
+        let input = Path::new("roll/a.tif");
+        let out = Path::new("out");
+        assert_eq!(
+            planned_outputs(input, out, Format::Tiff16, WebOutput::None),
+            [Path::new("out/a.negg.tif")]
+        );
+        assert_eq!(
+            planned_outputs(input, out, Format::Tiff16, WebOutput::Also),
+            [Path::new("out/a.negg.tif"), Path::new("out/web/a.negg.jpg")]
+        );
+        assert_eq!(
+            planned_outputs(input, out, Format::Jpeg, WebOutput::Only),
+            [Path::new("out/web/a.negg.jpg")]
+        );
+        assert_eq!(WebOutput::default(), WebOutput::None);
+        assert_eq!(
+            (WEB_LONG_EDGE, WEB_JPEG_QUALITY, WEB_SUBDIR),
+            (2048, 85, "web")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn convert_frame_refuses_a_web_copy_over_its_input() {
+        let dir = std::env::temp_dir().join(format!("negg-web-overwrite-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("web")).unwrap();
+        let y = dir.join("y");
+        std::fs::write(&y, b"source").unwrap();
+        std::os::unix::fs::symlink(&y, dir.join("web/y.negg.jpg")).unwrap();
+        for web in [WebOutput::Also, WebOutput::Only] {
+            let opts = FrameOptions {
+                web,
+                ..FrameOptions::default()
+            };
+            let err = convert_frame_with(&y, &dir, &Settings::default(), Format::Jpeg, &opts)
+                .unwrap_err();
+            assert!(
+                matches!(err, ConvertError::WouldOverwriteSource { .. }),
+                "{err:?}"
+            );
+        }
+        assert_eq!(std::fs::read(&y).unwrap(), b"source");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

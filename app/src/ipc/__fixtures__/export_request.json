@@ -7,5 +7,6 @@
     ]
   },
   "format": "jpeg",
-  "out_dir": "/exports/roll-01"
+  "out_dir": "/exports/roll-01",
+  "web": "none"
 }

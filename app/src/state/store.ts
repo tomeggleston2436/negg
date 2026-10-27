@@ -5,7 +5,16 @@
 
 import { createContext, createElement, useContext, useMemo, useReducer, useRef, type ReactNode } from "react";
 import * as cmd from "../ipc/commands";
-import type { CropRect, ExportRequest, FrameOverrides, FrameView, RollSettings } from "../ipc/types";
+import type {
+  CropRect,
+  ExportRequest,
+  FrameOverrides,
+  FrameView,
+  PrintLook,
+  RollPresetScope,
+  RollSettings,
+} from "../ipc/types";
+import { PresetPreviewCache } from "../presets";
 import { sameGeometry, withRollArea } from "../sliders";
 import { ThumbCache } from "./thumbs";
 import { type Action, type State, initialState, reducer } from "./reducer";
@@ -100,6 +109,108 @@ export interface Actions {
    * override is removed so the frame follows later roll changes.
    */
   frameCropToRoll(): Promise<void>;
+  /** Fetches a preset preview of `frame` unless one at this version is cached. */
+  requestPresetPreview(frame: number, name: string, version: string): void;
+}
+
+export interface PresetActions {
+  /**
+   * Applies a preset to `frame` (default: the frame shown now) as one
+   * history entry, after every edit already queued.
+   */
+  applyFramePreset(name: string, frame?: number): void;
+  /** The frames with a look of their own, once queued edits are sent; null when refused (reported). */
+  framesWithOwnLook(): Promise<number[] | null>;
+  /** Applies a preset to the roll (one history entry); false when refused (reported). */
+  applyRollPreset(name: string, scope: RollPresetScope): Promise<boolean>;
+  /** Fetches the preset list. */
+  loadPresets(): Promise<void>;
+  /**
+   * Saves `look` as a user preset; resolves to why it was refused, or null.
+   * Once saved, the preset is applied (as `applyFramePreset` does) to `frame`
+   * (default: the frame shown when the save started), the frame `look` was
+   * taken from, so its heading names the new preset; the values are already
+   * the frame's, so its render does not change.
+   */
+  savePreset(name: string, look: PrintLook, frame?: number): Promise<string | null>;
+}
+
+export interface PresetContext {
+  queue: EditQueue;
+  dispatch: (a: Action) => void;
+  fail: (e: unknown) => void;
+  current: () => number | null;
+  onFrameScreen: () => boolean;
+  reloadFrame: (index: number) => Promise<void>;
+  /** Roll edits sent outside the queue and not answered yet (a close waits for them). */
+  inflight: { n: number };
+}
+
+/**
+ * The preset actions. A frame preset goes through the edit queue as a commit
+ * does (so a pending slider edit is sent first and never lost); a roll preset
+ * waits for the queue and refreshes the roll and the frame shown, as
+ * commitRoll does. Thumbnails follow from the backend's `negg://thumbs`.
+ */
+export function presetActions(ctx: PresetContext): PresetActions {
+  const { queue, dispatch, fail } = ctx;
+  const actions: PresetActions = {
+    applyFramePreset(name, target) {
+      const frame = target ?? ctx.current();
+      if (frame === null) return;
+      queue.push(async () => {
+        try {
+          // No `committed`: the view answers every draft before it.
+          dispatch({ type: "frame/loaded", frame: await cmd.applyFramePreset(frame, name) });
+        } catch (e) {
+          fail(e);
+          await ctx.reloadFrame(frame).catch(fail);
+        }
+      }, false);
+    },
+    async framesWithOwnLook() {
+      await queue.idle();
+      try {
+        return await cmd.framesWithOwnLook();
+      } catch (e) {
+        fail(e);
+        return null;
+      }
+    },
+    async applyRollPreset(name, scope) {
+      ctx.inflight.n += 1;
+      await queue.idle();
+      try {
+        dispatch({ type: "roll/loaded", roll: await cmd.applyRollPreset(name, scope) });
+        const frame = ctx.current();
+        if (frame !== null && ctx.onFrameScreen()) await ctx.reloadFrame(frame);
+        return true;
+      } catch (e) {
+        fail(e);
+        return false;
+      } finally {
+        ctx.inflight.n -= 1;
+      }
+    },
+    async loadPresets() {
+      try {
+        dispatch({ type: "presets/loaded", list: await cmd.listPresets() });
+      } catch (e) {
+        fail(e);
+      }
+    },
+    async savePreset(name, look, target) {
+      const frame = target ?? ctx.current();
+      try {
+        dispatch({ type: "presets/loaded", list: await cmd.savePreset(name, look) });
+      } catch (e) {
+        return errorText(e);
+      }
+      if (frame !== null) actions.applyFramePreset(name, frame);
+      return null;
+    },
+  };
+  return actions;
 }
 
 export interface CropToRollDeps {
@@ -142,7 +253,7 @@ export { sameGeometry };
 interface StoreValue {
   state: State;
   dispatch: (a: Action) => void;
-  actions: Actions;
+  actions: Actions & PresetActions;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -168,16 +279,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     revoke: (url) => URL.revokeObjectURL(url),
     onChange: (frame, url) => dispatch({ type: "negatives/loaded", frame, url }),
   });
+  const previewsRef = useRef<PresetPreviewCache | null>(null);
+  previewsRef.current ??= new PresetPreviewCache({
+    fetch: (frame, name) => cmd.presetThumbnail(frame, name),
+    makeUrl: (bytes) => URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" })),
+    revoke: (url) => URL.revokeObjectURL(url),
+    onChange: (frame, name, url) => dispatch({ type: "presets/preview", frame, name, url }),
+  });
 
-  const actions = useMemo<Actions>(() => {
+  const actions = useMemo<Actions & PresetActions>(() => {
     const queue = queueRef.current as EditQueue;
     const thumbs = thumbsRef.current as ThumbCache;
     const negatives = negativesRef.current as ThumbCache;
+    const previews = previewsRef.current as PresetPreviewCache;
     const fail = (e: unknown) => dispatch({ type: "error/set", error: errorText(e) });
     const current = () => stateRef.current.current;
     // Roll edits sent outside the queue (commitRoll, setRollArea) and not
     // answered yet: a close waits for them too.
-    let inflight = 0;
+    const inflight = { n: 0 };
 
     // A frame pass 1 has not reached shows its negative (Ruling 134); its
     // view is asked for only once it is analysed.
@@ -202,6 +321,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const roll = await cmd.openRoll(dir);
           thumbs.reset();
           negatives.reset();
+          previews.reset();
           dispatch({ type: "roll/opening" });
           dispatch({ type: "roll/loaded", roll });
         } catch (e) {
@@ -241,7 +361,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       drag(overrides) {
         const frame = current();
         if (frame === null) return;
-        dispatch({ type: "frame/draft", overrides });
+        dispatch({ type: "frame/draft", overrides, drag: true });
         queue.push(async () => {
           try {
             dispatch({ type: "frame/previewed", generation: await cmd.previewFrame(frame, overrides) });
@@ -270,7 +390,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }, false);
       },
       async commitRoll(roll) {
-        inflight += 1;
+        inflight.n += 1;
         await queue.idle();
         try {
           dispatch({ type: "roll/loaded", roll: await cmd.commitRoll(roll) });
@@ -281,7 +401,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           fail(e);
           return false;
         } finally {
-          inflight -= 1;
+          inflight.n -= 1;
         }
       },
       lock(dmin, gamma, cast) {
@@ -318,6 +438,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       requestThumb(frame, stale) {
         thumbs.request(frame, stale);
       },
+      requestPresetPreview(frame, name, version) {
+        previews.request(frame, name, version);
+      },
       requestNegativeThumb(frame) {
         // The negative never changes within a session: generation 0.
         negatives.request(frame, 0);
@@ -337,7 +460,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
       },
       async setRollArea(area) {
-        inflight += 1;
+        inflight.n += 1;
         await queue.idle();
         try {
           dispatch({ type: "roll/loaded", roll: await cmd.setRollAnalysisArea(area) });
@@ -348,7 +471,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           fail(e);
           return false;
         } finally {
-          inflight -= 1;
+          inflight.n -= 1;
         }
       },
       useRollArea() {
@@ -389,9 +512,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (active instanceof HTMLElement) active.blur();
         // The blur's commit is sent from its handler; let it start.
         await new Promise((r) => setTimeout(r, 0));
-        while (inflight > 0) await new Promise((r) => setTimeout(r, 5));
+        while (inflight.n > 0) await new Promise((r) => setTimeout(r, 5));
         await queue.idle();
-        while (inflight > 0) await new Promise((r) => setTimeout(r, 5));
+        while (inflight.n > 0) await new Promise((r) => setTimeout(r, 5));
       },
       async runExport(request, total) {
         await queue.idle();
@@ -411,7 +534,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (frame !== null && stateRef.current.screen === "frame") await reloadFrame(frame);
     }
 
-    return a;
+    const p = presetActions({
+      queue,
+      dispatch,
+      fail,
+      current,
+      onFrameScreen: () => stateRef.current.screen === "frame",
+      reloadFrame,
+      inflight,
+    });
+    return { ...a, ...p };
   }, []);
 
   const value = useMemo(() => ({ state, dispatch, actions }), [state, actions]);

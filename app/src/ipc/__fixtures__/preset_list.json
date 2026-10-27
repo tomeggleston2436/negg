@@ -1,0 +1,28 @@
+{
+  "presets": [
+    {
+      "name": "Standard",
+      "look": {
+        "grade": 115.0,
+        "toe": 6.0,
+        "shoulder": 3.0,
+        "black_point_compensation": false,
+        "saturation": 1.0
+      }
+    },
+    {
+      "name": "Soft",
+      "look": {
+        "grade": 95.0,
+        "toe": 4.0,
+        "shoulder": 2.0,
+        "black_point_compensation": false,
+        "saturation": 0.95
+      }
+    }
+  ],
+  "builtins": 2,
+  "warnings": [
+    "broken.preset.negg.toml: unreadable"
+  ]
+}

@@ -15,8 +15,10 @@ pub mod state;
 use std::sync::Arc;
 use std::time::Duration;
 
-use negg_session::{ExportReport, ExportRequest, FrameView, HistoryView, NegativeView};
-use negg_types::{CropRect, FrameOverrides, RollSettings};
+use negg_session::{
+    ExportReport, ExportRequest, FrameView, HistoryView, NegativeView, PresetList, RollPresetScope,
+};
+use negg_types::{CropRect, FrameOverrides, PrintLook, RollSettings};
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 
@@ -174,6 +176,60 @@ async fn lock_frame(
         commands::lock_frame(s, frame, dmin, gamma, cast)
     })
     .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn list_presets() -> Result<PresetList, CommandError> {
+    tauri::async_runtime::spawn_blocking(commands::list_presets)
+        .await
+        .map_err(|e| CommandError::internal(format!("the command failed: {e}")))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn save_preset(name: String, look: PrintLook) -> Result<PresetList, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || commands::save_preset(&name, look))
+        .await
+        .map_err(|e| CommandError::internal(format!("the command failed: {e}")))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn apply_frame_preset(
+    state: State<'_, AppState>,
+    frame: u32,
+    name: String,
+) -> Result<FrameView, CommandError> {
+    blocking(&state, move |s| {
+        commands::apply_frame_preset(s, frame, &name)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn frames_with_own_look(state: State<'_, AppState>) -> Result<Vec<u32>, CommandError> {
+    blocking(&state, commands::frames_with_own_look).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn apply_roll_preset(
+    state: State<'_, AppState>,
+    name: String,
+    scope: RollPresetScope,
+) -> Result<AppRollView, CommandError> {
+    blocking(&state, move |s| {
+        commands::apply_roll_preset(s, &name, scope)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn preset_thumbnail(
+    state: State<'_, AppState>,
+    frame: u32,
+    name: String,
+) -> Result<Response, CommandError> {
+    blocking(&state, move |s| commands::preset_thumbnail(s, frame, &name))
+        .await
+        .map(Response::new)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -338,7 +394,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let sink: Arc<dyn EventSink> = Arc::new(TauriSink(app.handle().clone()));
-            app.manage(AppState::new(sink));
+            let state = AppState::new(sink);
+            state.start_gpu();
+            app.manage(state);
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -378,6 +436,12 @@ pub fn run() {
             commit_frame,
             commit_roll,
             lock_frame,
+            list_presets,
+            save_preset,
+            apply_frame_preset,
+            frames_with_own_look,
+            apply_roll_preset,
+            preset_thumbnail,
             undo,
             redo,
             close_ready,

@@ -8,6 +8,7 @@ description = "The negg flows (convert, batch, roll mode, lock) and the Session,
 publish = false
 
 [dependencies]
+dirs = "6"
 negg-calib = { path = "../negg-calib", version = "0.0.0" }
 negg-cms = { path = "../negg-cms", version = "0.0.0" }
 negg-decode = { path = "../negg-decode", version = "0.0.0" }
@@ -17,6 +18,10 @@ negg-render = { path = "../negg-render", version = "0.0.0" }
 negg-types = { path = "../negg-types", version = "0.0.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[features]
+# The GPU preview of Session::render_tile (ADR 0036), for the desktop app.
+gpu = ["negg-render/gpu"]
 
 [lints]
 workspace = true

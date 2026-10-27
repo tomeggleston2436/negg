@@ -30,7 +30,9 @@
       "paper_dmax": null,
       "shoulder": null,
       "toe": null,
-      "black_point_compensation": true
+      "black_point_compensation": true,
+      "saturation": 1.15,
+      "preset": ""
     },
     "colour": {
       "auto_colour": null,
@@ -56,7 +58,7 @@
     }
   },
   "settings": {
-    "schema_version": 4,
+    "schema_version": 5,
     "film": {
       "film_base": {
         "mode": "fixed",
@@ -85,7 +87,8 @@
       "paper_dmax": 2.3,
       "shoulder": 3.0,
       "toe": 6.0,
-      "black_point_compensation": true
+      "black_point_compensation": true,
+      "saturation": 1.15
     },
     "colour": {
       "auto_colour": true,

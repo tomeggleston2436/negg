@@ -31,7 +31,10 @@ drive.
   scopes, and before pass 1 the decoded negative (`negative_view`,
   `negative_tile`, `negative_thumbnail_jpeg`) for the analysis area tool.
   Tiles and scopes are in the binary wire formats of `wire.rs` (ADR 0022);
-  the tile size is `negg_render::TILE_SIZE`
+  the tile size is `negg_render::TILE_SIZE`. With the `gpu` feature,
+  `set_gpu` renders tiles on a `Gpu` (re-exported from `negg-render`), within
+  one 8-bit step of the CPU tiles; a failed GPU render falls back to the CPU
+  for good, and nothing else uses the GPU (ADR 0036)
 - Edits: `preview_frame` (a drag, nothing recorded), `commit_frame`,
   `commit_roll`, `set_roll_analysis_area` (also before pass 1), `lock_frame`,
   `undo` and `redo` over one linear history (ADR 0023). Edits are refused
@@ -46,9 +49,16 @@ drive.
 - Warnings: `Session::warnings` and `RollView::pool_warning` say when an
   analysis area or crop change took the film base pool off the clear film
   edge (Ruling 138)
+- Tone presets (ADR 0034): the preset list (built-in plus the user's folder,
+  `$NEGG_PRESETS_DIR` else the platform config `negg/presets`), applying a
+  preset to a frame or the roll (with the "All frames / Only frames without
+  their own look" choice), saving a user preset, and preset previews of a
+  frame. A preset changes only grade, toe, shoulder, black point compensation,
+  saturation and the `print.preset` label
 - `export`: calls `batch_dir` or `convert_one` as the CLI does, so an export
   is byte-identical to `negg batch` or `negg convert` on the same directory
-  (ADR 0024)
+  (ADR 0024). The web copy (ADR 0035) is requested through the export
+  request's web mode: original only, both, or web only
 - `SessionError` and `ConvertError`
 
 ## Must not

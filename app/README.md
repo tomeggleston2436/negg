@@ -26,8 +26,8 @@ Tauri or needs Node (ADR 0020). It links the engine as Rust crates through
    density cap (the holder is in what was analysed) gets a "needs analysis
    area" badge and is left out of the roll's gamma and cast pools (ADR 0032).
 3. **Edit.** The frame screen has the physical sliders (density, grade, cyan,
-   magenta, yellow, toe, shoulder, black point compensation), rotate and flip,
-   the output crop, the frame's own analysis area ("Use roll analysis area"
+   magenta, yellow, toe, shoulder, saturation, black point compensation),
+   rotate and flip, the output crop, the frame's own analysis area ("Use roll analysis area"
    drops it again), lock, undo and redo (Cmd or Ctrl+Z, with Shift to redo, on
    every screen; on macOS also the Edit menu), the
    scopes, and a toggle to show the negative. Arrow keys or `[` and `]` move
@@ -36,9 +36,22 @@ Tauri or needs Node (ADR 0020). It links the engine as Rust crates through
    film profiles. A drag previews; release commits. Changes that alter what the
    roll pool sees are re-pooled in the background, with a "re-pooling"
    indicator (ADR 0023).
-4. **Export.** Export this frame, the selected frames or the whole roll as
-   16-bit TIFF or JPEG, with the output space chosen in the dialog, beside the
-   sources or into another folder.
+
+   **Tone presets.** The frame screen shows a strip of small previews of the
+   frame under each preset (built-in, then your own); clicking one applies it
+   to this frame as one undo step. `P` applies the next preset and Shift+P the
+   previous one (not while typing in a field), as do the Previous preset and
+   Next preset buttons. The heading names the preset the look came from, with
+   "(modified)" once a slider has moved. "Save as preset" stores the frame's
+   grade, toe, shoulder, black point compensation and saturation under a name
+   you type (a preset of the same name is replaced; built-in names are
+   refused). The roll panel's preset picker applies a preset to the roll; when
+   some frames have their own look it asks whether to apply it to all frames
+   (their own look is cleared) or only to the frames without one.
+4. **Export.** Export this frame, the selected frames or the whole roll,
+   beside the sources or into another folder. Tick Original (16-bit TIFF or
+   JPEG, in the output space chosen in the dialog), Web/Instagram (an sRGB
+   JPEG, 2048 px on the long edge, in a `web` folder) or both.
 
 Sidecars are written next to the frames, as the CLI writes them: each frame's
 `<stem>.negg.json` (its settings, overrides and estimates) and the roll's
@@ -52,6 +65,16 @@ the next attempt goes ahead without them. Setting an analysis area, like any
 roll setting, saves `roll.negg.json` in the folder, also before Analyse; a roll
 edit also brings every other frame's sidecar up to date, as `negg batch` would.
 Only browsing a folder (without any edit) saves nothing.
+
+## GPU preview
+
+The preview tiles render on the GPU when there is one (ADR 0036): the app
+looks for an adapter on a background thread at start-up and logs which one it
+uses (`negg: preview on the GPU, ...`), or why it uses the CPU. Exports,
+thumbnails and scopes always render on the CPU, so a GPU never changes an
+exported file. `NEGG_GPU=0 pnpm tauri dev` keeps the preview on the CPU.
+While a slider is dragged the preview draws at half resolution and sharpens
+when you let go.
 
 ## Requirements
 
@@ -88,8 +111,10 @@ cargo clippy --all-targets -- -D warnings
 cargo test                           # the commands without a webview, and the IPC fixtures
 ```
 
-The frontend tests cover the parsers, tile maths, slider table and reducer; the
-UI itself is not tested end to end (ADR 0025). `app/src/ipc/__fixtures__` are
+The frontend tests cover the parsers, tile maths, slider table, reducer, store
+actions with a mocked backend, the preset helpers, and the preset components'
+markup and buttons (rendered without a DOM); the UI itself is not tested end
+to end (ADR 0025). `app/src/ipc/__fixtures__` are
 the real serde output of sample values: `cargo test` fails when they differ and
 `NEGG_BLESS=1 cargo test` rewrites them. The licence check holds the npm tree
 to the allow list of the root `deny.toml`. Licences and advisories for the Rust

@@ -14,19 +14,23 @@ use std::path::{Path, PathBuf};
 use negg_io::{ROLL_SIDECAR_NAME, ROLL_SIDECAR_SCHEMA_VERSION, RollSidecar};
 use negg_types::roll::resolve;
 use negg_types::settings::OutputSpace;
-use negg_types::{CropRect, FrameOverrides, PoolFrame, PoolRole, RollPool, RollSettings, Settings};
+use negg_types::{
+    CropRect, FrameOverrides, PoolFrame, PoolRole, Preset, RollPool, RollSettings, Settings,
+};
 
 use crate::convert::{
-    BatchSummary, Converted, Format, FrameOptions, batch_inputs, check_targets,
-    convert_frame_noting, output_dir, output_path,
+    BatchSummary, Converted, Format, FrameOptions, WebOutput, batch_inputs, check_targets,
+    convert_frame_noting, output_dir, planned_outputs,
 };
 use crate::error::ConvertError;
+use crate::presets::preset_frame_overrides;
 use crate::roll::{
     absolute_string, analyse_roll_frames, build_context, file_name, parent_dir, pool_is_current,
     read_overrides, read_roll,
 };
 use crate::session::BORDER_LOST_WARNING;
 use crate::settings_file::{SettingsFile, read_settings_file_parts};
+use crate::view::RollPresetScope;
 
 /// What a conversion is asked for: the output and roll options of
 /// `negg convert` and `negg batch`.
@@ -66,6 +70,56 @@ pub struct OutputRequest {
     /// Render each frame on its own, as phase 1 did, reading and writing no
     /// roll sidecar (`--no-roll`).
     pub no_roll: bool,
+    /// A tone preset (`--preset`, ADR 0034), applied after `--settings`
+    /// (Ruling 7). Without roll mode its look is set on the settings with
+    /// [`negg_types::PrintLook::apply_to_settings`] (frame look overrides
+    /// still win, as `resolve` does). `negg convert` of a roll frame puts
+    /// it in the frame's overrides, as
+    /// [`crate::Session::apply_frame_preset`] does; `negg batch` in roll
+    /// mode sets it on the roll's shared settings and treats frames with
+    /// their own look as [`crate::Session::apply_roll_preset`] does.
+    pub preset: Option<Preset>,
+    /// `--preset-all-frames`: in `negg batch` roll mode, clear the look of
+    /// frames with their own look so they take the preset
+    /// ([`RollPresetScope::AllFrames`]) instead of keeping it
+    /// ([`RollPresetScope::FramesWithoutOwnLook`]). Needs `preset`; a
+    /// usage error anywhere else.
+    pub preset_all_frames: bool,
+    /// The web copy (`--web`, `--web-only`; ADR 0035), written to
+    /// [`crate::web_output_path`] from the same render.
+    pub web: WebOutput,
+}
+
+/// Sets the look of `req.preset`, if any, on `settings`.
+fn apply_preset(settings: &mut Settings, req: &OutputRequest) {
+    if let Some(p) = &req.preset {
+        p.look.apply_to_settings(&p.name, &mut settings.print);
+    }
+}
+
+/// Warns when `--preset` was set on the settings (no roll mode) and the
+/// frame's own look overrides win over it, as `resolve` lets them.
+fn warn_own_look_wins(
+    input: &Path,
+    overrides: &FrameOverrides,
+    req: &OutputRequest,
+    events: &mut dyn FnMut(FlowEvent),
+) {
+    if let Some(p) = &req.preset
+        && overrides.print.has_own_look()
+    {
+        events(FlowEvent::Warning(format!(
+            "{}: its sidecar overrides set its own look, which wins over --preset {:?}; \
+             clear them, or use roll mode with --preset-all-frames",
+            file_name(input),
+            p.name
+        )));
+    }
+}
+
+/// The usage error of `--preset-all-frames` where it does not apply.
+fn preset_all_frames_error(why: &str) -> ConvertError {
+    ConvertError::Usage(format!("--preset-all-frames {why}"))
 }
 
 /// Something a flow reports as it goes, in the order the CLI prints it.
@@ -243,7 +297,10 @@ fn context_with_warnings(
 /// the shared analysis sees, the pool is not used: a warning says the
 /// roll must be batched again and the frame is rendered with the roll
 /// settings but without the pool, and its sidecar records no `roll`
-/// (Ruling 63).
+/// (Ruling 63). `--preset` (Ruling 7) sets its look on a frame outside a
+/// roll (or with `--no-roll`) after `--settings`, and on a roll frame in
+/// its overrides, as [`crate::Session::apply_frame_preset`] does, so the
+/// frame's sidecar records it; the roll sidecar is never written.
 ///
 /// Events, in order: [`FlowEvent::UsingRoll`] or a [`FlowEvent::Warning`]
 /// about the pool, the context's warnings, the frame's
@@ -251,6 +308,7 @@ fn context_with_warnings(
 ///
 /// # Errors
 ///
+/// [`ConvertError::Usage`] for `preset_all_frames`,
 /// [`ConvertError::Settings`] for a bad settings file,
 /// [`ConvertError::RollSidecar`] for an unreadable roll sidecar,
 /// [`ConvertError::Profile`] for a bad profile,
@@ -262,6 +320,11 @@ pub fn convert_one(
     req: &OutputRequest,
     events: &mut dyn FnMut(FlowEvent),
 ) -> Result<(), ConvertError> {
+    if req.preset_all_frames {
+        return Err(preset_all_frames_error(
+            "applies only to negg batch in roll mode",
+        ));
+    }
     let base_dir = parent_dir(input);
     let roll_sidecar = if req.no_roll {
         None
@@ -281,6 +344,7 @@ pub fn convert_one(
     } else {
         let mut roll = base;
         apply_profile_flags(&mut roll.shared, req)?;
+        apply_preset(&mut roll.shared, req);
         roll
     };
     let pool_current = roll_sidecar
@@ -299,7 +363,16 @@ pub fn convert_one(
             )));
         }
     }
-    let overrides = read_overrides(input)?;
+    let mut overrides = read_overrides(input)?;
+    if roll_sidecar.is_some()
+        && let Some(p) = &req.preset
+    {
+        // Ruling 7: a roll frame takes the preset as its own look, exactly
+        // as `Session::apply_frame_preset` gives it.
+        p.look.apply_to_overrides(&p.name, &mut overrides.print);
+    } else {
+        warn_own_look_wins(input, &overrides, req, events);
+    }
     let ctx = context_with_warnings(roll, &base_dir, events)?;
     let settings = resolve(&ctx.roll, &overrides);
     let out_dir = output_dir(req.out_dir.as_deref(), input)?;
@@ -312,6 +385,7 @@ pub fn convert_one(
         pool,
         overrides: Some(&overrides),
         roll: pool_current.then_some(ROLL_SIDECAR_NAME),
+        web: req.web,
     };
     let converted =
         convert_frame_noting(input, &out_dir, &settings, req.format, &opts, &mut |n| {
@@ -338,6 +412,8 @@ pub fn convert_one(
 /// One batch input after the checks that need no decode.
 struct BatchFrame {
     input: PathBuf,
+    /// The image reported as [`Converted::output`]: the original, or the
+    /// web copy with [`WebOutput::Only`].
     output: PathBuf,
     overrides: FrameOverrides,
     settings: Settings,
@@ -360,13 +436,23 @@ struct BatchFrame {
 /// of it is written, so its sidecar is kept as it is. With `no_roll` each
 /// frame is rendered on its own exactly as phase 1 (its overrides still
 /// apply). A failing frame is reported with [`FlowEvent::FrameFailed`] and
-/// the batch continues. A source whose output path an earlier source in
-/// the run already produced fails with [`ConvertError::DuplicateOutput`]
-/// and is skipped; a source whose sidecar would be the roll sidecar fails
+/// the batch continues. A source whose output path (or web copy path,
+/// with `req.web`) an earlier source in the run already produced fails
+/// with [`ConvertError::DuplicateOutput`] and is skipped; a source whose sidecar would be the roll sidecar fails
 /// with [`ConvertError::RollSidecarClash`].
+///
+/// `--preset` (Ruling 7) applies after `--settings`: with `no_roll` to the
+/// settings; in roll mode to the roll's shared settings (stored in the roll
+/// sidecar), with each frame's overrides passed through the rule
+/// [`crate::Session::apply_roll_preset`] uses
+/// ([`RollPresetScope::FramesWithoutOwnLook`], or
+/// [`RollPresetScope::AllFrames`] with `preset_all_frames`) and written to
+/// its sidecar.
 ///
 /// # Errors
 ///
+/// [`ConvertError::Usage`] for `preset_all_frames` without `preset` or
+/// with `no_roll`, before anything is read;
 /// [`ConvertError::Settings`], [`ConvertError::NotADirectory`],
 /// [`ConvertError::Io`], [`ConvertError::RollSidecar`],
 /// [`ConvertError::Profile`] or a pooling error before any frame is
@@ -378,6 +464,16 @@ pub fn batch_dir(
     req: &OutputRequest,
     events: &mut dyn FnMut(FlowEvent),
 ) -> Result<BatchSummary, ConvertError> {
+    if req.preset_all_frames {
+        if req.preset.is_none() {
+            return Err(preset_all_frames_error("needs --preset"));
+        }
+        if req.no_roll {
+            return Err(preset_all_frames_error(
+                "applies only in roll mode, not with --no-roll",
+            ));
+        }
+    }
     let inputs = batch_inputs(dir)?;
     let out_dir = output_dir(req.out_dir.as_deref(), &dir.join("frame"))?;
     let roll_path = negg_io::roll_sidecar_path(dir);
@@ -394,7 +490,7 @@ pub fn batch_dir(
             r.pool.as_ref().is_some_and(RollPool::dmin_from_border),
         )
     });
-    let roll = if req.no_roll {
+    let mut roll = if req.no_roll {
         let mut roll = RollSettings {
             shared: load_settings(req)?,
             ..RollSettings::default()
@@ -415,6 +511,22 @@ pub fn batch_dir(
         }
         roll
     };
+    // Ruling 7: the preset is the look of the settings (roll mode: the
+    // roll's), and in roll mode each frame with its own look is treated as
+    // `Session::apply_roll_preset` treats it, against the print before the
+    // preset.
+    let frame_preset = match &req.preset {
+        Some(_) if !req.no_roll => Some((
+            roll.shared.print.clone(),
+            if req.preset_all_frames {
+                RollPresetScope::AllFrames
+            } else {
+                RollPresetScope::FramesWithoutOwnLook
+            },
+        )),
+        _ => None,
+    };
+    apply_preset(&mut roll.shared, req);
     let ctx = context_with_warnings(roll, dir, events)?;
 
     let mut summary = BatchSummary {
@@ -433,13 +545,16 @@ pub fn batch_dir(
         });
     };
 
-    // Checks that need no decode: duplicate outputs, writing over the
-    // source, the roll sidecar name.
+    // Checks that need no decode: duplicate outputs (web copies included),
+    // writing over the source, the roll sidecar name.
     let mut produced: HashMap<PathBuf, PathBuf> = HashMap::new();
     let mut frames = Vec::new();
     for input in &inputs {
-        let output = output_path(input, &out_dir, req.format);
-        if let Some(first) = produced.get(&output) {
+        let outputs = planned_outputs(input, &out_dir, req.format, req.web);
+        if let Some((output, first)) = outputs
+            .iter()
+            .find_map(|o| produced.get(o).map(|first| (o, first)))
+        {
             let err = ConvertError::DuplicateOutput {
                 output: output.clone(),
                 first: first.clone(),
@@ -447,13 +562,22 @@ pub fn batch_dir(
             fail(&mut summary, events, input, err);
             continue;
         }
-        if let Err(err) = check_targets(input, &output) {
+        if let Err(err) = outputs.iter().try_for_each(|o| check_targets(input, o)) {
             fail(&mut summary, events, input, err);
             continue;
         }
-        produced.insert(output.clone(), input.clone());
+        for o in &outputs {
+            produced.insert(o.clone(), input.clone());
+        }
+        let output = outputs[0].clone();
         let overrides = match read_overrides(input) {
-            Ok(overrides) => overrides,
+            Ok(overrides) => match &frame_preset {
+                Some((old_print, scope)) => preset_frame_overrides(old_print, &overrides, *scope),
+                None => {
+                    warn_own_look_wins(input, &overrides, req, events);
+                    overrides
+                }
+            },
             Err(err) => {
                 fail(&mut summary, events, input, err);
                 continue;
@@ -507,6 +631,7 @@ pub fn batch_dir(
                 pool: None,
                 overrides: Some(&frame.overrides),
                 roll: None,
+                web: req.web,
             };
             convert(&mut summary, events, frame, &opts, None);
         }
@@ -547,6 +672,7 @@ pub fn batch_dir(
             pool: Some(&pool),
             overrides: Some(&frame.overrides),
             roll: Some(ROLL_SIDECAR_NAME),
+            web: req.web,
         };
         convert(&mut summary, events, frame, &opts, Some(record));
     }
@@ -790,6 +916,34 @@ mod tests {
         let sidecar = negg_io::read_sidecar(&locked.sidecar).unwrap();
         assert!(sidecar.overrides.film.film_base.is_some());
         assert_eq!(sidecar.settings_hash, sidecar.settings.content_hash());
+    }
+
+    #[test]
+    fn batch_duplicate_outputs_cover_the_web_copies() {
+        let dir = Scratch::new("web-dup");
+        write_negative(&dir.0.join("a.tif"), [0.25, 0.55, 0.75]);
+        std::fs::copy(dir.0.join("a.tif"), dir.0.join("a.tiff")).unwrap();
+        let req = OutputRequest {
+            no_roll: true,
+            web: WebOutput::Only,
+            ..OutputRequest::default()
+        };
+        let (summary, events) = collect(|ev| batch_dir(&dir.0, &req, ev));
+        let summary = summary.unwrap();
+        assert_eq!(
+            (summary.found, summary.converted, summary.failed),
+            (2, 1, 1)
+        );
+        let web = dir.0.join("web").join("a.negg.jpg");
+        assert!(events.iter().any(|e| matches!(
+            e,
+            FlowEvent::FrameFailed {
+                error: ConvertError::DuplicateOutput { output, .. },
+                ..
+            } if *output == web
+        )));
+        assert!(web.is_file());
+        assert!(!dir.0.join("a.negg.tif").exists());
     }
 
     #[test]

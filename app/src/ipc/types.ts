@@ -61,6 +61,13 @@ export interface PrintSettings {
   shoulder: number;
   toe: number;
   black_point_compensation: boolean;
+  /** Colour intensity (0 to 2); omitted on the wire at 1, read as 1. */
+  saturation?: number;
+  /**
+   * The preset the look was last set from: a label only. Omitted when none;
+   * null and "" also mean none (see `presetLabel`).
+   */
+  preset?: string | null;
 }
 
 export interface ColourSettings {
@@ -106,6 +113,13 @@ export interface PrintOverrides {
   shoulder: number | null;
   toe: number | null;
   black_point_compensation: boolean | null;
+  /** Omitted on the wire when the frame has no saturation of its own. */
+  saturation?: number | null;
+  /**
+   * A frame label for the look. "" means pinned: no preset (Ruling 8), which
+   * resolves to no label. Omitted when the frame inherits the roll's label.
+   */
+  preset?: string | null;
 }
 
 export interface ColourOverrides {
@@ -262,11 +276,41 @@ export type ExportScope =
 
 export type ExportFormat = "tiff16" | "jpeg";
 
+/** Web (Instagram) copies: none, in addition to the full export, or only. */
+export type WebOutput = "none" | "also" | "only";
+
+/** The print parameters a tone preset sets. */
+export interface PrintLook {
+  grade: number;
+  toe: number;
+  shoulder: number;
+  black_point_compensation: boolean;
+  saturation: number;
+}
+
+export interface Preset {
+  name: string;
+  look: PrintLook;
+}
+
+/** Built-in presets, then user presets, and a message per skipped file. */
+export interface PresetList {
+  presets: Preset[];
+  /** How many of `presets` are built-ins; they come first. */
+  builtins: number;
+  warnings: string[];
+}
+
+/** What a roll preset does to the frames with a look of their own. */
+export type RollPresetScope = "all_frames" | "frames_without_own_look";
+
 export interface ExportRequest {
   scope: ExportScope;
   format: ExportFormat;
   /** null = beside the sources, as the CLI does. */
   out_dir: string | null;
+  /** Absent reads as "none". */
+  web?: WebOutput;
 }
 
 export interface ExportReport {
@@ -335,6 +379,14 @@ export function emptyOverrides(): FrameOverrides {
 }
 
 /**
+ * The preset label a resolved print shows: null when it is absent, null or
+ * "" (a frame that pinned "no preset", Ruling 8).
+ */
+export function presetLabel(print: { preset?: string | null }): string | null {
+  return print.preset ? print.preset : null;
+}
+
+/**
  * The TypeScript copy of `negg_types::resolve`: field copies only (Some
  * replaces), used by the roll panel to turn a slider edit into new shared
  * settings. No value is computed.
@@ -354,6 +406,11 @@ export function resolve(shared: Settings, o: FrameOverrides): Settings {
   if (p.toe !== null) s.print.toe = p.toe;
   if (p.black_point_compensation !== null) {
     s.print.black_point_compensation = p.black_point_compensation;
+  }
+  if (p.saturation != null) s.print.saturation = p.saturation;
+  if (p.preset != null) {
+    if (p.preset === "") delete s.print.preset;
+    else s.print.preset = p.preset;
   }
   const c = o.colour;
   if (c.auto_colour !== null) s.colour.auto_colour = c.auto_colour;
@@ -448,6 +505,8 @@ const settings = obj({
     shoulder: num,
     toe: num,
     black_point_compensation: bool,
+    saturation: nullable(num),
+    preset: nullable(str),
   }),
   colour: obj({ auto_colour: bool, cast: castEstimate, output_space: outputSpace }),
   profiles: obj({ rig: nullable(str), film: nullable(str) }),
@@ -475,6 +534,8 @@ const frameOverrides = obj({
     shoulder: nullable(num),
     toe: nullable(num),
     black_point_compensation: nullable(bool),
+    saturation: nullable(num),
+    preset: nullable(str),
   }),
   colour: obj({
     auto_colour: nullable(bool),
@@ -570,6 +631,19 @@ const exportRequest = obj({
   scope: tagged("kind", { frame: { frame: u32 }, frames: { frames: arr(u32) }, roll: {} }),
   format: oneOf("tiff16", "jpeg"),
   out_dir: nullable(str),
+  web: nullable(oneOf("none", "also", "only")),
+});
+const printLook = obj({
+  grade: num,
+  toe: num,
+  shoulder: num,
+  black_point_compensation: bool,
+  saturation: num,
+});
+const presetList = obj({
+  presets: arr(obj({ name: str, look: printLook })),
+  builtins: u32,
+  warnings: arr(str),
 });
 const exportReport = obj({
   converted: u32,
@@ -594,6 +668,8 @@ export const decodeFrameView = decoder<FrameView>("FrameView", frameView);
 export const decodeNegativeView = decoder<NegativeView>("NegativeView", negativeView);
 export const decodeExportRequest = decoder<ExportRequest>("ExportRequest", exportRequest);
 export const decodeExportReport = decoder<ExportReport>("ExportReport", exportReport);
+export const decodePresetList = decoder<PresetList>("PresetList", presetList);
+export const decodeFrameList = decoder<number[]>("frames", arr(u32));
 export const decodeGeneration = decoder<number>("generation", u32);
 export const decodeAnalysisEvent = decoder<AnalysisEvent>(
   "AnalysisEvent",

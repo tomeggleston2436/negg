@@ -14,12 +14,14 @@ import {
   parseCropText,
   resizeCrop,
   cropScreenRect,
+  dragLevel,
   fitLevel,
   fitScale,
   levelCount,
   levelForScale,
   levelSize,
   moveCrop,
+  previewLevels,
   screenToSource,
   sourceToScreen,
   stageTransform,
@@ -112,6 +114,27 @@ describe("level choice", () => {
   it("fitLevel never goes past the last pyramid level", () => {
     expect(fitLevel(W, H, 100, 100, T)).toBe(4);
     expect(fitLevel(512, 300, 10, 10, T)).toBe(0);
+  });
+
+  it("dragLevel is one level coarser, short of the backdrop", () => {
+    expect(dragLevel(1, 5)).toBe(2);
+    expect(dragLevel(0, 5)).toBe(1);
+    expect(dragLevel(3, 4)).toBeNull();
+    expect(dragLevel(4, 4)).toBeNull();
+  });
+
+  it("previewLevels asks only for the coarser level while dragging", () => {
+    expect(previewLevels(1, 5, true, null)).toEqual({ mount: [2, 1], request: [2] });
+    expect(previewLevels(1, 5, true, 2)).toEqual({ mount: [2, 1], request: [2] });
+    // Next to the backdrop the backdrop alone keeps up.
+    expect(previewLevels(3, 4, true, null)).toEqual({ mount: [3], request: [] });
+    expect(previewLevels(4, 4, true, null)).toEqual({ mount: [], request: [] });
+  });
+
+  it("previewLevels asks for the fine level on release and keeps the coarser one under it", () => {
+    expect(previewLevels(1, 5, false, 2)).toEqual({ mount: [2, 1], request: [1] });
+    expect(previewLevels(1, 5, false, null)).toEqual({ mount: [1], request: [1] });
+    expect(previewLevels(4, 4, false, null)).toEqual({ mount: [], request: [] });
   });
 
   it("levelForScale keeps at least one level pixel per device pixel", () => {

@@ -62,7 +62,7 @@ fn batch_pools_the_roll_and_rejects_the_outlier() {
     assert!(se.contains("d.tif: rejected from the Dmin pool"), "{se}");
 
     let rs = read_json(&roll.join("roll.negg.json"));
-    assert_eq!(rs["schema_version"], 3);
+    assert_eq!(rs["schema_version"], 4);
     assert_eq!(
         rs["frames"],
         serde_json::json!(["a.tif", "b.tif", "c.tif", "d.tif"])
@@ -89,7 +89,7 @@ fn batch_pools_the_roll_and_rejects_the_outlier() {
         assert_eq!(s["estimates"]["gamma"], rs["pool"]["gamma"], "{name}");
         assert_eq!(s["estimates"]["cast_source"], "roll", "{name}");
         assert_eq!(s["roll"], "roll.negg.json", "{name}");
-        assert_eq!(s["schema_version"], 4);
+        assert_eq!(s["schema_version"], 5);
         assert!(s.get("overrides").is_none(), "{s}");
     }
     // The Rejected frame still renders with the pooled base (Ruling 59).
@@ -389,7 +389,7 @@ fn a_raw_named_roll_is_refused_before_it_is_decoded() {
     assert!(se.contains("roll.dng: refusing"), "{se}");
     let rs = negg_io::read_roll_sidecar(&roll.join("roll.negg.json")).unwrap();
     assert_eq!(rs.frames, ["a.tif", "b.tif", "c.tif", "d.tif"]);
-    assert_eq!(rs.schema_version, 3);
+    assert_eq!(rs.schema_version, 4);
 }
 
 #[test]

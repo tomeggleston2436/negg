@@ -143,7 +143,7 @@ fn a_crop_to_the_film_removes_the_holder_from_the_analysis() {
         }
     }
     let s = read_json(&dir.path("b/b.negg.json"));
-    assert_eq!(s["schema_version"], 4);
+    assert_eq!(s["schema_version"], 5);
     assert!(s["settings"]["geometry"]["crop"].is_object(), "{s}");
 }
 
@@ -265,8 +265,8 @@ fn batch_crop_is_stored_in_the_roll_and_a_frame_override_wins() {
     let o = negg(&["batch", roll.to_str().unwrap(), "--crop", "0.1,0.1,0.8,0.8"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", stdout(&o), stderr(&o));
     let rs = read_json(&roll.join("roll.negg.json"));
-    assert_eq!(rs["schema_version"], 3);
-    assert_eq!(rs["settings"]["shared"]["schema_version"], 4);
+    assert_eq!(rs["schema_version"], 4);
+    assert_eq!(rs["settings"]["shared"]["schema_version"], 5);
     let crop = &rs["settings"]["shared"]["geometry"]["crop"];
     assert!((crop["x"].as_f64().unwrap() - 0.1).abs() < 1e-6, "{rs}");
     assert!((crop["width"].as_f64().unwrap() - 0.8).abs() < 1e-6, "{rs}");

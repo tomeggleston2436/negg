@@ -277,6 +277,9 @@ export function RollBrowser() {
               disabled={analysing || awaiting}
               onCommit={(r) => void actions.commitRoll(r)}
               onError={(e) => dispatch({ type: "error/set", error: `Could not show the file picker: ${errorText(e)}` })}
+              presets={state.presets}
+              framesWithOwnLook={actions.framesWithOwnLook}
+              applyPreset={actions.applyRollPreset}
             />
           </aside>
         )}

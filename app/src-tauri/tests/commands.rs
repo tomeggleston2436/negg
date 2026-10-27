@@ -42,8 +42,12 @@ impl Scratch {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        // The counter keeps names unique when tests start within the
+        // clock's resolution (microseconds on macOS).
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir =
-            std::env::temp_dir().join(format!("negg-app-{tag}-{}-{nanos}", std::process::id()));
+            std::env::temp_dir().join(format!("negg-app-{tag}-{}-{nanos}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         Scratch(dir)
     }
@@ -276,7 +280,9 @@ fn edits_flush_after_the_debounce_and_repools_run_in_the_background() {
 fn a_sidecar_changed_by_another_program_is_never_overwritten() {
     let dir = Scratch::new("stale");
     write_roll(&dir, 2);
-    let (st, _rec) = state();
+    // Flushed by hand only: a debounced flush between the commit and the
+    // foreign write would save the edit first, leaving nothing to refuse.
+    let st = AppState::with_flush_delay(Arc::new(Recorder::default()), Duration::from_secs(3600));
     commands::open_roll(&st, dir.dir()).unwrap();
     commands::start_analysis(&st).unwrap();
     wait_idle(&st);
@@ -364,6 +370,7 @@ fn export_sends_progress_and_refuses_after_an_external_change() {
         scope: ExportScope::Frames { frames: vec![0, 1] },
         format: ExportFormat::Jpeg,
         out_dir: Some(out.dir()),
+        web: negg_session::WebOutput::None,
     };
     let report = commands::export(&st, req.clone()).unwrap();
     assert_eq!((report.converted, report.failed), (2, 0));
@@ -690,4 +697,83 @@ fn the_close_handshake_waits_for_the_webview_and_not_for_ever() {
     commands::close_ready(&st);
     assert!(waiter.join().unwrap());
     assert_eq!(Event::Closing.name(), "negg://closing");
+}
+
+// The `_in` command variants take the presets folder, so no test here
+// touches `NEGG_PRESETS_DIR` (that is covered by presets_env.rs).
+#[test]
+fn apply_roll_preset_command_records_one_history_entry() {
+    let dir = Scratch::new("rollpreset");
+    write_roll(&dir, 3);
+    let presets = Scratch::new("rollpreset-dir");
+    let (st, rec) = state();
+    commands::open_roll(&st, dir.dir()).unwrap();
+    commands::start_analysis(&st).unwrap();
+    wait_idle(&st);
+
+    // Frame 0 gets a look of its own.
+    commands::commit_frame(&st, 0, grade(130.0)).unwrap();
+    assert_eq!(commands::frames_with_own_look(&st).unwrap(), vec![0]);
+    let before = commands::roll_view(&st).unwrap().history.len;
+    rec.take();
+
+    let view = commands::apply_roll_preset_in(
+        &st,
+        Some(&presets.0),
+        "Rich",
+        negg_session::RollPresetScope::AllFrames,
+    )
+    .unwrap();
+    assert_eq!(view.history.len, before + 1);
+    assert!(view.history.can_undo);
+    assert!(!view.awaiting_analysis);
+    assert!(commands::frames_with_own_look(&st).unwrap().is_empty());
+    let events = rec.take();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Thumbs(t) if t.frames == vec![0, 1, 2])),
+        "{events:?}"
+    );
+
+    // One undo takes the whole apply back.
+    commands::undo(&st).unwrap();
+    assert_eq!(commands::frames_with_own_look(&st).unwrap(), vec![0]);
+
+    // An unknown name is an error naming the choices.
+    let e = commands::apply_roll_preset_in(
+        &st,
+        Some(&presets.0),
+        "Nope",
+        negg_session::RollPresetScope::AllFrames,
+    )
+    .unwrap_err();
+    assert!(e.message.contains("no preset named"), "{}", e.message);
+}
+
+#[test]
+fn frame_preset_save_and_thumbnail_commands() {
+    let dir = Scratch::new("framepreset");
+    write_roll(&dir, 2);
+    let presets = Scratch::new("framepreset-dir");
+    let (st, _) = state();
+    commands::open_roll(&st, dir.dir()).unwrap();
+    commands::start_analysis(&st).unwrap();
+    wait_idle(&st);
+
+    let list = commands::list_presets_in(Some(&presets.0));
+    assert!(list.presets.iter().any(|p| p.name == "Rich"));
+    let rich = list.presets.iter().find(|p| p.name == "Rich").unwrap();
+    let fv = commands::apply_frame_preset_in(&st, Some(&presets.0), 1, "Rich").unwrap();
+    assert_eq!(fv.overrides.print.preset.as_deref(), Some("Rich"));
+    assert_eq!(fv.overrides.print.grade, Some(rich.look.grade));
+
+    let jpeg = commands::preset_thumbnail_in(&st, Some(&presets.0), 0, "Rich").unwrap();
+    assert_eq!(&jpeg[..2], &[0xff, 0xd8]);
+
+    let saved = commands::save_preset_in(&presets.0, "Mine", rich.look).unwrap();
+    assert!(saved.presets.iter().any(|p| p.name == "Mine"));
+    assert!(saved.warnings.is_empty());
+    let e = commands::save_preset_in(&presets.0, "Rich", rich.look).unwrap_err();
+    assert!(e.message.contains("built-in"), "{}", e.message);
 }

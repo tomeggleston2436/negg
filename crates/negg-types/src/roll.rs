@@ -46,6 +46,12 @@ pub struct PrintOverrides {
     pub toe: Option<f32>,
     /// Overrides `print.black_point_compensation`.
     pub black_point_compensation: Option<bool>,
+    /// Overrides `print.saturation`. Omitted from the file when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saturation: Option<f32>,
+    /// Overrides `print.preset`. Omitted from the file when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
 /// Per-frame overrides of [`crate::settings::ColourSettings`]. `None` inherits.
@@ -90,7 +96,8 @@ impl FrameOverrides {
 /// The settings a frame is rendered with: the roll's shared settings with
 /// each `Some` override of the frame replacing its field (R-lock), the
 /// geometry as a whole (Ruling 71). The `profiles` always come from
-/// `roll.shared`.
+/// `roll.shared`. A preset label override of `""` resolves to no label
+/// (Ruling 8), so a frame can pin "no preset" over a roll that has one.
 pub fn resolve(roll: &RollSettings, overrides: &FrameOverrides) -> Settings {
     let mut s = roll.shared.clone();
     let f = &overrides.film;
@@ -127,6 +134,14 @@ pub fn resolve(roll: &RollSettings, overrides: &FrameOverrides) -> Settings {
     }
     if let Some(v) = p.black_point_compensation {
         s.print.black_point_compensation = v;
+    }
+    if let Some(v) = p.saturation {
+        s.print.saturation = v;
+    }
+    if let Some(v) = &p.preset {
+        // An empty label override pins "no preset" (Ruling 8): preset
+        // names are never empty, so "" cannot be a real label.
+        s.print.preset = (!v.is_empty()).then(|| v.clone());
     }
     let c = &overrides.colour;
     if let Some(v) = c.auto_colour {
@@ -329,6 +344,53 @@ mod tests {
             RollPool::default()
         );
         assert!(FrameOverrides::default().is_empty());
+    }
+
+    #[test]
+    fn resolve_takes_saturation_and_preset_overrides() {
+        let r = RollSettings::default();
+        let o = FrameOverrides {
+            print: PrintOverrides {
+                saturation: Some(1.3),
+                preset: Some("punchy".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let s = resolve(&r, &o);
+        assert_eq!(s.print.saturation, 1.3);
+        assert_eq!(s.print.preset.as_deref(), Some("punchy"));
+        let mut want = r.shared.clone();
+        want.print.saturation = 1.3;
+        want.print.preset = Some("punchy".into());
+        assert_eq!(s, want);
+        // No override inherits; an empty override set stays empty on disk.
+        assert_eq!(resolve(&r, &FrameOverrides::default()), r.shared);
+        let json = serde_json::to_string(&PrintOverrides::default()).unwrap();
+        assert!(!json.contains("saturation") && !json.contains("preset"));
+    }
+
+    #[test]
+    fn an_empty_label_override_pins_no_preset() {
+        let mut r = RollSettings::default();
+        r.shared.print.preset = Some("Rich".into());
+        let o = FrameOverrides {
+            print: PrintOverrides {
+                preset: Some(String::new()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(resolve(&r, &o).print.preset, None);
+        // It is a look override: it counts as one and is cleared with the
+        // rest.
+        assert!(o.print.has_own_look());
+        let mut cleared = o.print.clone();
+        cleared.clear_look();
+        assert_eq!(cleared, PrintOverrides::default());
+        // It round-trips through JSON.
+        let json = serde_json::to_string(&o).unwrap();
+        assert_eq!(serde_json::from_str::<FrameOverrides>(&json).unwrap(), o);
     }
 
     #[test]

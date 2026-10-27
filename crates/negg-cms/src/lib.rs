@@ -34,4 +34,5 @@ pub use matrix::{REC709_TO_REC2020, camera_to_rec2020};
 pub use profiles::{output_profile, profile_bytes, working_profile};
 pub use transform::{
     Intent, OutputTransform, gamma22_to_linear, icc_linearise_native, working_to_output,
+    working_to_output_matrix,
 };

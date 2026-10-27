@@ -154,10 +154,11 @@ Write `docs/MATHS.md` from these eight steps before writing code, then keep it i
 
 ### Phase 4: depth (ongoing after alpha)
 
-- [ ] wgpu preview kernel implementing steps 4 to 7 for the visible tile only; CI compares against the CPU path on the corpus with a tolerance of 1/4096 per channel.
-- [ ] Looks as data: 3D LUTs in Rec.2020 applied after the print stage, with a documented derivation per look. No hard-coded "Frontier" constants.
+- [x] wgpu preview kernel implementing steps 4 to 7 for the visible tile only; CI compares against the CPU path on the corpus with a tolerance of 1/4096 per channel. Done 2026-10-27 (ADR 0036): steps 3 to 7 and the sRGB display encoding in `negg-render/src/render.wgsl` behind the `gpu` feature, used by the app's tiles only; compared on synthetic images (the corpus is local-only), within 1/4096 for the positive and one 8-bit step for the tile, on Linux CI through a software Vulkan adapter. The CPU tile path also got faster (sRGB transform on every core) and the app draws a coarser level while a slider is dragged.
+- [ ] Looks as data: 3D LUTs in Rec.2020 applied after the print stage, with a documented derivation per look. No hard-coded "Frontier" constants. Parked 2026-10-25: to revisit with the owner (the tone presets below cover the near-term need without a LUT stage).
 - [ ] Dust and scratch: IR channel support where present, otherwise a conservative detector plus heal with manual confirmation.
-- [ ] Linear DNG export (write tags with the `tiff` crate; do not add the AGPL `dng` crate) so Lightroom and Capture One users can adopt the engine.
+- [x] ~~Linear DNG export (write tags with the `tiff` crate; do not add the AGPL `dng` crate) so Lightroom and Capture One users can adopt the engine.~~ Dropped by the owner on 2026-10-25: the engine is not aimed at Lightroom and Capture One users, so a DNG output has no audience. The AGPL `dng` crate stays forbidden.
+- [x] Tone presets, saturation and web export (spec `docs/superpowers/specs/2026-10-25-presets-and-web-export-design.md`): `print.saturation` (ADR 0033, MATHS step 7) and `print.preset` in settings schema 5; built-in presets Standard, Soft, Hard, Flat, Rich and Linear with provisional values (ADR 0034) and user presets as `*.preset.negg.toml`; `--preset`, `--preset-all-frames`, `negg preset list`, `--web` and `--web-only` in the CLI; the app's saturation slider, preset strip, Save as preset, roll preset picker and Original / Web export; web copies of 2048 px, JPEG 85, sRGB (ADR 0035, MATHS step 8); `negg_export_web` and C ABI version 2.
 - [ ] Slide film (positive) mode.
 - [ ] Python bindings via PyO3 so NegPy or notebooks can call the engine.
 

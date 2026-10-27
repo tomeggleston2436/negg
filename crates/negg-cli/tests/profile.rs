@@ -222,9 +222,10 @@ fn profile_rig_measures_flat_crosstalk_and_wedge() {
     ]);
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     let s = read_json(&dir.path("roll/a.negg.json"));
+    // As paths: on Windows the stored one has `\` where `out` has `/`.
     assert_eq!(
-        s["settings"]["profiles"]["rig"].as_str().unwrap(),
-        out.to_str().unwrap()
+        std::path::Path::new(s["settings"]["profiles"]["rig"].as_str().unwrap()),
+        out
     );
 }
 

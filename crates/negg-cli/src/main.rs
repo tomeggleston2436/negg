@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The `negg` command-line tool: convert, batch (roll mode), eval,
-//! profile rig, profile film and lock.
+//! profile rig, profile film, lock and preset list.
 //!
 //! Owns argument parsing and exit statuses only. The rendering maths
 //! lives in the engine crates and the flows in `negg-session`; the eval's
@@ -17,7 +17,7 @@ use clap::Parser;
 
 use negg_cli::cli::{Cli, Command};
 use negg_cli::convert::ConvertError;
-use negg_cli::{eval, profile, roll};
+use negg_cli::{eval, preset, profile, roll};
 
 /// Exit status for an error in the manifest, the tolerances, the baseline,
 /// the settings file or the command line.
@@ -36,6 +36,7 @@ fn main() -> ExitCode {
         Command::Convert(args) => unit_status("negg convert", roll::run_convert(&args)),
         Command::Profile(cmd) => unit_status("negg profile", profile::run_profile(&cmd)),
         Command::Lock(args) => unit_status("negg lock", roll::run_lock(&args)),
+        Command::Preset(cmd) => unit_status("negg preset", preset::run_preset(&cmd)),
         Command::Batch(args) => match roll::run_batch(&args) {
             Ok(summary) if summary.failed == 0 => ExitCode::SUCCESS,
             Ok(_) => ExitCode::from(EXIT_FAILURE),

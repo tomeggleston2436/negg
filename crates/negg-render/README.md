@@ -12,7 +12,8 @@ Inversion, print curve, adjustments and scopes as pure per-pixel functions.
 
 ## Must not
 
-- Do any file or device I/O
+- Do any file or device I/O, except the GPU preview kernel behind the
+  `gpu` feature, which runs this crate's maths on a GPU device (ADR 0036)
 - Decode RAW or TIFF input
 - Hold a second copy of maths that lives elsewhere
 
@@ -30,9 +31,12 @@ comment names its step.
 | `rig` | 2, 3 | `apply_rig_linear`: the flat field gain (bilinear between grid cell centres, R-flat) then the unmix `I <- max(M^-1 I, 0)` (R-crosstalk), in place on the caller's step 1 image; `Error::Invalid` on a flat for another frame size. `density_model_pixel`, `density_grid`: the step 3 density from a rig `DensityModel` (`None` is `negg_film::density`). |
 | `full` | 3 to 7 | `render_full`: takes linear RGB and runs the step 3 density (`negg_film::density_value`, or the rig density model when one is passed), the inversion minus `Estimates::neutral_offset`, and all of the above fused per pixel, with no intermediate images (not even a full-size density image). Equals the composition of the separate functions (tested within 1e-5). `render_region` renders a `Region` of an image the same way, for preview tiles. |
 | `pipeline` | 3 to 7 | `render_frame_with` (returns `FrameRender`: the image, the `Estimates` and the grid size): the one pipeline of ground rule 3. Builds the analysis grid (`ANALYSIS_GRID_LONG_SIDE` = 1024) and its density, restricts the estimators to the analysis rectangle of the settings' geometry (the analysis area, else the crop, else the whole grid; ADR 0021), runs `estimate_frame`, then renders with `render_full`. `estimate_frame` applies the R-lock precedence with a `RenderContext` (rig density model, film correction, pooled roll estimates). `render_frame` is `render_frame_with` with the default context and renders exactly as phase 1. The estimators are `negg-film`'s; the step 7 matrix is passed in. |
+| `saturation` | 7 | `saturate_pixel`: scales the chroma about the pixel's own luma with `print.saturation` (0 to 2, default 1, which returns the pixel unchanged; ADR 0033). The only place saturation is applied; `render_full` calls it per pixel. |
+| `resample` | 8 (web) | `downscale_to_long_edge`: the box-filter downscale of a linear image to a given long edge, never upscaling, used for the web copy before the sRGB transform (ADR 0035). |
 | `pyramid` | 8 (preview) | `TILE_SIZE`, `downscale_half` (a 2 x 2 linear box mean) and `pyramid`: the levels above level 0 of the preview pyramid, until the long side is at most the tile size (ADR 0022). |
 | `scopes` | 8 (preview) | `scopes`, `Scopes`, `SCOPE_BINS`: histogram, parade and vectorscope of an 8-bit sRGB render. Counts only; the wire layout is `negg-session`'s. |
 | `negative` | 8 (preview) | `negative_display`, `negative_display_scale`, `negative_display_pixel`: the decoded negative made viewable, not inverted, with one exposure scale per frame (the 99.5th percentile, ADR 0022). Used by the app's pre-analysis step only. |
+| `gpu` | 3 to 7, 8 (preview) | Feature `gpu` only (wgpu 30). `Gpu::new`, `Gpu::render_region` (the fused kernel of `render_region` in `render.wgsl`, within `TOLERANCE` = 1/4096 per channel) and `Gpu::render_region_display` (also the sRGB display encoding, RGBA8, within one 8-bit step of the CPU tile). Tested against the CPU kernel in `tests/gpu.rs`; `NEGG_REQUIRE_GPU=1` fails the tests when there is no adapter instead of skipping them (ADR 0036). |
 | `roll` | 3, 6 | `analyse_frame`, `analyse_grid`, `pool_roll`, `FrameAnalysis`, `RollFrame`: pass 1 of a frame under its geometry (the analysis area, else the crop, else the whole frame) and the roll pool, which leaves out frames whose Dmax is pinned at the density cap (ADR 0032). |
 
 Per-image functions run over row bands with rayon. The per-pixel kernels

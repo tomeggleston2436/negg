@@ -20,6 +20,7 @@
 pub mod convert;
 pub mod error;
 pub mod flow;
+pub mod presets;
 pub mod roll;
 pub mod session;
 pub mod settings_file;
@@ -27,11 +28,19 @@ pub mod view;
 pub mod wire;
 
 pub use convert::{
-    BatchSummary, Converted, Format, FrameOptions, PreparedInput, Timing, batch_inputs,
-    check_targets, convert_frame, convert_frame_with, is_batch_input, output_path, prepare_input,
+    BatchSummary, Converted, Format, FrameOptions, PreparedInput, Timing, WEB_JPEG_QUALITY,
+    WEB_LONG_EDGE, WEB_SUBDIR, WebOutput, batch_inputs, check_targets, convert_frame,
+    convert_frame_with, is_batch_input, output_path, prepare_input, web_output_path,
 };
 pub use error::{ConvertError, SessionError};
 pub use flow::{FlowEvent, OutputRequest, batch_dir, convert_one};
+/// The GPU device of the preview (feature `gpu`, ADR 0036).
+#[cfg(feature = "gpu")]
+pub use negg_render::gpu::{Gpu, GpuError};
+pub use presets::{
+    PRESETS_DIR_ENV, PresetEntry, PresetList, find_preset, list_preset_entries, list_presets,
+    presets_dir, save_preset,
+};
 pub use roll::{
     LockWhich, Locked, RollAnalysis, RollContext, analyse_roll, analyse_roll_frames, build_context,
     decode_linear, load_film, load_rig, lock_frame, lock_overrides, pool_is_current, prepare_frame,
@@ -46,7 +55,7 @@ pub use settings_file::{
 };
 pub use view::{
     ExportFormat, ExportReport, ExportRequest, ExportScope, FrameInfo, FrameStatus, FrameView,
-    HistoryView, NegativeView, RollView,
+    HistoryView, NegativeView, RollPresetScope, RollView,
 };
 pub use wire::{
     SCOPES_HEADER_LEN, SCOPES_LEN, SCOPES_MAGIC, SCOPES_VERSION, TILE_HEADER_LEN, TILE_MAGIC,

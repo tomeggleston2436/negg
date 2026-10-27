@@ -54,6 +54,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+#[cfg(feature = "gpu")]
+use negg_render::gpu::Gpu;
+
 use negg_cms::{Intent, OutputTransform};
 use negg_film::{AnalysisGrid, analysis_grid};
 use negg_io::{JpegOptions, ROLL_SIDECAR_NAME, ROLL_SIDECAR_SCHEMA_VERSION, RollSidecar, Sidecar};
@@ -65,20 +68,21 @@ use negg_render::{
 use negg_types::roll::resolve;
 use negg_types::settings::{ChannelEstimate, OutputSpace};
 use negg_types::{
-    ContentHash, CropRect, DensityModel, FilmCorrection, FrameOverrides, Geometry, Image,
-    RigCorrection, RollPool, RollSettings, Settings, dmax_pinned,
+    ContentHash, CropRect, DensityModel, FilmCorrection, FrameOverrides, Geometry, Image, Preset,
+    PrintLook, RigCorrection, RollPool, RollSettings, Settings, dmax_pinned,
 };
 
 use crate::convert::{Format, batch_inputs, check_targets, output_path};
 use crate::error::{ConvertError, SessionError};
 use crate::flow::{FlowEvent, OutputRequest, batch_dir, convert_one};
+use crate::presets::preset_frame_overrides;
 use crate::roll::{
     LockWhich, build_context, file_name, lock_overrides, overrides_from_bytes, prepare_frame,
     read_overrides, read_roll, roll_from_bytes,
 };
 use crate::view::{
     ExportFormat, ExportReport, ExportRequest, ExportScope, FrameInfo, FrameStatus, FrameView,
-    HistoryView, NegativeView, RollView,
+    HistoryView, NegativeView, RollPresetScope, RollView,
 };
 use crate::wire::{TILE_SIZE, encode_scopes, encode_tile};
 
@@ -181,6 +185,23 @@ type PoolKey = [u32; 14];
 /// keeps every cache.
 type PlanKey = (PoolKey, ContentHash);
 
+/// A [`PrintLook`] as bits, for the preset thumbnail cache.
+type LookKey = [u32; 5];
+
+/// Most preset thumbnails kept per frame.
+const PRESET_THUMBS: usize = 16;
+
+/// The cache key bits of `look`.
+fn look_key(look: &PrintLook) -> LookKey {
+    [
+        look.grade.to_bits(),
+        look.toe.to_bits(),
+        look.shoulder.to_bits(),
+        u32::from(look.black_point_compensation),
+        look.saturation.to_bits(),
+    ]
+}
+
 /// One frame of the open roll.
 #[derive(Debug)]
 struct Frame {
@@ -227,6 +248,10 @@ struct Frame {
     plans: Vec<(PlanKey, FramePlan)>,
     /// The last thumbnail made.
     thumb: Option<(PlanKey, Vec<u8>)>,
+    /// Preset thumbnails ([`Session::preset_thumbnail_jpeg`]), each under
+    /// the key of the thumbnail it was made from and its look; only those
+    /// of the latest thumbnail key are kept.
+    preset_thumbs: Vec<(PlanKey, LookKey, Vec<u8>)>,
     /// The negative display's scale (Ruling 134), once worked out.
     negative_scale: Option<f32>,
     /// The negative thumbnail, once made.
@@ -273,6 +298,15 @@ enum Edit {
     Roll {
         before: Arc<RollSettings>,
         after: Arc<RollSettings>,
+        hash: ContentHash,
+    },
+    /// A roll preset (spec "Roll preset vs frames with their own look"):
+    /// the roll settings and the overrides of every frame whose look it
+    /// cleared, as one step. `hash` is the roll settings' after.
+    Preset {
+        roll_before: Arc<RollSettings>,
+        roll_after: Arc<RollSettings>,
+        frames: Vec<(usize, Arc<FrameOverrides>, Arc<FrameOverrides>)>,
         hash: ContentHash,
     },
 }
@@ -360,6 +394,23 @@ pub struct Session {
     applied: usize,
     open: Option<OpenFrame>,
     srgb: Option<OutputTransform>,
+    /// The GPU preview (ADR 0036): the device and the display matrix, until
+    /// a GPU render fails.
+    #[cfg(feature = "gpu")]
+    gpu: GpuPreview,
+}
+
+/// Whether [`Session::render_tile`] renders on the GPU (ADR 0036).
+#[cfg(feature = "gpu")]
+#[derive(Debug, Default)]
+enum GpuPreview {
+    /// Not asked for: tiles render on the CPU.
+    #[default]
+    Off,
+    /// The device and the working-to-sRGB matrix of the display encoding.
+    On(Arc<Gpu>, [[f32; 3]; 3]),
+    /// A GPU render failed; tiles render on the CPU from then on.
+    Failed,
 }
 
 /// The session is moved between threads by its hosts.
@@ -447,6 +498,7 @@ impl Session {
                 analysis_stale: false,
                 plans: Vec::new(),
                 thumb: None,
+                preset_thumbs: Vec::new(),
                 negative_scale: None,
                 negative_thumb: None,
             });
@@ -472,6 +524,8 @@ impl Session {
             applied: 0,
             open: None,
             srgb: None,
+            #[cfg(feature = "gpu")]
+            gpu: GpuPreview::Off,
         })
     }
 
@@ -670,6 +724,37 @@ impl Session {
             width: t.min(w - x),
             height: t.min(h - y),
         };
+        #[cfg(feature = "gpu")]
+        if let GpuPreview::On(gpu, display) = &self.gpu {
+            match gpu.render_region_display(
+                image,
+                region,
+                &plan.estimates,
+                &plan.coefficients,
+                density,
+                camera,
+                *display,
+            ) {
+                Ok(rgba) => {
+                    return Ok(encode_tile(
+                        frame,
+                        self.generation,
+                        level,
+                        tile_x,
+                        tile_y,
+                        index_u32(region.width),
+                        index_u32(region.height),
+                        &rgba,
+                    ));
+                }
+                // The CPU path below reports the same inputs' errors.
+                Err(negg_render::gpu::GpuError::Invalid(_)) => {}
+                Err(_) => {
+                    self.gpu = GpuPreview::Failed;
+                    return self.render_tile(frame, level, tile_x, tile_y);
+                }
+            }
+        }
         let rendered = render_region(
             image,
             region,
@@ -691,6 +776,37 @@ impl Session {
         ))
     }
 
+    /// Renders preview tiles ([`Session::render_tile`]) on `gpu` from now
+    /// on (ADR 0036): the positive within 1/4096 per channel of the CPU
+    /// kernel and the display within one 8-bit step of the CPU tile.
+    /// Exports, thumbnails, scopes and negative tiles stay on the CPU. With
+    /// `None`, or once a GPU render has failed (the tile is rendered on
+    /// the CPU instead and so is every later one), tiles render on the CPU
+    /// and this does nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Convert`] when the sRGB display matrix cannot be
+    /// built.
+    #[cfg(feature = "gpu")]
+    pub fn set_gpu(&mut self, gpu: Option<Arc<Gpu>>) -> Result<(), SessionError> {
+        if matches!(self.gpu, GpuPreview::Failed) {
+            return Ok(());
+        }
+        self.gpu = match gpu {
+            Some(g) => GpuPreview::On(g, negg_cms::working_to_output_matrix(OutputSpace::Srgb)?),
+            None => GpuPreview::Off,
+        };
+        Ok(())
+    }
+
+    /// Whether preview tiles render on the GPU ([`Session::set_gpu`]).
+    #[cfg(feature = "gpu")]
+    #[must_use]
+    pub fn uses_gpu(&self) -> bool {
+        matches!(self.gpu, GpuPreview::On(..))
+    }
+
     /// The frame's thumbnail (Ruling 76): its cached analysis grid rendered
     /// with its plan, its geometry applied, turned to sRGB and encoded as
     /// a JPEG at [`THUMB_QUALITY`] with the sRGB profile. Kept in memory
@@ -710,8 +826,76 @@ impl Session {
         {
             return Ok(jpeg.clone());
         }
-        self.ensure_srgb()?;
+        let jpeg = self.encode_thumbnail(i, &plan)?;
+        self.frames[i].thumb = Some((key, jpeg.clone()));
+        Ok(jpeg)
+    }
+
+    /// The frame's thumbnail as [`Session::thumbnail_jpeg`] would make it
+    /// if its committed settings (never a drag preview in progress) had
+    /// `look` applied (the five look fields of
+    /// [`PrintLook::apply_to_settings`]; the preset label does not change
+    /// a render): the plan is made again from those settings, so the bytes
+    /// equal the thumbnail after [`Session::apply_frame_preset`] with the
+    /// same look. Kept per frame by its thumbnail key and the look, and
+    /// dropped when the frame's thumbnail cache is. Does not open the
+    /// frame, and changes nothing else.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::thumbnail_jpeg`], plus [`SessionError::Invalid`] when
+    /// the settings with `look` applied fail validation.
+    pub fn preset_thumbnail_jpeg(
+        &mut self,
+        frame: u32,
+        look: &PrintLook,
+    ) -> Result<Vec<u8>, SessionError> {
+        let i = self.index(frame)?;
+        self.pass1(i)?;
+        // The committed settings, never a drag preview: the client keys
+        // these thumbnails on the committed version.
+        let committed = resolve(&self.roll, &self.frames[i].overrides);
+        let base = (self.pool_key(), committed.content_hash());
+        let lk = look_key(look);
+        if let Some((_, _, jpeg)) = self.frames[i]
+            .preset_thumbs
+            .iter()
+            .find(|(k, l, _)| *k == base && *l == lk)
+        {
+            return Ok(jpeg.clone());
+        }
+        let mut settings = committed;
+        let label = settings.print.preset.take();
+        look.apply_to_settings("", &mut settings.print);
+        settings.print.preset = label;
+        validate(&settings)?;
+        let plan = self.make_plan(i, &settings)?;
+        let jpeg = self.encode_thumbnail_with(i, &plan, &settings.geometry)?;
+        let thumbs = &mut self.frames[i].preset_thumbs;
+        thumbs.retain(|(k, _, _)| *k == base);
+        if thumbs.len() >= PRESET_THUMBS {
+            thumbs.remove(0);
+        }
+        thumbs.push((base, lk, jpeg.clone()));
+        Ok(jpeg)
+    }
+
+    /// Encodes frame `i`'s thumbnail with `plan` and its shown geometry.
+    fn encode_thumbnail(&mut self, i: usize, plan: &FramePlan) -> Result<Vec<u8>, SessionError> {
         let geometry = self.shown_settings(i).geometry;
+        self.encode_thumbnail_with(i, plan, &geometry)
+    }
+
+    /// Renders frame `i`'s cached analysis grid with `plan`, applies
+    /// `geometry`, turns it to sRGB and encodes it as the thumbnail JPEG
+    /// (see [`Session::thumbnail_jpeg`]).
+    fn encode_thumbnail_with(
+        &mut self,
+        i: usize,
+        plan: &FramePlan,
+        geometry: &Geometry,
+    ) -> Result<Vec<u8>, SessionError> {
+        self.ensure_srgb()?;
         let density = self.density();
         let pass1 = self.pass1(i)?;
         let image = render_full(
@@ -721,15 +905,18 @@ impl Session {
             density,
             pass1.camera_to_working,
         )?;
-        let image = apply_geometry(&geometry, image)?;
+        let image = apply_geometry(geometry, image)?;
         let rgb = self.srgb.as_ref().expect("built above").apply_u8(&image);
         let opts = JpegOptions {
             icc: Some(negg_cms::profile_bytes(OutputSpace::Srgb)?),
             quality: THUMB_QUALITY,
         };
-        let jpeg = negg_io::encode_jpeg8(image.width(), image.height(), &rgb, &opts)?;
-        self.frames[i].thumb = Some((key, jpeg.clone()));
-        Ok(jpeg)
+        Ok(negg_io::encode_jpeg8(
+            image.width(),
+            image.height(),
+            &rgb,
+            &opts,
+        )?)
     }
 
     /// The frame's scopes (Ruling 75) as the scopes wire format: measured
@@ -890,6 +1077,114 @@ impl Session {
             self.record(Edit::Roll {
                 before,
                 after: Arc::new(roll),
+                hash,
+            });
+        }
+        self.bump();
+        Ok(self.roll_view())
+    }
+
+    /// Applies `preset` to the frame (ADR 0034): exactly
+    /// [`Session::commit_frame`] with the frame's committed overrides after
+    /// [`PrintLook::apply_to_overrides`], so only the five look fields and
+    /// the preset label change.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::commit_frame`].
+    pub fn apply_frame_preset(
+        &mut self,
+        frame: u32,
+        preset: &Preset,
+    ) -> Result<FrameView, SessionError> {
+        let i = self.index(frame)?;
+        let mut overrides = self.frames[i].overrides.clone();
+        preset
+            .look
+            .apply_to_overrides(&preset.name, &mut overrides.print);
+        self.commit_frame(frame, overrides)
+    }
+
+    /// The writable frames whose overrides set their own look (any look
+    /// field or a frame preset), in index order: the frames a roll preset
+    /// asks about (spec "Roll preset vs frames with their own look").
+    pub fn frames_with_own_look(&self) -> Vec<u32> {
+        self.frames
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !f.read_only() && f.overrides.print.has_own_look())
+            .map(|(i, _)| index_u32(i))
+            .collect()
+    }
+
+    /// Applies `preset` to the roll (spec "Roll preset vs frames with
+    /// their own look"): the roll's shared look is set with
+    /// [`PrintLook::apply_to_settings`]; with
+    /// [`RollPresetScope::AllFrames`] every writable frame with its own
+    /// look also has its look fields cleared
+    /// ([`negg_types::roll::PrintOverrides::clear_look`]), so it takes the
+    /// roll's; its other overrides stay. With
+    /// [`RollPresetScope::FramesWithoutOwnLook`] every writable frame with
+    /// its own look has the whole look it renders with now pinned into its
+    /// overrides (the five look fields and its resolved preset label;
+    /// Ruling 5, a label of `None` pinned as `""`, Ruling 8), so it looks
+    /// and is labelled exactly as before. A frame whose sidecar changed on
+    /// disk turns read-only (as before any frame edit) and is left alone.
+    /// The whole apply is one history entry; nothing is recorded when
+    /// nothing changes. The changed frames and the roll are marked dirty,
+    /// and the pool pending by the rules of a roll or frame commit.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Busy`] before pass 1 has finished and
+    /// [`SessionError::Invalid`] when the roll or a cleared frame's
+    /// settings fail validation; nothing is applied or recorded then (a
+    /// frame found changed on disk has still turned read-only).
+    pub fn apply_roll_preset(
+        &mut self,
+        preset: &Preset,
+        scope: RollPresetScope,
+    ) -> Result<RollView, SessionError> {
+        self.check_analysed()?;
+        let mut roll = self.roll.clone();
+        preset
+            .look
+            .apply_to_settings(&preset.name, &mut roll.shared.print);
+        roll.validate()
+            .map_err(|e| SessionError::Invalid(e.to_string()))?;
+        let mut frames = Vec::new();
+        for i in 0..self.frames.len() {
+            if self.frames[i].read_only() || !self.frames[i].overrides.print.has_own_look() {
+                continue;
+            }
+            let path = negg_io::sidecar_path(&self.frames[i].path);
+            if !self.frames[i].seen.unchanged(&path) {
+                self.turn_stale(i, &path);
+                continue;
+            }
+            let before = &self.frames[i].overrides;
+            // Ruling 5 and 7: the rule `negg batch --preset` uses too.
+            let after = preset_frame_overrides(&self.roll.shared.print, before, scope);
+            if after == *before {
+                continue;
+            }
+            validate(&resolve(&roll, &after))?;
+            frames.push((i, Arc::new(before.clone()), Arc::new(after)));
+        }
+        if roll != self.roll || !frames.is_empty() {
+            let roll_before = Arc::new(self.roll.clone());
+            let hash = roll.content_hash();
+            if roll != self.roll {
+                self.apply_roll(roll.clone());
+            }
+            for (i, _, after) in &frames {
+                self.frames[*i].preview = None;
+                self.apply_frame(*i, (**after).clone(), false)?;
+            }
+            self.record(Edit::Preset {
+                roll_before,
+                roll_after: Arc::new(roll),
+                frames,
                 hash,
             });
         }
@@ -1085,6 +1380,19 @@ impl Session {
                 self.apply_frame(frame, (*before).clone(), false)?;
             }
             Edit::Roll { before, .. } => self.apply_roll((*before).clone()),
+            Edit::Preset {
+                roll_before,
+                frames,
+                ..
+            } => {
+                if *roll_before != self.roll {
+                    self.apply_roll((*roll_before).clone());
+                }
+                for (i, before, _) in frames {
+                    self.frames[i].preview = None;
+                    self.apply_frame(i, (*before).clone(), false)?;
+                }
+            }
         }
         self.applied -= 1;
         self.bump();
@@ -1112,6 +1420,21 @@ impl Session {
             }
             Edit::Roll { after, hash, .. } => {
                 self.apply_roll((*after).clone());
+                debug_assert_eq!(self.roll.content_hash(), hash);
+            }
+            Edit::Preset {
+                roll_after,
+                frames,
+                hash,
+                ..
+            } => {
+                for (i, _, after) in frames.iter().rev() {
+                    self.frames[*i].preview = None;
+                    self.apply_frame(*i, (**after).clone(), false)?;
+                }
+                if *roll_after != self.roll {
+                    self.apply_roll((*roll_after).clone());
+                }
                 debug_assert_eq!(self.roll.content_hash(), hash);
             }
         }
@@ -1281,9 +1604,10 @@ impl Session {
     /// reported, and nothing is exported; the user sees what the export
     /// would use and can export again. Then the session flushes (running a
     /// pending re-pool), and the whole roll is `batch_dir` (`negg batch
-    /// <dir> --format F [--out O]`) and one or several frames are
-    /// `convert_one` per frame (`negg convert <frame> --format F [--out
-    /// O]`), with no other options. The export decodes and pools from disk
+    /// <dir> --format F [--out O] [--web | --web-only]`) and one or several
+    /// frames are `convert_one` per frame (`negg convert <frame> --format F
+    /// [--out O] [--web | --web-only]`), with no other options. The report
+    /// lists the web copies too, each after its original. The export decodes and pools from disk
     /// and never reads the preview caches. Every flow event is passed on to
     /// `events`; a frame whose `convert_one` fails is reported as
     /// [`FlowEvent::FrameFailed`]. Afterwards the sidecars the flows
@@ -1331,6 +1655,7 @@ impl Session {
                 ExportFormat::Tiff16 => Format::Tiff16,
                 ExportFormat::Jpeg => Format::Jpeg,
             },
+            web: req.web,
             ..OutputRequest::default()
         };
         let mut report = ExportReport::default();
@@ -1346,6 +1671,11 @@ impl Session {
                         report
                             .outputs
                             .push(converted.output.to_string_lossy().into_owned());
+                        if let Some(web) = &converted.web
+                            && *web != converted.output
+                        {
+                            report.outputs.push(web.to_string_lossy().into_owned());
+                        }
                         written.push(input.clone());
                     }
                     FlowEvent::FrameFailed { input, error } => {
@@ -1488,13 +1818,29 @@ impl Session {
     }
 
     /// Removes every edit of frame `i` from the history (the frame turned
-    /// read-only, so its edits can be neither undone nor redone). Edits of
-    /// other frames and of the roll do not depend on them.
+    /// read-only, so its edits can be neither undone nor redone), and its
+    /// part of every roll preset edit (the roll part and other frames
+    /// stay; a preset edit left with no change at all goes). Edits of other
+    /// frames and of the roll do not depend on them.
     fn drop_history_of(&mut self, i: usize) {
+        for e in &mut self.history {
+            if let Edit::Preset { frames, .. } = e {
+                frames.retain(|(frame, _, _)| *frame != i);
+            }
+        }
         let mut applied = self.applied;
         let mut k = 0;
         self.history.retain(|e| {
-            let keep = !matches!(e, Edit::Frame { frame, .. } if *frame == i);
+            let keep = match e {
+                Edit::Frame { frame, .. } => *frame != i,
+                Edit::Preset {
+                    roll_before,
+                    roll_after,
+                    frames,
+                    ..
+                } => roll_before != roll_after || !frames.is_empty(),
+                Edit::Roll { .. } => true,
+            };
             if !keep && k < self.applied {
                 applied -= 1;
             }
@@ -1719,26 +2065,31 @@ impl Session {
             resolve(&self.roll, &self.frames[i].overrides)
         };
         let key = (self.pool_key(), settings.content_hash());
-        let pass1 = self.pass1(i)?;
+        self.pass1(i)?;
         if let Some((_, plan)) = self.frames[i].plans.iter().find(|(k, _)| *k == key) {
             return Ok((key, plan.clone()));
         }
-        let plan = {
-            let whole = self.whole_density(i)?;
-            let pooled = self.pool.as_ref().map(|p| p.pooled(&self.roll));
-            let ctx = RenderContext {
-                density: self.density(),
-                film: self.film(),
-                pooled: pooled.as_ref(),
-            };
-            plan_frame(&pass1.grid, &whole, &settings, &ctx)?
-        };
+        let plan = self.make_plan(i, &settings)?;
         let f = &mut self.frames[i];
         if f.plans.len() >= 2 {
             f.plans.remove(0);
         }
         f.plans.push((key, plan.clone()));
         Ok((key, plan))
+    }
+
+    /// Frame `i`'s plan for `settings`, not cached: [`plan_frame`] as
+    /// [`Session::plan`] makes it.
+    fn make_plan(&self, i: usize, settings: &Settings) -> Result<FramePlan, SessionError> {
+        let pass1 = self.pass1(i)?;
+        let whole = self.whole_density(i)?;
+        let pooled = self.pool.as_ref().map(|p| p.pooled(&self.roll));
+        let ctx = RenderContext {
+            density: self.density(),
+            film: self.film(),
+            pooled: pooled.as_ref(),
+        };
+        Ok(plan_frame(&pass1.grid, &whole, settings, &ctx)?)
     }
 
     /// Decodes the frame again and builds its pyramid, unless it is the
@@ -2087,6 +2438,7 @@ impl Session {
             f.analysis_stale = false;
             f.plans.clear();
             f.thumb = None;
+            f.preset_thumbs.clear();
             f.negative_scale = None;
             f.negative_thumb = None;
         }

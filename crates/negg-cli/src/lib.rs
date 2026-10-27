@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The library behind the `negg` command-line tool: argument types, the
-//! printing of `convert`, `batch` and `lock`, `profile rig` and
+//! printing of `convert`, `batch`, `lock` and `preset list`, `profile rig` and
 //! `profile film`, the corpus manifest and `eval`. The convert, batch,
 //! roll and lock flows themselves live in `negg-session` (Ruling 68),
 //! re-exported from [`convert`] and [`roll`] so that callers keep their
@@ -19,5 +19,6 @@ pub mod cli;
 pub mod convert;
 pub mod corpus;
 pub mod eval;
+pub mod preset;
 pub mod profile;
 pub mod roll;

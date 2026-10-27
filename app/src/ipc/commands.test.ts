@@ -111,6 +111,36 @@ describe("commands", () => {
     ]);
   });
 
+  it("calls the preset commands", async () => {
+    const look = { grade: 125, toe: 7, shoulder: 3, black_point_compensation: false, saturation: 1.2 };
+    const list = { presets: [{ name: "Rich", look }], builtins: 1, warnings: [] };
+    const replies: Record<string, unknown> = {
+      list_presets: list,
+      save_preset: list,
+      apply_frame_preset: frameView,
+      frames_with_own_look: [0, 2],
+      apply_roll_preset: rollView,
+      preset_thumbnail: new Uint8Array([7, 8]),
+    };
+    const { calls } = mock((c) => replies[c.cmd]);
+    expect((await cmd.listPresets()).presets[0]?.name).toBe("Rich");
+    expect((await cmd.savePreset("Mine", look)).warnings).toEqual([]);
+    expect((await cmd.applyFramePreset(1, "Rich")).width).toBe(6000);
+    expect(await cmd.framesWithOwnLook()).toEqual([0, 2]);
+    expect((await cmd.applyRollPreset("Rich", "frames_without_own_look")).dir).toBe("/rolls/roll-01");
+    expect(Array.from(new Uint8Array(await cmd.presetThumbnail(3, "Rich")))).toEqual([7, 8]);
+    expect(calls).toEqual([
+      { cmd: "list_presets", args: undefined },
+      { cmd: "save_preset", args: { name: "Mine", look } },
+      { cmd: "apply_frame_preset", args: { frame: 1, name: "Rich" } },
+      { cmd: "frames_with_own_look", args: undefined },
+      { cmd: "apply_roll_preset", args: { name: "Rich", scope: "frames_without_own_look" } },
+      { cmd: "preset_thumbnail", args: { frame: 3, name: "Rich" } },
+    ]);
+    mock(() => [1, -2]);
+    await expect(cmd.framesWithOwnLook()).rejects.toThrow(WireError);
+  });
+
   it("maps a CommandError to CommandFailure with its kind", async () => {
     mock(() => {
       throw { kind: "busy", message: "the roll is still being analysed" };

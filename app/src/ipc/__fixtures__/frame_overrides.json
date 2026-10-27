@@ -23,7 +23,9 @@
     "paper_dmax": null,
     "shoulder": null,
     "toe": null,
-    "black_point_compensation": true
+    "black_point_compensation": true,
+    "saturation": 1.15,
+    "preset": ""
   },
   "colour": {
     "auto_colour": null,
