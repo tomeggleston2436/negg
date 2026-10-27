@@ -746,9 +746,11 @@ mod tests {
     #[test]
     fn profile_flags_are_stored_absolute() {
         let mut s = Settings::default();
+        // Absolute on every system: `/abs/...` has no drive on Windows.
+        let film = std::env::temp_dir().join("film.negg.toml");
         let req = OutputRequest {
             rig: Some(PathBuf::from("rig.negg.toml")),
-            film: Some(PathBuf::from("/abs/film.negg.toml")),
+            film: Some(film.clone()),
             ..OutputRequest::default()
         };
         apply_profile_flags(&mut s, &req).unwrap();
@@ -760,7 +762,7 @@ mod tests {
                 .unwrap()
                 .ends_with("rig.negg.toml")
         );
-        assert_eq!(s.profiles.film.as_deref(), Some("/abs/film.negg.toml"));
+        assert_eq!(s.profiles.film.as_deref(), film.to_str());
     }
 
     #[test]
