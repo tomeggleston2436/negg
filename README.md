@@ -11,9 +11,7 @@
   <a href="#licence"><img alt="Licence: MPL-2.0 and Apache-2.0" src="https://img.shields.io/badge/licence-MPL--2.0%20%2F%20Apache--2.0-blue"></a>
 </p>
 
-<!-- Screenshot of the frame screen: docs/images/app.jpg
-<p align="center"><img src="docs/images/app.jpg" alt="The negg frame screen: a converted photo with the sliders, tone presets and scopes beside it" width="900"></p>
--->
+<p align="center"><img src="docs/images/app.png" alt="The negg roll screen: six converted frames in a grid, with the roll's analysis area and settings in the side panel" width="900"></p>
 
 If you scan film with a digital camera, negg turns the negatives into
 positives. Open a folder of RAW or TIFF scans as a roll and negg measures the
@@ -21,9 +19,8 @@ film itself: the orange base, the density range and the colour balance. It
 pools those measurements across the whole roll, so every frame comes out
 consistent. Then you pick a look, tweak it if you want, and export.
 
-<!-- Before and after: docs/images/before-after.jpg
-<p align="center"><img src="docs/images/before-after.jpg" alt="A colour negative scan beside the positive negg made from it" width="900"></p>
--->
+<p align="center"><img src="docs/images/before-after.jpg" alt="Two colour negative scans, each beside the positive negg made from it" width="900"><br>
+<sub>Camera scans of the negatives (left) and negg's conversion of the roll (right).</sub></p>
 
 ## Features
 
