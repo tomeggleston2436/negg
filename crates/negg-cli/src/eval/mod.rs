@@ -248,7 +248,7 @@ fn roll_error(roll: &str, err: ConvertError) -> EvalError {
         ConvertError::Render(e) => EvalError::Render(e),
         source => EvalError::Roll {
             roll: roll.to_owned(),
-            source,
+            source: Box::new(source),
         },
     }
 }

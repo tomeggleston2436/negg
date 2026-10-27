@@ -47,8 +47,8 @@ pub enum EvalError {
         /// Reference dimensions, `(width, height)`.
         reference: (usize, usize),
     },
-    /// `eval.toml` could not be loaded.
-    Tolerances(TolerancesError),
+    /// `eval.toml` could not be loaded. Boxed, as `Roll` is.
+    Tolerances(Box<TolerancesError>),
     /// The baseline results file could not be loaded.
     Baseline {
         /// The baseline file.
@@ -64,8 +64,9 @@ pub enum EvalError {
     Roll {
         /// The roll id.
         roll: String,
-        /// What went wrong.
-        source: ConvertError,
+        /// What went wrong. Boxed so the error stays small enough for
+        /// clippy's `result_large_err` where paths are wider (Windows).
+        source: Box<ConvertError>,
     },
 }
 
@@ -180,9 +181,9 @@ impl std::error::Error for EvalError {
             EvalError::Io(e) => Some(e),
             EvalError::Json(e) => Some(e),
             EvalError::Mismatch { .. } | EvalError::Reference { .. } => None,
-            EvalError::Tolerances(e) => Some(e),
+            EvalError::Tolerances(e) => Some(e.as_ref()),
             EvalError::Baseline { source, .. } => Some(source),
-            EvalError::Roll { source, .. } => Some(source),
+            EvalError::Roll { source, .. } => Some(source.as_ref()),
         }
     }
 }
@@ -225,7 +226,7 @@ impl From<serde_json::Error> for EvalError {
 
 impl From<TolerancesError> for EvalError {
     fn from(e: TolerancesError) -> Self {
-        EvalError::Tolerances(e)
+        EvalError::Tolerances(Box::new(e))
     }
 }
 
@@ -268,12 +269,12 @@ mod tests {
         );
         let profile = EvalError::Roll {
             roll: "r001".into(),
-            source: ConvertError::Usage("bad".into()),
+            source: Box::new(ConvertError::Usage("bad".into())),
         };
         assert!(profile.is_input_error());
         let pool = EvalError::Roll {
             roll: "r001".into(),
-            source: ConvertError::Invalid("bad".into()),
+            source: Box::new(ConvertError::Invalid("bad".into())),
         };
         assert!(!pool.is_input_error());
         let io = EvalError::Io(std::io::Error::other("disk"));

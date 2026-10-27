@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 #![allow(clippy::needless_range_loop)]
 
 use negg_types::profile::{
